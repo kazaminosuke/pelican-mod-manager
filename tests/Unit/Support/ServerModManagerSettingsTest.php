@@ -73,7 +73,6 @@ final class ServerModManagerSettingsTest extends TestCase
         $settings = $this->settings();
         $server = $this->server(1);
 
-        self::assertTrue($settings->isEnabled($server));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Mod));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Datapack));
@@ -100,19 +99,20 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertFalse($settings->override($server, 'allow_user_project_update'));
     }
 
-    public function test_true_override_wins_over_global_false_and_save_updates_request_memo(): void
+    public function test_type_override_wins_and_save_updates_request_memo(): void
     {
         $server = $this->server(1);
         $repository = new ServerModManagerSettingRepository();
         $settings = new ServerModManagerSettings($repository);
 
-        self::assertTrue($settings->isEnabled($server));
         $saved = $repository->save($server, [
             'enabled' => false,
+            'mod_enabled' => false,
             'allow_user_project_update' => true,
         ]);
 
-        self::assertFalse($settings->isEnabled($server));
+        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Mod));
+        self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
         self::assertTrue($settings->allowsProjectOperation($server, ProjectOperation::Update));
         self::assertSame($saved, $repository->forServer($server));
 
@@ -150,7 +150,7 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertSame(0, $settings->navigationSort($server, ProjectType::Datapack));
     }
 
-    public function test_legacy_master_disable_still_disables_every_page_type_after_migration(): void
+    public function test_legacy_master_column_is_ignored_when_type_columns_are_enabled(): void
     {
         $server = $this->server(1);
         ModManagerServerSetting::query()->create([
@@ -163,13 +163,30 @@ final class ServerModManagerSettingsTest extends TestCase
 
         $settings = $this->settings();
 
-        self::assertFalse($settings->isEnabled($server));
-        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Mod));
-        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Plugin));
-        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Datapack));
+        self::assertTrue($settings->isTypeEnabled($server, ProjectType::Mod));
+        self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
+        self::assertTrue($settings->isTypeEnabled($server, ProjectType::Datapack));
         self::assertTrue($settings->configuredTypeEnabled($server, ProjectType::Mod));
         self::assertTrue($settings->configuredTypeEnabled($server, ProjectType::Plugin));
         self::assertTrue($settings->configuredTypeEnabled($server, ProjectType::Datapack));
+    }
+
+    public function test_migration_copied_legacy_disable_is_respected_by_type_columns(): void
+    {
+        $server = $this->server(1);
+        ModManagerServerSetting::query()->create([
+            'server_id' => 1,
+            'enabled' => false,
+            'mod_enabled' => false,
+            'plugin_enabled' => false,
+            'datapack_enabled' => false,
+        ]);
+
+        $settings = $this->settings();
+
+        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Mod));
+        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Plugin));
+        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Datapack));
     }
 
     private function settings(): ServerModManagerSettings

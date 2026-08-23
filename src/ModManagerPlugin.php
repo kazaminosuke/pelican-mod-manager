@@ -28,6 +28,7 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Admin\ServerModManagerTab;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
+use Kazaminosuke\ModManager\Http\Middleware\ShiftCoreNavigationRows;
 use Kazaminosuke\ModManager\Models\ModManagerEggProfile;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
@@ -55,6 +56,16 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         }
 
         $panel->discoverPages(plugin_path($this->getId(), "src/Filament/$id/Pages"), "Kazaminosuke\\ModManager\\Filament\\$id\\Pages");
+
+        // The manager pages' sidebar rows are claimed through the tenant
+        // middleware below: the admin tab presents a display-order value as
+        // an absolute row (10 = tenth entry from the top), so any core page
+        // occupying that number (Startup 10, Settings/Webhooks 11) is pushed
+        // down before the navigation renders. The pages themselves mount
+        // their items the stock Filament way.
+        if ($panel->getId() === 'server') {
+            $panel->tenantMiddleware([ShiftCoreNavigationRows::class]);
+        }
 
         app(BladeIconsFactory::class)->add('mcloader', [
             'path' => plugin_path($this->getId(), 'resources/icons/loaders'),
@@ -453,21 +464,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
      */
     public static function eggProfileFormSchema(bool $includeEggSelect = true): array
     {
-        $loaderOptions = ['' => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_loader_none')]
-            + collect(MinecraftLoader::cases())->mapWithKeys(fn (MinecraftLoader $loader) => [$loader->value => $loader->getLabel()])->all();
-
-        $projectTypeOptions = [
-            'auto' => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_project_type_auto'),
-            ProjectType::Mod->value => ProjectType::Mod->getLabel(),
-            ProjectType::Plugin->value => ProjectType::Plugin->getLabel(),
-            ProjectType::Datapack->value => ProjectType::Datapack->getLabel(),
-        ];
-
         $fields = [];
 
         if ($includeEggSelect) {
             $fields[] = Select::make('egg_id')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_egg_label'))
+                ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_egg_label'))
                 ->native(false)
                 ->required()
                 ->searchable()
@@ -479,21 +480,27 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         }
 
         $fields[] = Select::make('project_type')
-            ->label(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_project_type_label'))
+            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_project_type_label'))
             ->native(false)
             ->required()
-            ->options($projectTypeOptions)
+            ->options(fn (): array => [
+                'auto' => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_project_type_auto'),
+                ProjectType::Mod->value => ProjectType::Mod->getLabel(),
+                ProjectType::Plugin->value => ProjectType::Plugin->getLabel(),
+                ProjectType::Datapack->value => ProjectType::Datapack->getLabel(),
+            ])
             ->default('auto');
         $fields[] = Select::make('loader')
-            ->label(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_loader_label'))
+            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_loader_label'))
             ->native(false)
-            ->options($loaderOptions)
+            ->options(fn (): array => ['' => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_loader_none')]
+                + collect(MinecraftLoader::cases())->mapWithKeys(fn (MinecraftLoader $loader) => [$loader->value => $loader->getLabel()])->all())
             ->default('');
         $fields[] = TextInput::make('minecraft_version')
-            ->label(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_minecraft_version_label'))
-            ->helperText(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_minecraft_version_helper'));
+            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_minecraft_version_label'))
+            ->helperText(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_minecraft_version_helper'));
         $fields[] = Toggle::make('supports_datapacks')
-            ->label(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_supports_datapacks_label'));
+            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_supports_datapacks_label'));
 
         return $fields;
     }

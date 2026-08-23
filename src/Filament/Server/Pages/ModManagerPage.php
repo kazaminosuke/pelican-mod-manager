@@ -252,6 +252,15 @@ class ModManagerPage extends Page implements HasTable
         return static::navigationSortFor(static::detectProjectType($server) ?? ProjectType::Mod, $server);
     }
 
+    /**
+     * The sidebar sorts by this value, and ShiftCoreNavigationRows (wired
+     * through ModManagerPlugin::register() -> tenantMiddleware()) pushes any
+     * core page sharing the number down first, so the value configured in
+     * the admin tab lands on its literal row: 10 renders as the tenth entry
+     * from the top, 11 as the eleventh. The middleware only claims rows for
+     * pages whose canAccess() passes, so a hidden manager page never
+     * displaces a core row.
+     */
     protected static function navigationSortFor(ProjectType $type, ?Server $server = null): int
     {
         if ($server !== null) {
@@ -290,13 +299,6 @@ class ModManagerPage extends Page implements HasTable
         /** @var Server $server */
         $server = Filament::getTenant();
         $settings = app(ServerModManagerSettings::class);
-
-        // This cheap server-setting gate runs before egg/profile detection.
-        // A disabled page type must not trigger the expensive detector just
-        // to decide that its page is unavailable.
-        if (!$settings->isEnabled($server)) {
-            return false;
-        }
 
         $hasEnabledPageType = false;
         foreach (static::enabledProjectTypesForAccess() as $enabledType) {

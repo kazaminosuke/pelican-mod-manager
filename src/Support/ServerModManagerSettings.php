@@ -21,32 +21,24 @@ final class ServerModManagerSettings
         private readonly ServerModManagerSettingRepository $repository,
     ) {}
 
-    public function isEnabled(Server|int $server): bool
-    {
-        return $this->repository->forServer($server)?->enabled ?? true;
-    }
-
     /**
      * Resolve the independent page switch for one project type.
      *
-     * The legacy `enabled` value remains a master switch so an explicit
-     * disable made before the per-type migration cannot accidentally reopen a
-     * server. Missing rows and newly added type columns remain enabled.
+     * The old server-wide `enabled` column is intentionally not consulted.
+     * Migration 000003 copied an existing explicit false value into all three
+     * type columns before this resolver became type-only. Missing rows and
+     * newly added type columns therefore remain enabled, while an operator
+     * can later enable or disable each type independently.
      */
     public function isTypeEnabled(Server|int $server, ProjectType $type): bool
     {
-        if (!$this->isEnabled($server)) {
-            return false;
-        }
-
         return $this->configuredTypeEnabled($server, $type);
     }
 
     /**
-     * Return the stored type switch without applying the legacy master
-     * switch. The admin form uses this so temporarily disabling the whole
-     * manager does not turn every independent type switch off on the next
-     * standard Save.
+     * Return the stored type switch for the admin form without applying any
+     * server-wide switch. The old `enabled` column is retained only for
+     * migration compatibility and is never a source of truth.
      */
     public function configuredTypeEnabled(Server|int $server, ProjectType $type): bool
     {
@@ -57,12 +49,8 @@ final class ServerModManagerSettings
 
     public function hasAnyManagerTypeEnabled(Server|int $server): bool
     {
-        if (!$this->isEnabled($server)) {
-            return false;
-        }
-
         foreach ([ProjectType::Mod, ProjectType::Plugin, ProjectType::Datapack] as $type) {
-            if ($this->isTypeEnabled($server, $type)) {
+            if ($this->configuredTypeEnabled($server, $type)) {
                 return true;
             }
         }

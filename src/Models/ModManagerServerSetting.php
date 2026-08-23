@@ -10,8 +10,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * Per-server Mod Manager settings.
  *
  * A missing row is intentionally equivalent to the pre-server-settings
- * behaviour: the manager is enabled and every nullable permission falls back
- * to the corresponding global plugin setting.
+ * behaviour: every project type is enabled and every nullable permission
+ * falls back to the corresponding global plugin setting.
+ *
+ * The legacy `enabled` column remains in the model because migration 000003
+ * is already applied in existing installations. It is retained for schema
+ * compatibility only; type columns are now the sole page access controls.
  */
 class ModManagerServerSetting extends Model
 {
@@ -20,6 +24,7 @@ class ModManagerServerSetting extends Model
     /** @var list<string> */
     protected $fillable = [
         'server_id',
+        // Legacy server-wide switch; no longer read by the resolver.
         'enabled',
         'mod_enabled',
         'plugin_enabled',

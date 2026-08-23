@@ -228,7 +228,7 @@ class WarmCatalogCacheCommandTest extends TestCase
         ]], $combos);
     }
 
-    public function test_does_not_discover_disabled_servers(): void
+    public function test_does_not_discover_servers_with_all_types_disabled(): void
     {
         Capsule::table('eggs')->insert([
             'id' => 1,
@@ -241,6 +241,9 @@ class WarmCatalogCacheCommandTest extends TestCase
         Capsule::table('mod_manager_server_settings')->insert([
             'server_id' => 1,
             'enabled' => false,
+            'mod_enabled' => false,
+            'plugin_enabled' => false,
+            'datapack_enabled' => false,
         ]);
 
         $method = new \ReflectionMethod(WarmCatalogCacheCommand::class, 'discoverCombos');
