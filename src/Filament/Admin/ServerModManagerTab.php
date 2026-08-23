@@ -64,7 +64,13 @@ final class ServerModManagerTab
             ->schema([
                 Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.access'))
                     ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.access_helper'))
-                    ->columns(2)
+                    // EditServer renders tabs inside a six-column grid; without
+                    // an explicit span every top-level section is squeezed into
+                    // a single ~106px cell. Full-width sections restore normal
+                    // Filament form proportions, and each section's own
+                    // responsive columns() then decides the field layout.
+                    ->columnSpanFull()
+                    ->columns(['default' => 1, 'md' => 2, '2xl' => 4])
                     ->schema([
                         self::typeToggle(ProjectType::Mod),
                         self::typeToggle(ProjectType::Plugin),
@@ -72,7 +78,8 @@ final class ServerModManagerTab
                     ]),
                 Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.navigation'))
                     ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.navigation_helper'))
-                    ->columns(3)
+                    ->columnSpanFull()
+                    ->columns(['default' => 1, 'sm' => 2, 'lg' => 3])
                     ->schema([
                         self::navigationSortInput(ProjectType::Mod),
                         self::navigationSortInput(ProjectType::Plugin),
@@ -80,39 +87,37 @@ final class ServerModManagerTab
                     ]),
                 Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.permissions'))
                     ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.permissions_helper'))
-                    ->columns(2)
+                    ->columnSpanFull()
+                    ->columns(['default' => 1, 'lg' => 2])
                     ->schema([
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_egg_profile_edit'])
                             ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_egg_profile_edit'))
                             ->options(fn (): array => self::permissionOptions('allow_user_egg_profile_edit'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_egg_profile_edit'))
                             ->inline()
-                            ->dehydrated(false)
-                            ->columnSpanFull(),
+                            ->dehydrated(false),
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_project_install'])
                             ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_install'))
                             ->options(fn (): array => self::permissionOptions('allow_user_project_install'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_project_install'))
                             ->inline()
-                            ->dehydrated(false)
-                            ->columnSpanFull(),
+                            ->dehydrated(false),
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_project_update'])
                             ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_update'))
                             ->options(fn (): array => self::permissionOptions('allow_user_project_update'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_project_update'))
                             ->inline()
-                            ->dehydrated(false)
-                            ->columnSpanFull(),
+                            ->dehydrated(false),
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_project_delete'])
                             ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_delete'))
                             ->options(fn (): array => self::permissionOptions('allow_user_project_delete'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_project_delete'))
                             ->inline()
-                            ->dehydrated(false)
-                            ->columnSpanFull(),
+                            ->dehydrated(false),
                     ]),
                 Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.egg_profile'))
                     ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.egg_profile_helper'))
+                    ->columnSpanFull()
                     ->schema([
                         Actions::make([
                             Action::make('edit_egg_profile')
