@@ -12,6 +12,7 @@ use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectUpdateService;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Throwable;
 
 final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
@@ -30,6 +31,7 @@ final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
+        public readonly string $leaseToken,
     ) {}
 
     public function uniqueId(): string
@@ -41,10 +43,15 @@ final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
         DaemonFileRepository $fileRepository,
         InstalledProjectUpdateService $updates,
         InstalledOperationManager $operations,
+        InstalledOperationLease $leases,
     ): void {
         $type = ProjectType::tryFrom($this->projectType);
 
         if (!$type) {
+            return;
+        }
+
+        if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
             return;
         }
 
@@ -57,6 +64,7 @@ final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_BULK_UPDATE,
                 'server_not_found',
+                leaseToken: $this->leaseToken,
             );
 
             return;
@@ -89,6 +97,7 @@ final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_BULK_UPDATE,
                 $result,
+                $this->leaseToken,
             );
         } catch (Throwable $exception) {
             report($exception);
@@ -98,6 +107,7 @@ final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_BULK_UPDATE,
                 'bulk_update_exception',
+                leaseToken: $this->leaseToken,
             );
         }
     }
@@ -110,11 +120,19 @@ final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        Container::getInstance()->make(InstalledOperationManager::class)->fail(
+        $container = Container::getInstance();
+        $leases = $container->make(InstalledOperationLease::class);
+
+        if (!$leases->owns($this->serverId, $type, $this->leaseToken)) {
+            return;
+        }
+
+        $container->make(InstalledOperationManager::class)->fail(
             $this->serverId,
             $type,
             InstalledOperationManager::OPERATION_BULK_UPDATE,
             $exception === null ? 'bulk_update_job_failed' : 'bulk_update_job_exception',
+            leaseToken: $this->leaseToken,
         );
     }
 }

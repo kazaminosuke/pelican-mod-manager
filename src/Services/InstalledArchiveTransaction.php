@@ -46,6 +46,10 @@ class InstalledArchiveTransaction
         ?array $installedMod = null,
         ?InstalledMetadataWriteSession $metadataSession = null,
     ): void {
+        if (!$type->usesArchiveMetadata()) {
+            throw new Exception('Resource packs must use the dedicated direct URL and SHA-1 transaction.');
+        }
+
         $newFilename = $this->safeFilename($this->requiredString($primaryFile, 'filename'));
         $oldFilename = is_array($installedMod)
             ? $this->safeFilename($this->requiredString($installedMod, 'filename'))

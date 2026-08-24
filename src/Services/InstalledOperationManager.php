@@ -8,6 +8,7 @@ use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Jobs\BulkUpdateInstalledProjects;
+use Kazaminosuke\ModManager\Jobs\ResetInstalledMetadata;
 use Kazaminosuke\ModManager\Jobs\ScanInstalledProjects;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
@@ -60,7 +61,7 @@ final class InstalledOperationManager
      * The manager never falls back to synchronous execution. Callers can use
      * the reason to show an operator-facing queue configuration warning.
      *
-     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'missing_actor', state: ?InstalledOperationState}
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'missing_actor'|'unsupported_type', state: ?InstalledOperationState}
      */
     public function dispatchScan(
         Server|int $server,
@@ -69,6 +70,15 @@ final class InstalledOperationManager
         ?int $actorUserId = null,
     ): array {
         $serverId = $this->serverId($server);
+
+        if (!$projectType->usesArchiveMetadata()) {
+            return [
+                'dispatched' => false,
+                'reason' => 'unsupported_type',
+                'state' => null,
+            ];
+        }
+
         $current = $this->operationStateOrActive($serverId, $projectType, self::OPERATION_SCAN);
 
         if ($actorUserId === null || $actorUserId <= 0) {
@@ -109,31 +119,37 @@ final class InstalledOperationManager
             ];
         }
 
-        $state = $this->queue($serverId, $projectType, self::OPERATION_SCAN, [
-            'force' => $force,
-            'actor_user_id' => $actorUserId,
-        ]);
+        $state = $current;
 
         try {
+            $state = $this->queue($serverId, $projectType, self::OPERATION_SCAN, [
+                'force' => $force,
+                'actor_user_id' => $actorUserId,
+            ]);
             // PendingDispatch acquires the ShouldBeUnique lock before the
             // dispatcher sees the job. Calling Dispatcher::dispatch() here
             // would queue duplicate scan jobs under concurrent requests.
             ScanInstalledProjects::dispatch(
                 serverId: $serverId,
                 projectType: $projectType->value,
+                leaseToken: $leaseToken,
                 force: $force,
                 actorUserId: $actorUserId,
             );
         } catch (Throwable $exception) {
             report($exception);
-            $this->leases->release($serverId, $projectType, $leaseToken);
 
-            $state = $this->fail(
-                $serverId,
-                $projectType,
-                self::OPERATION_SCAN,
-                'dispatch_failed',
-            );
+            try {
+                $state = $this->fail(
+                    $serverId,
+                    $projectType,
+                    self::OPERATION_SCAN,
+                    'dispatch_failed',
+                    leaseToken: $leaseToken,
+                );
+            } catch (Throwable $stateException) {
+                report($stateException);
+            }
 
             return [
                 'dispatched' => false,
@@ -191,6 +207,23 @@ final class InstalledOperationManager
                 : InstalledOperationState::fromCachePayload($payloads[$key] ?? null);
         }
 
+        $hasActiveState = false;
+        foreach ($states as $state) {
+            if ($state?->isActive()) {
+                $hasActiveState = true;
+
+                break;
+            }
+        }
+
+        if ($hasActiveState) {
+            $leaseOperation = $this->leases->currentOperation($serverId, $projectType);
+
+            foreach ($states as $operation => $state) {
+                $states[$operation] = $this->stateMatchingLease($state, $leaseOperation);
+            }
+        }
+
         return $states;
     }
 
@@ -209,14 +242,23 @@ final class InstalledOperationManager
         $bulkKey = $this->cacheKey($serverId, $projectType, self::OPERATION_BULK_UPDATE);
         $payloads = $this->cache->many([$scanResultCacheKey, $scanKey, $bulkKey]);
 
+        $scanState = isset($this->progressBuffer[$scanKey])
+            ? $this->progressBuffer[$scanKey]['state']
+            : InstalledOperationState::fromCachePayload($payloads[$scanKey] ?? null);
+        $bulkState = isset($this->progressBuffer[$bulkKey])
+            ? $this->progressBuffer[$bulkKey]['state']
+            : InstalledOperationState::fromCachePayload($payloads[$bulkKey] ?? null);
+
+        if ($scanState?->isActive() || $bulkState?->isActive()) {
+            $leaseOperation = $this->leases->currentOperation($serverId, $projectType);
+            $scanState = $this->stateMatchingLease($scanState, $leaseOperation);
+            $bulkState = $this->stateMatchingLease($bulkState, $leaseOperation);
+        }
+
         return [
             'scan_result' => $payloads[$scanResultCacheKey] ?? null,
-            'scan' => isset($this->progressBuffer[$scanKey])
-                ? $this->progressBuffer[$scanKey]['state']
-                : InstalledOperationState::fromCachePayload($payloads[$scanKey] ?? null),
-            'bulk' => isset($this->progressBuffer[$bulkKey])
-                ? $this->progressBuffer[$bulkKey]['state']
-                : InstalledOperationState::fromCachePayload($payloads[$bulkKey] ?? null),
+            'scan' => $scanState,
+            'bulk' => $bulkState,
         ];
     }
 
@@ -307,14 +349,25 @@ final class InstalledOperationManager
         ProjectType $projectType,
         string $operation,
         array $result = [],
+        ?string $leaseToken = null,
     ): InstalledOperationState {
         $serverId = $this->serverId($server);
-        $state = $this->state($serverId, $projectType, $operation)
-            ?? InstalledOperationState::queued($operation, $serverId, $projectType);
-        $completed = $this->put($state->completed($result));
-        $this->leases->release($serverId, $projectType);
 
-        return $completed;
+        if ($leaseToken !== null && !$this->leases->owns($serverId, $projectType, $leaseToken)) {
+            return $this->state($serverId, $projectType, $operation)
+                ?? InstalledOperationState::queued($operation, $serverId, $projectType);
+        }
+
+        try {
+            $state = $this->state($serverId, $projectType, $operation)
+                ?? InstalledOperationState::queued($operation, $serverId, $projectType);
+
+            return $this->put($state->completed($result));
+        } finally {
+            if ($leaseToken !== null) {
+                $this->leases->release($serverId, $projectType, $leaseToken);
+            }
+        }
     }
 
     /**
@@ -326,14 +379,25 @@ final class InstalledOperationManager
         string $operation,
         string $error,
         array $result = [],
+        ?string $leaseToken = null,
     ): InstalledOperationState {
         $serverId = $this->serverId($server);
-        $state = $this->state($serverId, $projectType, $operation)
-            ?? InstalledOperationState::queued($operation, $serverId, $projectType);
-        $failed = $this->put($state->failed($error, $result));
-        $this->leases->release($serverId, $projectType);
 
-        return $failed;
+        if ($leaseToken !== null && !$this->leases->owns($serverId, $projectType, $leaseToken)) {
+            return $this->state($serverId, $projectType, $operation)
+                ?? InstalledOperationState::queued($operation, $serverId, $projectType);
+        }
+
+        try {
+            $state = $this->state($serverId, $projectType, $operation)
+                ?? InstalledOperationState::queued($operation, $serverId, $projectType);
+
+            return $this->put($state->failed($error, $result));
+        } finally {
+            if ($leaseToken !== null) {
+                $this->leases->release($serverId, $projectType, $leaseToken);
+            }
+        }
     }
 
     public function forget(
@@ -345,7 +409,6 @@ final class InstalledOperationManager
         $key = $this->cacheKey($serverId, $projectType, $operation);
         unset($this->progressBuffer[$key]);
         $this->cache->forget($key);
-        $this->leases->release($serverId, $projectType);
     }
 
     private function operationStateOrActive(
@@ -353,10 +416,16 @@ final class InstalledOperationManager
         ProjectType $projectType,
         string $requestedOperation,
     ): ?InstalledOperationState {
+        $leaseOperation = null;
         $current = $this->state($serverId, $projectType, $requestedOperation);
 
         if ($current?->isActive()) {
-            return $current;
+            $leaseOperation = $this->leases->currentOperation($serverId, $projectType);
+            $current = $this->stateMatchingLease($current, $leaseOperation);
+
+            if ($current !== null) {
+                return $current;
+            }
         }
 
         $otherOperation = $requestedOperation === self::OPERATION_SCAN
@@ -364,7 +433,32 @@ final class InstalledOperationManager
             : self::OPERATION_SCAN;
         $other = $this->state($serverId, $projectType, $otherOperation);
 
+        if ($other?->isActive()) {
+            $leaseOperation ??= $this->leases->currentOperation($serverId, $projectType);
+            $other = $this->stateMatchingLease($other, $leaseOperation);
+        }
+
         return $other?->isActive() ? $other : $current;
+    }
+
+    private function stateMatchingLease(
+        ?InstalledOperationState $state,
+        ?string $leaseOperation,
+    ): ?InstalledOperationState {
+        if (!$state?->isActive()) {
+            return $state;
+        }
+
+        $matches = match ($state->operation) {
+            self::OPERATION_SCAN => in_array($leaseOperation, [
+                InstalledOperationLease::OPERATION_SCAN,
+                InstalledOperationLease::OPERATION_CLEAR,
+            ], true),
+            self::OPERATION_BULK_UPDATE => $leaseOperation === InstalledOperationLease::OPERATION_BULK_UPDATE,
+            default => false,
+        };
+
+        return $matches ? $state : null;
     }
 
     private function put(InstalledOperationState $state): InstalledOperationState
@@ -405,13 +499,22 @@ final class InstalledOperationManager
     }
 
     /**
-     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed', state: ?InstalledOperationState}
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'unsupported_type', state: ?InstalledOperationState}
      */
     public function dispatchBulkUpdate(
         Server|int $server,
         ProjectType $projectType,
     ): array {
         $serverId = $this->serverId($server);
+
+        if (!$projectType->usesArchiveMetadata()) {
+            return [
+                'dispatched' => false,
+                'reason' => 'unsupported_type',
+                'state' => null,
+            ];
+        }
+
         $current = $this->operationStateOrActive($serverId, $projectType, self::OPERATION_BULK_UPDATE);
 
         if ($current?->isActive()) {
@@ -444,25 +547,31 @@ final class InstalledOperationManager
             ];
         }
 
-        $state = $this->queue($serverId, $projectType, self::OPERATION_BULK_UPDATE);
+        $state = $current;
 
         try {
+            $state = $this->queue($serverId, $projectType, self::OPERATION_BULK_UPDATE);
             // See dispatchScan(): the static Dispatchable path is required
             // for Laravel to acquire this job's ShouldBeUnique lock.
             BulkUpdateInstalledProjects::dispatch(
                 serverId: $serverId,
                 projectType: $projectType->value,
+                leaseToken: $leaseToken,
             );
         } catch (Throwable $exception) {
             report($exception);
-            $this->leases->release($serverId, $projectType, $leaseToken);
 
-            $state = $this->fail(
-                $serverId,
-                $projectType,
-                self::OPERATION_BULK_UPDATE,
-                'dispatch_failed',
-            );
+            try {
+                $state = $this->fail(
+                    $serverId,
+                    $projectType,
+                    self::OPERATION_BULK_UPDATE,
+                    'dispatch_failed',
+                    leaseToken: $leaseToken,
+                );
+            } catch (Throwable $stateException) {
+                report($stateException);
+            }
 
             return [
                 'dispatched' => false,
@@ -475,6 +584,132 @@ final class InstalledOperationManager
             'dispatched' => true,
             'reason' => null,
             'state' => $state,
+        ];
+    }
+
+    /**
+     * Queue one authorization-gated metadata reset for all requested archive
+     * types. Every long operation lease is claimed before any state is queued
+     * or metadata is deleted; a failed claim rolls the earlier claims back.
+     *
+     * @param  array<int, ProjectType>  $projectTypes
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'missing_actor'|'unsupported_type'|'no_types', states: array<string, InstalledOperationState>}
+     */
+    public function dispatchMetadataReset(
+        Server|int $server,
+        array $projectTypes,
+        ?int $actorUserId = null,
+    ): array {
+        $serverId = $this->serverId($server);
+        $types = [];
+
+        foreach ($projectTypes as $type) {
+            if (!$type instanceof ProjectType || !$type->usesArchiveMetadata()) {
+                return [
+                    'dispatched' => false,
+                    'reason' => 'unsupported_type',
+                    'states' => [],
+                ];
+            }
+
+            $types[$type->value] = $type;
+        }
+
+        ksort($types, SORT_STRING);
+
+        if ($types === []) {
+            return [
+                'dispatched' => false,
+                'reason' => 'no_types',
+                'states' => [],
+            ];
+        }
+
+        if ($actorUserId === null || $actorUserId <= 0) {
+            return [
+                'dispatched' => false,
+                'reason' => 'missing_actor',
+                'states' => [],
+            ];
+        }
+
+        if (!$this->supportsAsyncDispatch()) {
+            return [
+                'dispatched' => false,
+                'reason' => 'sync_queue',
+                'states' => [],
+            ];
+        }
+
+        foreach ($types as $type) {
+            if ($this->operationStateOrActive($serverId, $type, self::OPERATION_SCAN)?->isActive()) {
+                return [
+                    'dispatched' => false,
+                    'reason' => 'already_active',
+                    'states' => [],
+                ];
+            }
+        }
+
+        $leaseTokens = $this->leases->tryAcquireMany(
+            $serverId,
+            array_values($types),
+            InstalledOperationLease::OPERATION_CLEAR,
+        );
+
+        if ($leaseTokens === null) {
+            return [
+                'dispatched' => false,
+                'reason' => 'already_active',
+                'states' => [],
+            ];
+        }
+
+        $states = [];
+
+        try {
+            foreach ($types as $typeValue => $type) {
+                $states[$typeValue] = $this->queue($serverId, $type, self::OPERATION_SCAN, [
+                    'force' => true,
+                    'metadata_reset' => true,
+                    'actor_user_id' => $actorUserId,
+                ]);
+            }
+
+            ResetInstalledMetadata::dispatch(
+                serverId: $serverId,
+                projectTypes: array_keys($types),
+                leaseTokens: $leaseTokens,
+                actorUserId: $actorUserId,
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+
+            foreach ($types as $typeValue => $type) {
+                try {
+                    $states[$typeValue] = $this->fail(
+                        $serverId,
+                        $type,
+                        self::OPERATION_SCAN,
+                        'dispatch_failed',
+                        leaseToken: $leaseTokens[$typeValue],
+                    );
+                } catch (Throwable $stateException) {
+                    report($stateException);
+                }
+            }
+
+            return [
+                'dispatched' => false,
+                'reason' => 'dispatch_failed',
+                'states' => $states,
+            ];
+        }
+
+        return [
+            'dispatched' => true,
+            'reason' => null,
+            'states' => $states,
         ];
     }
 }

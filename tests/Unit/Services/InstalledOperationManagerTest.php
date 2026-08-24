@@ -14,6 +14,7 @@ use Illuminate\Log\Context\Repository as ContextRepository;
 use Illuminate\Support\Facades\Facade;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Jobs\BulkUpdateInstalledProjects;
+use Kazaminosuke\ModManager\Jobs\ResetInstalledMetadata;
 use Kazaminosuke\ModManager\Jobs\ScanInstalledProjects;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
@@ -25,6 +26,7 @@ require_once dirname(__DIR__, 3).'/src/Enums/ProjectType.php';
 require_once dirname(__DIR__, 3).'/src/Support/InstalledOperationState.php';
 require_once dirname(__DIR__, 3).'/src/Support/InstalledOperationLease.php';
 require_once dirname(__DIR__, 3).'/src/Jobs/BulkUpdateInstalledProjects.php';
+require_once dirname(__DIR__, 3).'/src/Jobs/ResetInstalledMetadata.php';
 require_once dirname(__DIR__, 3).'/src/Jobs/ScanInstalledProjects.php';
 require_once dirname(__DIR__, 3).'/src/Services/InstalledOperationManager.php';
 
@@ -79,16 +81,39 @@ class InstalledOperationManagerTest extends TestCase
         self::assertNull($result['state']);
     }
 
+    public function test_resource_pack_never_dispatches_an_installed_archive_scan(): void
+    {
+        $cache = Mockery::mock(CacheRepository::class);
+        $cache->shouldNotReceive('get', 'add', 'put');
+        $config = Mockery::mock(ConfigRepository::class);
+        $config->shouldNotReceive('get');
+
+        $result = (new InstalledOperationManager($cache, $config))->dispatchScan(
+            42,
+            ProjectType::ResourcePack,
+            actorUserId: 7,
+        );
+
+        self::assertFalse($result['dispatched']);
+        self::assertSame('unsupported_type', $result['reason']);
+        self::assertNull($result['state']);
+    }
+
     public function test_async_queue_persists_queued_state_and_dispatches_job(): void
     {
+        $leaseToken = null;
         $cache = Mockery::mock(CacheRepository::class);
         $cache->shouldReceive('get')->twice()->andReturnNull();
         $cache->shouldReceive('add')
             ->once()
-            ->withArgs(fn (string $key, array $payload, int $ttl): bool => $key === 'mod_manager_op_lease:v1:42:mod'
-                && $payload['operation'] === 'scan'
-                && is_string($payload['token'] ?? null)
-                && $ttl === 1200)
+            ->withArgs(function (string $key, array $payload, int $ttl) use (&$leaseToken): bool {
+                $leaseToken = $payload['token'] ?? null;
+
+                return $key === 'mod_manager_op_lease:v1:42:mod'
+                    && $payload['operation'] === 'scan'
+                    && is_string($leaseToken)
+                    && $ttl === 1200;
+            })
             ->andReturnTrue();
         $cache->shouldReceive('put')
             ->once()
@@ -102,10 +127,13 @@ class InstalledOperationManagerTest extends TestCase
         $this->expectUniqueLock($cache, 'mod-manager:scan:42:mod', 600);
         $dispatcher->shouldReceive('dispatch')
             ->once()
-            ->withArgs(fn (ScanInstalledProjects $job): bool => $job->serverId === 42
-                && $job->projectType === ProjectType::Mod->value
-                && $job->force
-                && $job->actorUserId === 7)
+            ->withArgs(function (ScanInstalledProjects $job) use (&$leaseToken): bool {
+                return $job->serverId === 42
+                    && $job->projectType === ProjectType::Mod->value
+                    && $job->leaseToken === $leaseToken
+                    && $job->force
+                    && $job->actorUserId === 7;
+            })
             ->andReturn(1);
 
         $result = (new InstalledOperationManager($cache, $config))
@@ -118,14 +146,19 @@ class InstalledOperationManagerTest extends TestCase
 
     public function test_async_bulk_update_persists_queued_state_and_dispatches_job(): void
     {
+        $leaseToken = null;
         $cache = Mockery::mock(CacheRepository::class);
         $cache->shouldReceive('get')->twice()->andReturnNull();
         $cache->shouldReceive('add')
             ->once()
-            ->withArgs(fn (string $key, array $payload, int $ttl): bool => $key === 'mod_manager_op_lease:v1:42:mod'
-                && $payload['operation'] === 'bulk_update'
-                && is_string($payload['token'] ?? null)
-                && $ttl === 1200)
+            ->withArgs(function (string $key, array $payload, int $ttl) use (&$leaseToken): bool {
+                $leaseToken = $payload['token'] ?? null;
+
+                return $key === 'mod_manager_op_lease:v1:42:mod'
+                    && $payload['operation'] === 'bulk_update'
+                    && is_string($leaseToken)
+                    && $ttl === 1200;
+            })
             ->andReturnTrue();
         $cache->shouldReceive('put')
             ->once()
@@ -138,8 +171,11 @@ class InstalledOperationManagerTest extends TestCase
         $this->expectUniqueLock($cache, 'mod-manager:bulk-update:42:mod', 1200);
         $dispatcher->shouldReceive('dispatch')
             ->once()
-            ->withArgs(fn (BulkUpdateInstalledProjects $job): bool => $job->serverId === 42
-                && $job->projectType === ProjectType::Mod->value)
+            ->withArgs(function (BulkUpdateInstalledProjects $job) use (&$leaseToken): bool {
+                return $job->serverId === 42
+                    && $job->projectType === ProjectType::Mod->value
+                    && $job->leaseToken === $leaseToken;
+            })
             ->andReturn(1);
 
         $result = (new InstalledOperationManager($cache, $config))
@@ -153,18 +189,18 @@ class InstalledOperationManagerTest extends TestCase
 
     public function test_active_bulk_update_is_not_dispatched_twice(): void
     {
-        $activeState = InstalledOperationState::queued(
-            InstalledOperationManager::OPERATION_BULK_UPDATE,
+        $cache = new Repository(new ArrayStore());
+        $leases = new InstalledOperationLease($cache);
+        self::assertNotNull($leases->tryAcquire(
             42,
             ProjectType::Mod,
-        );
-        $cache = Mockery::mock(CacheRepository::class);
-        $cache->shouldReceive('get')->once()->andReturn($activeState->toCachePayload());
-        $cache->shouldNotReceive('put');
+            InstalledOperationLease::OPERATION_BULK_UPDATE,
+        ));
         $config = Mockery::mock(ConfigRepository::class);
         $config->shouldNotReceive('get');
-        $result = (new InstalledOperationManager($cache, $config))
-            ->dispatchBulkUpdate(42, ProjectType::Mod);
+        $manager = new InstalledOperationManager($cache, $config, $leases);
+        $manager->queue(42, ProjectType::Mod, InstalledOperationManager::OPERATION_BULK_UPDATE);
+        $result = $manager->dispatchBulkUpdate(42, ProjectType::Mod);
 
         self::assertFalse($result['dispatched']);
         self::assertSame('already_active', $result['reason']);
@@ -174,20 +210,18 @@ class InstalledOperationManagerTest extends TestCase
 
     public function test_active_scan_prevents_a_bulk_update_from_being_dispatched(): void
     {
-        $activeState = InstalledOperationState::queued(
-            InstalledOperationManager::OPERATION_SCAN,
+        $cache = new Repository(new ArrayStore());
+        $leases = new InstalledOperationLease($cache);
+        self::assertNotNull($leases->tryAcquire(
             42,
             ProjectType::Mod,
-        );
-        $cache = Mockery::mock(CacheRepository::class);
-        $cache->shouldReceive('get')
-            ->twice()
-            ->andReturn(null, $activeState->toCachePayload());
-        $cache->shouldNotReceive('put');
+            InstalledOperationLease::OPERATION_SCAN,
+        ));
         $config = Mockery::mock(ConfigRepository::class);
         $config->shouldNotReceive('get');
-        $result = (new InstalledOperationManager($cache, $config))
-            ->dispatchBulkUpdate(42, ProjectType::Mod);
+        $manager = new InstalledOperationManager($cache, $config, $leases);
+        $manager->queue(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN);
+        $result = $manager->dispatchBulkUpdate(42, ProjectType::Mod);
 
         self::assertFalse($result['dispatched']);
         self::assertSame('already_active', $result['reason']);
@@ -218,12 +252,127 @@ class InstalledOperationManagerTest extends TestCase
         $cache = new Repository($store);
         $config = Mockery::mock(ConfigRepository::class);
         $leases = new InstalledOperationLease($cache);
-        self::assertNotNull($leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_SCAN));
+        $leaseToken = $leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_SCAN);
+        self::assertNotNull($leaseToken);
 
         (new InstalledOperationManager($cache, $config, $leases))
-            ->complete(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN);
+            ->complete(
+                42,
+                ProjectType::Mod,
+                InstalledOperationManager::OPERATION_SCAN,
+                leaseToken: $leaseToken,
+            );
 
         self::assertFalse($leases->isHeld(42, ProjectType::Mod));
+    }
+
+    public function test_stale_completion_cannot_release_a_replacement_owner_lease(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $config = Mockery::mock(ConfigRepository::class);
+        $leases = new InstalledOperationLease($cache);
+        $staleToken = $leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_SCAN);
+        self::assertNotNull($staleToken);
+        $cache->forget(InstalledOperationLease::key(42, ProjectType::Mod));
+        $replacementToken = $leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_UPDATE);
+        self::assertNotNull($replacementToken);
+
+        $manager = new InstalledOperationManager($cache, $config, $leases);
+        $manager->complete(
+            42,
+            ProjectType::Mod,
+            InstalledOperationManager::OPERATION_SCAN,
+            leaseToken: $staleToken,
+        );
+
+        self::assertTrue($leases->owns(42, ProjectType::Mod, $replacementToken));
+        self::assertSame(InstalledOperationLease::OPERATION_UPDATE, $leases->currentOperation(42, ProjectType::Mod));
+        self::assertNull($manager->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN));
+    }
+
+    public function test_terminal_state_cache_failure_still_releases_the_exact_owner_lease(): void
+    {
+        $store = new class extends ArrayStore
+        {
+            public bool $rejectPuts = false;
+
+            public function put($key, $value, $seconds)
+            {
+                if ($this->rejectPuts) {
+                    throw new \RuntimeException('cache unavailable');
+                }
+
+                return parent::put($key, $value, $seconds);
+            }
+        };
+        $cache = new Repository($store);
+        $leases = new InstalledOperationLease($cache);
+        $token = $leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_SCAN);
+        self::assertNotNull($token);
+        $store->rejectPuts = true;
+
+        try {
+            (new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), $leases))->complete(
+                42,
+                ProjectType::Mod,
+                InstalledOperationManager::OPERATION_SCAN,
+                leaseToken: $token,
+            );
+            self::fail('The state cache failure must propagate.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('cache unavailable', $exception->getMessage());
+        }
+
+        self::assertFalse($leases->isHeld(42, ProjectType::Mod));
+    }
+
+    public function test_metadata_reset_acquires_all_type_leases_or_rolls_back_every_new_claim(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $config = new LaravelConfigRepository(['queue' => ['default' => 'database']]);
+        $leases = new InstalledOperationLease($cache);
+        $existingModToken = $leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_INSTALL);
+        self::assertNotNull($existingModToken);
+
+        $result = (new InstalledOperationManager($cache, $config, $leases))->dispatchMetadataReset(
+            42,
+            [ProjectType::Mod, ProjectType::Datapack],
+            actorUserId: 7,
+        );
+
+        self::assertFalse($result['dispatched']);
+        self::assertSame('already_active', $result['reason']);
+        self::assertSame([], $result['states']);
+        self::assertFalse($leases->isHeld(42, ProjectType::Datapack));
+        self::assertTrue($leases->owns(42, ProjectType::Mod, $existingModToken));
+    }
+
+    public function test_metadata_reset_dispatches_one_job_with_every_exact_lease_token(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $config = new LaravelConfigRepository(['queue' => ['default' => 'database']]);
+        $leases = new InstalledOperationLease($cache);
+        $dispatcher = $this->bindDispatcher($cache);
+        $dispatcher->shouldReceive('dispatch')
+            ->once()
+            ->withArgs(function (ResetInstalledMetadata $job) use ($leases): bool {
+                return $job->serverId === 42
+                    && $job->projectTypes === ['datapack', 'mod']
+                    && $job->actorUserId === 7
+                    && $leases->owns(42, ProjectType::Datapack, $job->leaseTokens['datapack'])
+                    && $leases->owns(42, ProjectType::Mod, $job->leaseTokens['mod']);
+            })
+            ->andReturn(1);
+
+        $result = (new InstalledOperationManager($cache, $config, $leases))->dispatchMetadataReset(
+            42,
+            [ProjectType::Mod, ProjectType::Datapack],
+            actorUserId: 7,
+        );
+
+        self::assertTrue($result['dispatched']);
+        self::assertNull($result['reason']);
+        self::assertSame(['datapack', 'mod'], array_keys($result['states']));
     }
 
     public function test_progress_persists_the_running_state_in_one_cache_write(): void
@@ -363,6 +512,12 @@ class InstalledOperationManagerTest extends TestCase
         };
         $cache = new Repository($store);
         $config = Mockery::mock(ConfigRepository::class);
+        $leases = new InstalledOperationLease($cache);
+        self::assertNotNull($leases->tryAcquire(
+            42,
+            ProjectType::Mod,
+            InstalledOperationLease::OPERATION_SCAN,
+        ));
         $scanState = InstalledOperationState::queued(
             InstalledOperationManager::OPERATION_SCAN,
             42,
@@ -371,7 +526,7 @@ class InstalledOperationManagerTest extends TestCase
         $cache->put('mod_manager_operation:v1:42:mod:scan', $scanState->toCachePayload(), 60);
         $cache->put('mod_manager_hash_scan:42:mod', ['successful' => true], 60);
 
-        $snapshot = (new InstalledOperationManager($cache, $config))->installedTabCacheSnapshot(
+        $snapshot = (new InstalledOperationManager($cache, $config, $leases))->installedTabCacheSnapshot(
             42,
             ProjectType::Mod,
             'mod_manager_hash_scan:42:mod',
@@ -381,6 +536,38 @@ class InstalledOperationManagerTest extends TestCase
         self::assertSame(['successful' => true], $snapshot['scan_result']);
         self::assertSame(InstalledOperationManager::OPERATION_SCAN, $snapshot['scan']?->operation);
         self::assertNull($snapshot['bulk']);
+    }
+
+    public function test_snapshot_does_not_display_an_orphan_scan_during_a_bulk_lease(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $leases = new InstalledOperationLease($cache);
+        $scanState = InstalledOperationState::queued(
+            InstalledOperationManager::OPERATION_SCAN,
+            42,
+            ProjectType::Mod,
+        );
+        $bulkState = InstalledOperationState::queued(
+            InstalledOperationManager::OPERATION_BULK_UPDATE,
+            42,
+            ProjectType::Mod,
+        );
+        $cache->put('mod_manager_operation:v1:42:mod:scan', $scanState->toCachePayload(), 60);
+        $cache->put('mod_manager_operation:v1:42:mod:bulk_update', $bulkState->toCachePayload(), 60);
+        self::assertNotNull($leases->tryAcquire(
+            42,
+            ProjectType::Mod,
+            InstalledOperationLease::OPERATION_BULK_UPDATE,
+        ));
+
+        $snapshot = (new InstalledOperationManager(
+            $cache,
+            Mockery::mock(ConfigRepository::class),
+            $leases,
+        ))->installedTabCacheSnapshot(42, ProjectType::Mod, 'scan-result');
+
+        self::assertNull($snapshot['scan']);
+        self::assertSame(InstalledOperationManager::OPERATION_BULK_UPDATE, $snapshot['bulk']?->operation);
     }
 
     private function bindDispatcher(CacheRepository $cache): Dispatcher

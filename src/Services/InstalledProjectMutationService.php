@@ -37,6 +37,10 @@ final class InstalledProjectMutationService
         ?array $installedMod = null,
         ?array $primaryFile = null,
     ): string {
+        if (!$type->usesArchiveMetadata()) {
+            throw new Exception('Resource packs must use the dedicated direct URL and SHA-1 transaction.');
+        }
+
         $file = $primaryFile ?? ProjectPrimaryFile::fromVersion($versionData);
 
         if ($file === null || !ProjectPrimaryFile::isDownloadable($file)) {

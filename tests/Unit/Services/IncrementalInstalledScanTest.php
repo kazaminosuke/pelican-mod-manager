@@ -4,12 +4,13 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
-use Illuminate\Http\Client\Response;
+use InvalidArgumentException;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Repositories\InstalledMetadataRepository;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
+use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -58,20 +59,76 @@ class IncrementalInstalledScanTest extends TestCase
     {
         $service = new InstalledProjectService(
             Mockery::mock(ProjectSourceRegistry::class),
-            Mockery::mock(InstalledMetadataRepository::class),
+            $metadata = Mockery::mock(InstalledMetadataRepository::class),
         );
         $server = new Server();
         $server->forceFill(['id' => 42]);
-        $response = Mockery::mock(Response::class);
-        $response->shouldReceive('failed')->once()->andReturnTrue();
         $files = Mockery::mock(DaemonFileRepository::class);
-        $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
-        $files->shouldReceive('deleteFiles')->once()->with('mods', ['.pelican-mod-manager.json'])->andReturn($response);
+        $metadata->shouldReceive('delete')
+            ->once()
+            ->with($server, $files, 'mods')
+            ->andReturnFalse();
 
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage('Failed to delete installed metadata.');
 
         $service->clearInstalledModsMetadata($server, $files, ProjectType::Mod);
+    }
+
+    public function test_resource_pack_is_rejected_by_the_archive_scan_cache_boundary(): void
+    {
+        $service = new InstalledProjectService(
+            Mockery::mock(ProjectSourceRegistry::class),
+            Mockery::mock(InstalledMetadataRepository::class),
+        );
+        $server = new Server();
+        $server->forceFill(['id' => 42]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Resource packs use dedicated URL and SHA-1 metadata');
+
+        $service->getHashScanCacheKey($server, ProjectType::ResourcePack);
+    }
+
+    public function test_resource_pack_metadata_never_reads_the_installed_archive_document(): void
+    {
+        $metadata = Mockery::mock(InstalledMetadataRepository::class);
+        $metadata->shouldNotReceive('read');
+        $service = new InstalledProjectService(
+            Mockery::mock(ProjectSourceRegistry::class),
+            $metadata,
+        );
+        $server = new Server();
+        $server->forceFill(['id' => 42]);
+
+        $result = $service->getInstalledMetadataReadResult(
+            $server,
+            Mockery::mock(DaemonFileRepository::class),
+            ProjectType::ResourcePack,
+        );
+
+        self::assertSame(InstalledMetadataReadStatus::Unavailable, $result->status);
+        self::assertSame([], $result->document->installedMods());
+    }
+
+    public function test_resource_pack_metadata_clear_never_deletes_the_installed_archive_document(): void
+    {
+        $metadata = Mockery::mock(InstalledMetadataRepository::class);
+        $metadata->shouldNotReceive('delete');
+        $service = new InstalledProjectService(
+            Mockery::mock(ProjectSourceRegistry::class),
+            $metadata,
+        );
+        $server = new Server();
+        $server->forceFill(['id' => 42]);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        $service->clearInstalledModsMetadata(
+            $server,
+            Mockery::mock(DaemonFileRepository::class),
+            ProjectType::ResourcePack,
+        );
     }
 
     public function test_scan_rebase_preserves_concurrent_updates_additions_and_removals(): void

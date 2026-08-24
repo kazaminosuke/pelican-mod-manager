@@ -7,6 +7,7 @@ use App\Enums\TabPosition;
 use App\Filament\Admin\Resources\Servers\Pages\EditServer;
 use App\Models\Egg;
 use App\Models\Server;
+use App\Models\User;
 use App\Repositories\Daemon\DaemonFileRepository;
 use App\Traits\EnvironmentWriterTrait;
 use BladeUI\Icons\Factory as BladeIconsFactory;
@@ -31,10 +32,11 @@ use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Kazaminosuke\ModManager\Http\Middleware\ShiftCoreNavigationRows;
 use Kazaminosuke\ModManager\Models\ModManagerEggProfile;
+use Kazaminosuke\ModManager\Services\InstalledMetadataResetService;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
-use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
+use Kazaminosuke\ModManager\Support\ModManagerAssets;
 use Kazaminosuke\ModManager\Support\NavigationSort;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 
@@ -83,10 +85,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // that targets this page's own table chrome must list every
         // concrete page class it needs to appear on.
         $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
-        $projectIconPlaceholder = json_encode(
-            ProjectIconUrl::placeholderDataUri(),
-            JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_THROW_ON_ERROR,
-        );
+        $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
 
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
@@ -112,174 +111,23 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 .'<link rel="dns-prefetch" href="https://media.forgecdn.net">'
                 .'<link rel="dns-prefetch" href="https://hangarcdn.papermc.io">'
                 .'<link rel="dns-prefetch" href="https://avatars.githubusercontent.com">'
-                .'<style>'
-                .'.mcloader-badge .fi-icon{width:1em!important;height:1em!important;}'
-                // The mod/plugin table owns the rest of the screen, and the row
-                // area alone scrolls, so the Minecraft Version/Loader/Installed
-                // summary and the source tabs above it never move and the
-                // paginator below never moves either.
-                //
-                // Filament's own table markup (verified against its 4.x blade
-                // view) is .fi-ta > .fi-ta-ctn > .fi-ta-main, with the row
-                // viewport, the empty state and nav.fi-pagination as siblings
-                // inside .fi-ta-main. Turning that into a fixed-height flex
-                // column is what pins the paginator: the row viewport absorbs
-                // all the slack, so neither the row count, nor how much the
-                // descriptions wrap, nor the paginator briefly disappearing
-                // during a deferred load (Filament renders it only once
-                // $records is a paginator) can move anything.
-                //
-                // This replaces a JS pass that measured document.scrollHeight
-                // and window.scrollY after every render. That made the reserved
-                // height a function of how far the page happened to be scrolled
-                // at the time, and each pass altered the input to the next -
-                // the reason the paginator's position drifted by hundreds of
-                // pixels and varied between tabs.
-                //
-                // What CSS cannot derive comes from the table-layout partial:
-                // where the table starts, how much page chrome sits below it,
-                // and the viewport height. All three are measured rather than
-                // assumed - a fixed 1.5rem guess for the trailing chrome left
-                // the document 64px taller than the viewport, which brought the
-                // page's own scrollbar back. Subtracting the measured value
-                // instead makes the document exactly one viewport tall, so the
-                // row area is the only thing that scrolls. The fallbacks only
-                // have to keep the first paint sane.
-                .'.mmr-table-scroll-ctn .fi-ta-main{'
-                    .'display:flex;flex-direction:column;'
-                    .'height:calc('
-                        .'var(--mmr-viewport-height, 100dvh)'
-                        .' - var(--mmr-table-top, 24rem)'
-                        .' - var(--mmr-table-bottom, 2rem)'
-                    .');'
-                    .'min-height:15rem;'
-                .'}'
-                // A container-relative, square image footprint reserves space
-                // before remote icons decode without introducing a fixed
-                // pixel size. It scales with the actual table viewport.
-                .'.mmr-table-scroll-ctn{container-type:inline-size;}'
-                .'.mmr-table-scroll-ctn .mmr-project-icon-cell .fi-ta-image img{'
-                    .'display:block;inline-size:4.5cqi;'
-                    .'height:auto!important;block-size:auto!important;'
-                    .'aspect-ratio:1;object-fit:cover;'
-                .'}'
-                // Header, toolbar, filter indicators and the paginator keep
-                // their natural heights; only the row viewport flexes.
-                .'.mmr-table-scroll-ctn .fi-ta-main>*{flex:0 0 auto;}'
-                .'.mmr-table-scroll-ctn .fi-ta-content-ctn,'
-                .'.mmr-table-scroll-ctn .fi-ta-empty-state{flex:1 1 auto;min-height:0;}'
-                .'.mmr-table-scroll-ctn .fi-ta-content-ctn{overflow-y:auto;}'
-                // Filament's paginator is a 1fr/auto/1fr grid. On this page
-                // ->paginated([20]) renders no records-per-page selector, so
-                // relying on auto-placement makes the count and page list trade
-                // places as their contents change. Explicitly place the count in
-                // the left equal track and the list in the central auto track.
-                // Using minmax(0, 1fr), rather than a bare 1fr, prevents the
-                // count's min-content width from making the two side tracks
-                // unequal. The page list consequently stays centred regardless
-                // of the count's length or whether it wraps.
-                .'.mmr-table-scroll-ctn .fi-pagination{'
-                    .'grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);'
-                .'}'
-                .'.mmr-table-scroll-ctn .fi-pagination-overview{'
-                    .'grid-column:1;min-inline-size:0;'
-                    // Filament's text-sm line-height is 1.25rem. Reserving two
-                    // lines from the first paint means a long overview can wrap
-                    // without changing the paginator's block size or moving the
-                    // row viewport above it.
-                    .'min-block-size:2.5rem;white-space:normal;'
-                    // Do not allow arbitrary character breaks. The overview
-                    // formatter below supplies Japanese phrase boundaries where
-                    // they are useful, while the browser's ordinary strict
-                    // Japanese line-breaking rules handle every other locale.
-                    .'overflow-wrap:normal;word-break:normal;line-break:strict;'
-                .'}'
-                .'.mmr-table-scroll-ctn .mmr-pagination-overview-content{min-inline-size:0;}'
-                .'.mmr-table-scroll-ctn .mmr-pagination-overview-chunk{white-space:nowrap;}'
-                // The overview is hidden in Filament's compact paginator. Only
-                // switch it to a grid at the same wide breakpoints where
-                // Filament shows it, so a single line can sit vertically centred
-                // within the reserved two-line box without changing compact
-                // pagination's native visibility rules.
-                .'@supports (container-type:inline-size){'
-                    .'@container (min-width:56rem){'
-                        .'.mmr-table-scroll-ctn .fi-pagination-overview{display:grid;align-content:center;}'
-                    .'}'
-                .'}'
-                .'@supports not (container-type:inline-size){'
-                    .'@media (min-width:48rem){'
-                        .'.mmr-table-scroll-ctn .fi-pagination-overview{display:grid;align-content:center;}'
-                    .'}'
-                .'}'
-                .'.mmr-table-scroll-ctn .fi-pagination-items{grid-column:2;justify-self:center;}'
-                // Filament conditionally omits the first/previous and
-                // next/last <li>s. The table-layout script supplies a complete
-                // native disabled item for a missing edge, avoiding a computed
-                // spacer while making both navigation directions explicit.
-                .'.mmr-table-scroll-ctn .mmr-pagination-placeholder{pointer-events:none;}'
-                // The placeholder clones the available opposite-direction
-                // icon, so only its glyph is mirrored; Filament's button size,
-                // border, corner and disabled colours stay untouched.
-                .'.mmr-table-scroll-ctn .mmr-pagination-placeholder-icon{transform:scaleX(-1);}'
-                .'.mmr-catalog-sort-toolbar{width:12rem;min-width:10rem;}'
-                .'.mmr-catalog-sort-select{display:block;width:100%;min-height:2.25rem;border-radius:.5rem;border:1px solid rgb(209 213 219);background:#fff;padding:.5rem .75rem;color:rgb(17 24 39);font-size:.875rem;line-height:1.25rem;}'
-                .'.dark .mmr-catalog-sort-select{border-color:rgb(75 85 99);background:rgb(31 41 55);color:#fff;}'
-                // Keeps the column header row (Title/Author/Downloads/Modified)
-                // pinned to the top of that scrolling area as rows scroll past
-                // underneath it; its own background (set by Filament) keeps rows
-                // from showing through.
-                .'.mmr-table-scroll-ctn .fi-ta-table>thead{position:sticky;top:0;z-index:1;}'
-                .$this->catalogRowActionCss()
-                .$this->catalogStatIconCss()
-                // TextEntry exposes no extraImgAttributes()-style hook for
-                // its icon, so this class goes on the entry's own wrapper
-                // (via ->extraAttributes()) and reaches the icon - rendered
-                // by Filament's generate_icon_html() as an inline <svg
-                // class="fi-icon ...">, same as the .mcloader-badge rule
-                // above - through a descendant selector instead. Matches
-                // Filament's own .fi-loading-indicator (motion-safe:animate-spin)
-                // in respecting a reduced-motion preference.
-                .'@keyframes mmr-spin{to{transform:rotate(360deg);}}'
-                .'@media (prefers-reduced-motion: no-preference){.mmr-installed-operation-spinning .fi-icon{animation:mmr-spin 1s linear infinite;}}'
-                .'</style>'
-                // Capture-phase error events reach this listener even though
-                // image errors do not bubble. Keeping it once in HEAD removes
-                // a large inline onerror attribute from every table row and
-                // also works when Livewire changes the src on the same node.
-                .'<script data-navigate-once>'
-                    .'(()=>{'
-                        .'if(window.__mmrProjectIconFallbackListener){return;}'
-                        .'window.__mmrProjectIconFallbackListener=true;'
-                        .'const placeholder='.$projectIconPlaceholder.';'
-                        .'document.addEventListener("error",(event)=>{'
-                            .'const image=event.target;'
-                            .'if(!(image instanceof HTMLImageElement)||!image.matches(".mmr-table-scroll-ctn .mmr-project-icon-cell .fi-ta-image img")){return;}'
-                            .'const source=image.currentSrc||image.src;'
-                            .'if(!source||source===placeholder){return;}'
-                            .'image.src=placeholder;'
-                        .'},true);'
-                    .'})();'
-                .'</script>'
+                .'<link rel="stylesheet" href="'.e(ModManagerAssets::url('mod-manager.css')).'" data-navigate-track>',
             ),
             $pageClasses,
         );
-        // Supplies --mmr-table-top for the flex layout above, and puts the
-        // paginator's inline offset back after a morph strips it.
         $panel->renderHook(
             PanelsRenderHook::BODY_END,
-            fn () => view('pelican-mod-manager::components.table-layout'),
+            fn () => new HtmlString(
+                '<script src="'.e(ModManagerAssets::url('mod-manager-runtime.js')).'"'
+                    .' data-mmr-project-icon-placeholder="'.$projectIconPlaceholder.'" defer data-navigate-once></script>'
+                .'<script src="'.e(ModManagerAssets::url('table-layout.js')).'" defer data-navigate-once></script>'
+                .'<script src="'.e(ModManagerAssets::url('table-swr-cache.js')).'"'
+                    .' data-mmr-project-icon-placeholder="'.$projectIconPlaceholder.'" defer data-navigate-once></script>'
+                .'<script src="'.e(ModManagerAssets::url('catalog-url-history.js')).'" defer data-navigate-once></script>',
+            ),
             $pageClasses,
         );
-        $panel->renderHook(
-            PanelsRenderHook::BODY_END,
-            fn () => view('pelican-mod-manager::components.table-swr-cache'),
-            $pageClasses,
-        );
-        $panel->renderHook(
-            PanelsRenderHook::BODY_END,
-            fn () => view('pelican-mod-manager::components.catalog-url-history'),
-            $pageClasses,
-        );
+
         $panel->renderHook(
             PanelsRenderHook::BODY_END,
             fn () => config('pelican-mod-manager.debug_timing')
@@ -417,18 +265,20 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                                 + Server::query()->orderBy('name')->pluck('name', 'id')->all()),
                     ])
                     ->action(function (array $data) {
-                        $service = app(InstalledProjectService::class);
+                        $resets = app(InstalledMetadataResetService::class);
                         $operations = app(InstalledOperationManager::class);
                         /** @var DaemonFileRepository $fileRepository */
                         $fileRepository = app(DaemonFileRepository::class);
+                        $actor = user();
+                        $actor = $actor instanceof User ? $actor : null;
 
                         if (($data['server_id'] ?? 'all') === 'all') {
-                            self::clearAllServers($service, $fileRepository);
+                            self::clearAllServers($resets, $fileRepository, $actor);
 
                             return;
                         }
 
-                        self::clearSingleServer($service, $fileRepository, $operations, (int) $data['server_id']);
+                        self::clearSingleServer($operations, (int) $data['server_id'], $actor);
                     }),
             ])->belowContent(trans('pelican-mod-manager::strings.settings.clear_cache_helper')),
             // Stage 8's admin-facing half of the GUI fallback: always
@@ -623,28 +473,35 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
      * real timeout. Re-scanning instead happens lazily, the normal way, the
      * next time an applicable Mod/Plugin/Datapack Installed tab is opened.
      */
-    private static function clearAllServers(InstalledProjectService $service, DaemonFileRepository $fileRepository): void
+    private static function clearAllServers(
+        InstalledMetadataResetService $resets,
+        DaemonFileRepository $fileRepository,
+        ?User $actor,
+    ): void
     {
         $clearedServers = [];
         $failureCount = 0;
 
-        // Metadata deletion needs each server's egg loaded to resolve its
-        // project type. This query is intentionally infrequent and lets each
-        // successful delete invalidate only the affected server.
-        foreach (Server::query()->with('egg')->get() as $server) {
+        // Keep memory bounded on installations with many servers. Busy
+        // server/type leases are skipped; the action never waits for an
+        // install, update, uninstall, scan, or bulk update to finish.
+        foreach (Server::query()->with('egg')->lazyById(100) as $server) {
             try {
-                $type = ProjectType::fromServer($server);
+                $result = $resets->clearWithoutScan(
+                    $server,
+                    $fileRepository,
+                    self::installedMetadataTypes($server),
+                    $actor,
+                );
 
-                if ($type) {
-                    $service->clearInstalledModsMetadata($server, $fileRepository, $type);
+                if ($result['cleared_types'] !== []) {
                     $clearedServers[$server->getKey()] = true;
                 }
 
-                if (ProjectType::supportsDatapacks($server)) {
-                    $service->clearInstalledModsMetadata($server, $fileRepository, ProjectType::Datapack);
-                    $clearedServers[$server->getKey()] = true;
+                if ($result['status'] !== InstalledMetadataResetService::STATUS_CLEARED) {
+                    $failureCount++;
                 }
-            } catch (Exception $exception) {
+            } catch (\Throwable $exception) {
                 report($exception);
                 $failureCount++;
             }
@@ -680,20 +537,10 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
      * other server too, contradicting "just this one server".
      */
     private static function clearSingleServer(
-        InstalledProjectService $service,
-        DaemonFileRepository $fileRepository,
         InstalledOperationManager $operations,
         int $serverId,
+        ?User $actor,
     ): void {
-        if (!$operations->supportsAsyncDispatch()) {
-            Notification::make()
-                ->title(trans('pelican-mod-manager::strings.operations.queue_required'))
-                ->danger()
-                ->send();
-
-            return;
-        }
-
         $server = Server::query()->with('egg')->find($serverId);
 
         if (!$server) {
@@ -705,43 +552,22 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             return;
         }
 
-        try {
-            $type = ProjectType::fromServer($server);
+        $dispatch = $operations->dispatchMetadataReset(
+            $server,
+            self::installedMetadataTypes($server),
+            actorUserId: $actor !== null ? (int) $actor->getKey() : null,
+        );
 
-            if ($type) {
-                $scanState = $operations->state($server, $type, InstalledOperationManager::OPERATION_SCAN);
-                if (!$scanState?->isActive()) {
-                    $service->clearInstalledModsMetadata($server, $fileRepository, $type);
-                    $dispatch = $operations->dispatchScan(
-                        $server,
-                        $type,
-                        force: true,
-                        actorUserId: is_numeric(user()?->getKey()) ? (int) user()->getKey() : null,
-                    );
-                    if (!$dispatch['dispatched'] && $dispatch['reason'] !== 'already_active') {
-                        throw new Exception('Failed to dispatch installed scan.');
-                    }
-                }
-            }
+        if (!$dispatch['dispatched'] && $dispatch['reason'] === 'sync_queue') {
+            Notification::make()
+                ->title(trans('pelican-mod-manager::strings.operations.queue_required'))
+                ->danger()
+                ->send();
 
-            if (ProjectType::supportsDatapacks($server)) {
-                $datapackState = $operations->state($server, ProjectType::Datapack, InstalledOperationManager::OPERATION_SCAN);
-                if (!$datapackState?->isActive()) {
-                    $service->clearInstalledModsMetadata($server, $fileRepository, ProjectType::Datapack);
-                    $dispatch = $operations->dispatchScan(
-                        $server,
-                        ProjectType::Datapack,
-                        force: true,
-                        actorUserId: is_numeric(user()?->getKey()) ? (int) user()->getKey() : null,
-                    );
-                    if (!$dispatch['dispatched'] && $dispatch['reason'] !== 'already_active') {
-                        throw new Exception('Failed to dispatch datapack scan.');
-                    }
-                }
-            }
-        } catch (Exception $exception) {
-            report($exception);
+            return;
+        }
 
+        if (!$dispatch['dispatched'] && $dispatch['reason'] !== 'no_types') {
             Notification::make()
                 ->title(trans('pelican-mod-manager::strings.notifications.reset_metadata_failed'))
                 ->danger()
@@ -751,86 +577,26 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         }
 
         Notification::make()
-            ->title(trans('pelican-mod-manager::strings.settings.cache_cleared_single', ['name' => $server->name]))
+            ->title(trans('pelican-mod-manager::strings.settings.cache_reset_queued', ['name' => $server->name]))
             ->success()
             ->send();
     }
 
-    /**
-     * Icons for catalog row actions are CSS masks defined once, not inline
-     * SVGs copied onto every Filament icon button.
-     */
-    private function catalogRowActionCss(): string
+    /** @return array<int, ProjectType> */
+    private static function installedMetadataTypes(Server $server): array
     {
-        $masks = [
-            'versions' => ['M9 6l11 0', 'M9 12l11 0', 'M9 18l11 0', 'M5 6l0 .01', 'M5 12l0 .01', 'M5 18l0 .01'],
-            'install_latest' => ['M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2', 'M7 11l5 5l5 -5', 'M12 4l0 12'],
-            'update' => ['M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4', 'M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4'],
-            'installed' => ['M5 12l5 5l10 -10'],
-            'uninstall' => ['M4 7l16 0', 'M10 11l0 6', 'M14 11l0 6', 'M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12', 'M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3'],
-        ];
+        $types = [];
+        $primaryType = ProjectType::fromServer($server);
 
-        $maskRules = '';
-        foreach ($masks as $name => $paths) {
-            $pathMarkup = '';
-            foreach ($paths as $path) {
-                $pathMarkup .= '<path d="'.$path.'"/>';
-            }
-
-            $svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>{$pathMarkup}</svg>";
-            $maskRules .= '.mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action="'.$name.'"]{--mmr-row-action-mask:url("data:image/svg+xml,'.rawurlencode($svg).'");}';
+        if (in_array($primaryType, [ProjectType::Mod, ProjectType::Plugin], true)) {
+            $types[] = $primaryType;
         }
 
-        return
-            '.mmr-table-scroll-ctn .mmr-row-action{'
-                .'display:inline-flex;align-items:center;justify-content:center;'
-                .'width:2.25rem;height:2.25rem;padding:0;border:0;background:transparent;cursor:pointer;color:inherit;'
-            .'}'
-            .'.mmr-table-scroll-ctn .mmr-row-action.fi-disabled{opacity:.55;cursor:default;}'
-            .'.mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="info"]{color:rgb(59 130 246);}'
-            .'.mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="success"]{color:rgb(16 185 129);}'
-            .'.mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="warning"]{color:rgb(245 158 11);}'
-            .'.mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="danger"]{color:rgb(239 68 68);}'
-            .'.dark .mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="info"]{color:rgb(96 165 250);}'
-            .'.dark .mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="success"]{color:rgb(52 211 153);}'
-            .'.dark .mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="warning"]{color:rgb(251 191 36);}'
-            .'.dark .mmr-table-scroll-ctn .mmr-row-action[data-mmr-swr-row-action-color="danger"]{color:rgb(248 113 113);}'
-            .'.mmr-table-scroll-ctn .mmr-row-action-icon{'
-                .'display:block;width:1.25rem;height:1.25rem;background:currentColor;'
-                .'-webkit-mask:var(--mmr-row-action-mask) center/contain no-repeat;'
-                .'mask:var(--mmr-row-action-mask) center/contain no-repeat;'
-            .'}'
-            .$maskRules;
-    }
-
-    /**
-     * Downloads / Modified column icons are CSS masks, not a Tabler SVG
-     * copied into every catalog row.
-     */
-    private function catalogStatIconCss(): string
-    {
-        $masks = [
-            'downloads' => ['M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2', 'M7 11l5 5l5 -5', 'M12 4l0 12'],
-            'calendar' => ['M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12z', 'M16 3v4', 'M8 3v4', 'M4 11h16', 'M11 15h1', 'M12 15v3'],
-        ];
-
-        $maskRules = '';
-        foreach ($masks as $name => $paths) {
-            $pathMarkup = '';
-            foreach ($paths as $path) {
-                $pathMarkup .= '<path d="'.$path.'"/>';
-            }
-
-            $svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>{$pathMarkup}</svg>";
-            $maskRules .= '.mmr-table-scroll-ctn .mmr-stat-icon[data-mmr-stat-icon="'.$name.'"]{--mmr-stat-icon-mask:url("data:image/svg+xml,'.rawurlencode($svg).'");}';
+        if (ProjectType::supportsDatapacks($server)) {
+            $types[] = ProjectType::Datapack;
         }
 
-        return
-            '.mmr-table-scroll-ctn .mmr-stat-icon{'
-                .'display:inline-block;width:1rem;height:1rem;flex:0 0 1rem;background:currentColor;vertical-align:-0.125em;'
-                .'-webkit-mask:var(--mmr-stat-icon-mask) center/contain no-repeat;'
-                .'mask:var(--mmr-stat-icon-mask) center/contain no-repeat;'
-            .'}'
-            .$maskRules;
+        return $types;
     }
+
 }

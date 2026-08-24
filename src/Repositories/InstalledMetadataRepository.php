@@ -64,6 +64,38 @@ class InstalledMetadataRepository
     }
 
     /**
+     * Delete the sole current metadata document under the same short-lived
+     * document lock used by mutate()/replace(). The long-running operation
+     * lease is deliberately owned by the calling workflow, not this
+     * repository: the two locks protect different scopes and lifetimes.
+     */
+    public function delete(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        string $folder,
+    ): bool {
+        try {
+            return $this->withinLock($server, $folder, function () use ($server, $fileRepository, $folder): bool {
+                $response = $fileRepository->setServer($server)->deleteFiles($folder, [
+                    self::CURRENT_FILENAME,
+                ]);
+
+                if ($response->failed()) {
+                    return false;
+                }
+
+                $this->bumpHydration($server);
+
+                return true;
+            }) === true;
+        } catch (Exception $exception) {
+            report($exception);
+
+            return false;
+        }
+    }
+
+    /**
      * Atomically read, transform, and write the document. This is intended for
      * individual install, update, and remove actions which must not overwrite
      * concurrent changes.

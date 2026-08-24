@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use InvalidArgumentException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
@@ -13,7 +14,6 @@ use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Repositories\InstalledMetadataRepository;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
-use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CurseForgeFingerprint;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
@@ -77,12 +77,6 @@ class InstalledProjectService
         return MinecraftVersionResolver::resolve($server);
     }
 
-    /** @return array<int, string> */
-    public function scanAndImportMods(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): array
-    {
-        return $this->scanAndImportModsResult($server, $fileRepository, $type)->unknownFiles;
-    }
-
     public function scanAndImportModsResult(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): InstalledScanResult
     {
         set_time_limit(240);
@@ -90,6 +84,12 @@ class InstalledProjectService
         $this->debugTimingEnabled = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = $this->debugTimingEnabled ? microtime(true) : 0.0;
         $resolvedType = $type ?? ProjectType::fromServer($server);
+
+        if ($resolvedType === null) {
+            return InstalledScanResult::failed('unsupported_project_type');
+        }
+
+        $this->assertArchiveMetadataType($resolvedType);
         $cacheKey = $this->getHashScanCacheKey($server, $resolvedType);
         $cachedResult = InstalledScanResult::fromCache(Cache::get($cacheKey));
         $scanExecuted = false;
@@ -145,6 +145,11 @@ class InstalledProjectService
     public function getHashScanCacheKey(Server $server, ?ProjectType $type = null): string
     {
         $resolvedType = $type ?? ProjectType::fromServer($server);
+
+        if ($resolvedType !== null) {
+            $this->assertArchiveMetadataType($resolvedType);
+        }
+
         $typeKey = $resolvedType instanceof ProjectType ? $resolvedType->value : 'unknown';
 
         return "installed_scan:v2:{$server->id}:{$typeKey}";
@@ -154,13 +159,14 @@ class InstalledProjectService
      * Deletes this server's current installed-mods metadata file and clears
      * the caches that would otherwise keep serving stale results
      * afterwards: the hydration display cache and the 10-minute
-     * scanAndImportMods() cache. Without clearing the latter, the very next
+     * scanAndImportModsResult() cache. Without clearing the latter, the next
      * "Installed" tab load would silently reuse a cached pre-deletion scan
      * result instead of noticing every file is now unknown again, which is
      * exactly what was observed when this file was deleted by hand.
      *
      * Deleting the metadata file does not, by itself, cause anything to be
-     * re-scanned - see resetInstalledMods() for that.
+     * re-scanned. The settings reset workflow owns the long operation lease
+     * and queues a fresh scan when that behavior is requested.
      *
      * @throws Exception
      */
@@ -169,37 +175,11 @@ class InstalledProjectService
         $type ??= ProjectType::fromServer($server);
         $folder = $this->resolveMetadataFolder($server, $fileRepository, $type);
 
-        $response = $fileRepository->setServer($server)->deleteFiles($folder, [
-            '.pelican-mod-manager.json',
-        ]);
-
-        if ($response->failed()) {
+        if (!$this->metadataRepository->delete($server, $fileRepository, $folder)) {
             throw new Exception('Failed to delete installed metadata.');
         }
 
-        CacheVersion::bumpHydration($server);
         cache()->forget($this->getHashScanCacheKey($server, $type));
-    }
-
-    /**
-     * Clears this server's installed-mods metadata and caches (see
-     * clearInstalledModsMetadata()) and immediately re-scans, so the
-     * Installed tab reflects a clean, freshly re-matched state right away -
-     * rather than requiring a manual "Update all mods"/rescan click to
-     * notice the metadata is gone, which is what happened before this
-     * existed.
-     *
-     * @return array<string> Filenames with no match after the fresh scan.
-     *
-     * @throws Exception
-     */
-    public function resetInstalledMods(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): array
-    {
-        $type ??= ProjectType::fromServer($server);
-
-        $this->clearInstalledModsMetadata($server, $fileRepository, $type);
-
-        return $this->scanAndImportMods($server, $fileRepository, $type);
     }
 
     public function getProjectFolder(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): string
@@ -287,6 +267,8 @@ class InstalledProjectService
         if (!$type) {
             return InstalledScanResult::failed('unsupported_project_type');
         }
+
+        $this->assertArchiveMetadataType($type);
 
         try {
             $folder = $this->getProjectFolder($server, $fileRepository, $type);
@@ -1021,7 +1003,16 @@ class InstalledProjectService
             throw new Exception("Server {$server->id} does not support managed mods or plugins");
         }
 
+        $this->assertArchiveMetadataType($type);
+
         return $this->getProjectFolder($server, $fileRepository, $type);
+    }
+
+    protected function assertArchiveMetadataType(ProjectType $type): void
+    {
+        if (!$type->usesArchiveMetadata()) {
+            throw new InvalidArgumentException('Resource packs use dedicated URL and SHA-1 metadata, not installed archive metadata.');
+        }
     }
 
     /**

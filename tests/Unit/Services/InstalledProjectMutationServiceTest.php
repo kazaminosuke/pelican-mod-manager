@@ -92,4 +92,25 @@ class InstalledProjectMutationServiceTest extends TestCase
             ],
         );
     }
+
+    public function test_resource_pack_cannot_enter_the_installed_archive_transaction(): void
+    {
+        $archives = Mockery::mock(InstalledArchiveTransaction::class);
+        $archives->shouldNotReceive('installOrUpdate');
+        $leases = new InstalledOperationLease(new Repository(new ArrayStore()));
+        $service = new InstalledProjectMutationService($archives, $leases);
+        $server = new Server();
+        $server->forceFill(['id' => 9]);
+
+        $this->expectException(Exception::class);
+        $this->expectExceptionMessage('Resource packs must use the dedicated direct URL and SHA-1 transaction.');
+
+        $service->installOrUpdate(
+            $server,
+            Mockery::mock(DaemonFileRepository::class),
+            ProjectType::ResourcePack,
+            [],
+            [],
+        );
+    }
 }

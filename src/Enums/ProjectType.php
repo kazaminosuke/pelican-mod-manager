@@ -41,6 +41,16 @@ enum ProjectType: string implements HasLabel
         };
     }
 
+    /**
+     * Whether this type is represented by downloaded archives plus the
+     * shared .pelican-mod-manager.json document. Resource packs deliberately
+     * use ResourcePackService's direct URL/SHA-1 and separate metadata.
+     */
+    public function usesArchiveMetadata(): bool
+    {
+        return $this !== self::ResourcePack;
+    }
+
     public function getLoaderSlug(Server $server): ?string
     {
         return match ($this) {

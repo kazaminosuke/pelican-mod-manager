@@ -1,9 +1,8 @@
-<script data-navigate-once>
     (() => {
         'use strict';
 
         // Everything about the table's vertical layout is expressed in CSS
-        // (see ModManagerPlugin's injected stylesheet): .fi-ta-main is
+        // (see mod-manager.css): .fi-ta-main is
         // a fixed-height flex column, the row viewport takes the slack, and
         // the paginator is the last auto-sized item in that column. The three
         // numbers CSS cannot derive on its own are all this script supplies.
@@ -19,7 +18,7 @@
         const DEBUG_STORAGE_KEY = 'mmrSwrDebug';
 
         if (window.__mmrTableLayout) {
-            window.__mmrTableLayout.refresh('re-execute');
+            window.__mmrTableLayout.activate('re-execute');
 
             return;
         }
@@ -68,13 +67,7 @@
             return Math.max(space, 0);
         };
 
-        const measure = (caller = 'unknown') => {
-            const wrapper = document.querySelector(WRAPPER_SELECTOR);
-
-            if (!wrapper) {
-                return;
-            }
-
+        const measure = (wrapper, caller = 'unknown') => {
             // Measure the element that actually carries the height. Reading
             // the wrapper instead would fold in whatever schema markup
             // Filament nests in between, which differs per Filament release.
@@ -219,10 +212,10 @@
             return placeholder;
         };
 
-        const syncPaginationPlaceholders = () => {
-            document.querySelectorAll(`${WRAPPER_SELECTOR} .fi-pagination-overview`).forEach(formatPaginationOverview);
+        const syncPaginationPlaceholders = (wrapper) => {
+            wrapper.querySelectorAll('.fi-pagination-overview').forEach(formatPaginationOverview);
 
-            document.querySelectorAll(`${WRAPPER_SELECTOR} .fi-pagination-items`).forEach((items) => {
+            wrapper.querySelectorAll('.fi-pagination-items').forEach((items) => {
                 Array.from(items.children).forEach((item) => {
                     if (item.dataset.mmrPaginationPlaceholder) {
                         item.remove();
@@ -262,61 +255,148 @@
             });
         };
 
-        const refresh = (caller = 'unknown') => {
-            measure(caller);
-            syncPaginationPlaceholders();
+        const contexts = new Set();
+        const contextByComponent = new WeakMap();
+        const pendingContexts = new Set();
+        let refreshFrame = null;
+        let morphUnsubscribe = null;
+        let resizeListening = false;
+
+        const refreshContext = (context, caller = 'unknown') => {
+            const wrapper = context.component.querySelector(WRAPPER_SELECTOR);
+
+            if (!wrapper) {
+                return;
+            }
+
+            context.wrapper = wrapper;
+            measure(wrapper, caller);
+            syncPaginationPlaceholders(wrapper);
         };
 
-        let bodyObserver = null;
-        let morphHookRegistered = false;
+        const scheduleRefresh = (context, caller = 'unknown') => {
+            if (!context?.component?.isConnected) {
+                return;
+            }
 
-        // A morph can replace the markup above the table - the installed
-        // status badge appearing is the common case - which moves where the
-        // table starts. Livewire may or may not have booted by the time this
-        // end-of-body script runs, hence both the direct attempt and the event.
+            context.caller = caller;
+            pendingContexts.add(context);
+
+            // Mutation, ResizeObserver and Livewire can all report the same
+            // morph. One shared frame makes that morph one layout pass.
+            if (refreshFrame !== null) {
+                return;
+            }
+
+            refreshFrame = requestAnimationFrame(() => {
+                refreshFrame = null;
+                const scheduled = [...pendingContexts];
+                pendingContexts.clear();
+
+                scheduled.forEach((pending) => refreshContext(pending, pending.caller));
+            });
+        };
+
+        const refreshAll = (caller = 'unknown') => {
+            contexts.forEach((context) => scheduleRefresh(context, caller));
+        };
+
+        const componentFor = (wrapper) => wrapper.closest('[wire\\:id]') ?? wrapper;
+
+        const discoverContexts = () => {
+            document.querySelectorAll(WRAPPER_SELECTOR).forEach((wrapper) => {
+                const component = componentFor(wrapper);
+                const existing = contextByComponent.get(component);
+
+                if (existing && contexts.has(existing)) {
+                    return;
+                }
+
+                const context = { component, wrapper, observer: null, caller: 'activate' };
+                contextByComponent.set(component, context);
+                contexts.add(context);
+
+                if (typeof window.ResizeObserver === 'function') {
+                    context.observer = new ResizeObserver(() => scheduleRefresh(context, 'resize-observer'));
+                    // Observe only the manager component. A document/body
+                    // observer kept running after SPA navigation and caused
+                    // unrelated pages to pay this page's layout cost.
+                    context.observer.observe(component);
+                }
+
+                scheduleRefresh(context, 'activate');
+            });
+        };
+
         const registerMorphHook = () => {
-            if (morphHookRegistered || typeof window.Livewire?.hook !== 'function') {
+            if (morphUnsubscribe || typeof window.Livewire?.hook !== 'function') {
                 return;
             }
 
-            morphHookRegistered = true;
-            window.Livewire.hook('morphed', () => refresh('morphed'));
+            const unsubscribe = window.Livewire.hook('morphed', ({ component }) => {
+                const context = contextByComponent.get(component?.el);
+
+                if (context) {
+                    scheduleRefresh(context, 'morphed');
+                }
+            });
+            morphUnsubscribe = typeof unsubscribe === 'function' ? unsubscribe : () => {};
         };
 
-        const observeBody = () => {
-            if (bodyObserver || typeof window.ResizeObserver !== 'function' || !document.body) {
+        const onResize = () => refreshAll('window-resize');
+
+        const activate = (caller = 'activate') => {
+            discoverContexts();
+
+            if (contexts.size === 0) {
                 return;
             }
 
-            // Anything above the table changing height - the sidebar
-            // collapsing, the header wrapping onto a second line - moves where
-            // the table starts. Applying the result changes the body's height
-            // too, so this observer does re-enter once; the no-change guard
-            // above is what stops it there.
-            bodyObserver = new ResizeObserver(() => refresh('resize-observer'));
-            bodyObserver.observe(document.body);
+            registerMorphHook();
+
+            if (!resizeListening) {
+                window.addEventListener('resize', onResize);
+                resizeListening = true;
+            }
+
+            refreshAll(caller);
         };
 
-        const init = () => {
-            registerMorphHook();
-            refresh('init');
-            observeBody();
+        const deactivate = () => {
+            morphUnsubscribe?.();
+            morphUnsubscribe = null;
+
+            contexts.forEach((context) => context.observer?.disconnect());
+            contexts.clear();
+            pendingContexts.clear();
+
+            if (refreshFrame !== null) {
+                cancelAnimationFrame(refreshFrame);
+                refreshFrame = null;
+            }
+
+            if (resizeListening) {
+                window.removeEventListener('resize', onResize);
+                resizeListening = false;
+            }
+
+            delete root.dataset.mmrTableTop;
+            delete root.dataset.mmrTableBottom;
+            delete root.dataset.mmrViewportHeight;
+            root.style.removeProperty('--mmr-table-top');
+            root.style.removeProperty('--mmr-table-bottom');
+            root.style.removeProperty('--mmr-viewport-height');
         };
 
-        window.__mmrTableLayout = { measure, refresh };
+        window.__mmrTableLayout = { activate, deactivate, refresh: refreshAll };
 
-        window.addEventListener('resize', () => refresh('window-resize'));
-        document.addEventListener('livewire:init', registerMorphHook);
-
-        document.addEventListener('livewire:navigated', () => {
-            registerMorphHook();
-            refresh('navigated');
-        });
+        document.addEventListener('livewire:init', () => activate('livewire-init'));
+        document.addEventListener('livewire:navigating', deactivate);
+        document.addEventListener('livewire:navigated', () => activate('navigated'));
 
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', init, { once: true });
+            document.addEventListener('DOMContentLoaded', () => activate('dom-ready'), { once: true });
         } else {
-            init();
+            activate('initial');
         }
     })();
-</script>

@@ -32,6 +32,10 @@ final class InstalledProjectUpdateService
         ProjectType $type,
         ?callable $progress = null,
     ): array {
+        if (!$type->usesArchiveMetadata()) {
+            throw new Exception('Resource packs must use the dedicated direct URL and SHA-1 transaction.');
+        }
+
         $metadata = $this->minecraft->getInstalledMetadataReadResult($server, $fileRepository, $type);
 
         if (!$metadata->isAuthoritative()) {

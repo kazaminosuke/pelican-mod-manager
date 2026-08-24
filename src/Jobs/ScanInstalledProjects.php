@@ -15,6 +15,7 @@ use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Throwable;
 
@@ -34,6 +35,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
+        public readonly string $leaseToken,
         public readonly bool $force = false,
         public readonly ?int $actorUserId = null,
     ) {}
@@ -53,12 +55,19 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
         DaemonFileRepository $fileRepository,
         InstalledProjectService $service,
         InstalledOperationManager $operations,
+        InstalledOperationLease $leases,
         CacheRepository $cache,
         ProjectOperationAuthorizer $authorizer,
     ): void {
         $type = ProjectType::tryFrom($this->projectType);
 
         if (!$type) {
+            return;
+        }
+
+        // A lease can expire while a job waits in the queue. An older job
+        // must never perform work under a replacement owner's lease.
+        if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
             return;
         }
 
@@ -71,6 +80,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_SCAN,
                 'server_not_found',
+                leaseToken: $this->leaseToken,
             );
 
             return;
@@ -86,6 +96,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_SCAN,
                 'scan_unauthorized',
+                leaseToken: $this->leaseToken,
             );
 
             return;
@@ -113,6 +124,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                         $type,
                         InstalledOperationManager::OPERATION_SCAN,
                         'scan_busy_timeout',
+                        leaseToken: $this->leaseToken,
                     );
 
                     return;
@@ -142,6 +154,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                     InstalledOperationManager::OPERATION_SCAN,
                     $result->failure ?? 'scan_failed',
                     $summary,
+                    $this->leaseToken,
                 );
 
                 return;
@@ -159,6 +172,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_SCAN,
                 $summary,
+                $this->leaseToken,
             );
         } catch (Throwable $exception) {
             report($exception);
@@ -168,6 +182,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_SCAN,
                 'scan_exception',
+                leaseToken: $this->leaseToken,
             );
         }
     }
@@ -180,11 +195,19 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        Container::getInstance()->make(InstalledOperationManager::class)->fail(
+        $container = Container::getInstance();
+        $leases = $container->make(InstalledOperationLease::class);
+
+        if (!$leases->owns($this->serverId, $type, $this->leaseToken)) {
+            return;
+        }
+
+        $container->make(InstalledOperationManager::class)->fail(
             $this->serverId,
             $type,
             InstalledOperationManager::OPERATION_SCAN,
             $exception === null ? 'scan_job_failed' : 'scan_job_exception',
+            leaseToken: $this->leaseToken,
         );
     }
 

@@ -53,6 +53,7 @@ use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
+use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
@@ -1011,12 +1012,19 @@ class ModManagerPage extends Page implements HasTable
         /** @var Server $server */
         $server = Filament::getTenant();
         $type = static::detectProjectType($server);
-        $scanResult = $type === null
-            ? null
-            : InstalledScanResult::fromCache(
-                Cache::get(ModManager::getHashScanCacheKey($server, $type)),
-            );
-        $this->setInstalledScanResult($scanResult);
+
+        if ($type === ProjectType::ResourcePack) {
+            // Resource packs have no archive scan cache. Their direct
+            // URL/SHA-1 metadata is the installed-state source of truth.
+            $this->getInstalledModsMetadata();
+        } else {
+            $scanResult = $type === null
+                ? null
+                : InstalledScanResult::fromCache(
+                    Cache::get(ModManager::getHashScanCacheKey($server, $type)),
+                );
+            $this->setInstalledScanResult($scanResult);
+        }
 
         if ($this->isModManagerTimingEnabled()) {
             Log::info('Mod manager timing', [
@@ -1077,28 +1085,7 @@ class ModManagerPage extends Page implements HasTable
      */
     protected function queueHeaderScroll(): void
     {
-        $this->js(<<<'JS'
-            if (window.mmrHeaderScrollFrame) {
-                cancelAnimationFrame(window.mmrHeaderScrollFrame);
-            }
-
-            window.mmrHeaderScrollFrame = requestAnimationFrame(() => {
-                window.mmrHeaderScrollFrame = requestAnimationFrame(() => {
-                    window.mmrHeaderScrollFrame = null;
-
-                    // The standard Filament page header (which contains this page's
-                    // title) is rendered before the schema slot. Keep the schema
-                    // header as a fallback for panels with a customized page view.
-                    const header = document.querySelector('.fi-page .fi-header') ?? document.querySelector('.mmr-page-header');
-                    if (!header) return;
-
-                    const topbarHeight = document.querySelector('.fi-topbar')?.getBoundingClientRect().height ?? 0;
-                    const top = window.scrollY + header.getBoundingClientRect().top - topbarHeight - 16;
-
-                    window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
-                });
-            });
-            JS);
+        $this->js("window.dispatchEvent(new CustomEvent('mmr:scroll-header'))");
     }
 
     /**
@@ -1376,6 +1363,7 @@ class ModManagerPage extends Page implements HasTable
             $cached = Cache::get($cacheKey);
             $cacheHit = is_array($cached);
             $metadataStatus = 'cache';
+            $canPrimeIndex = $cacheHit;
 
             if ($cacheHit) {
                 $this->installedModsMetadata = $cached;
@@ -1397,7 +1385,17 @@ class ModManagerPage extends Page implements HasTable
                 // manual refresh for that case.
                 if ($metadataResult->isAuthoritative()) {
                     Cache::put($cacheKey, $this->installedModsMetadata, now()->addHour());
+                    $canPrimeIndex = true;
                 }
+            }
+
+            if ($canPrimeIndex && $type instanceof ProjectType) {
+                app(InstalledMetadataIndex::class)->prime(
+                    $server,
+                    $type,
+                    $generation,
+                    $this->installedModsMetadata,
+                );
             }
 
             if ($this->isModManagerTimingEnabled()) {
@@ -1431,6 +1429,52 @@ class ModManagerPage extends Page implements HasTable
         }
 
         return $this->installedModsIndex[$sourceKey.':'.$projectId] ?? null;
+    }
+
+    /**
+     * Build only the current catalog page's installed-membership map. The
+     * complete Wings metadata document is decoded once per hydration
+     * generation, then later catalog renders use cache multi-get for their
+     * visible identities. Installed-tab and mutation workflows deliberately
+     * keep their authoritative full-document reads.
+     *
+     * @param array<int, array<string, mixed>> $records
+     */
+    protected function hydrateVisibleInstalledModsIndex(array $records, Server $server, ProjectType $type): void
+    {
+        if ($type === ProjectType::ResourcePack
+            || $this->installedModsMetadata !== null
+            || !$this->canScanInstalledProjects()) {
+            return;
+        }
+
+        $identities = [];
+
+        foreach ($records as $record) {
+            $projectId = $record['project_id'] ?? null;
+            $sourceKey = $record['source'] ?? null;
+
+            if (is_string($projectId) && $projectId !== ''
+                && is_string($sourceKey) && ProjectSourceKey::tryFrom($sourceKey) !== null) {
+                $identities[] = InstalledMetadataIndex::identity($sourceKey, $projectId);
+            }
+        }
+
+        if ($identities === []) {
+            $this->installedModsIndex = [];
+
+            return;
+        }
+
+        /** @var DaemonFileRepository $fileRepository */
+        $fileRepository = app(DaemonFileRepository::class);
+        $this->installedModsIndex = app(InstalledMetadataIndex::class)->getMany(
+            $server,
+            $type,
+            CacheVersion::hydration($server),
+            $identities,
+            fn () => ModManager::getInstalledMetadataReadResult($server, $fileRepository, $type),
+        );
     }
 
     /**
@@ -1593,6 +1637,8 @@ class ModManagerPage extends Page implements HasTable
      */
     protected function peekVisibleLatestVersions(array $records, Server $server, ProjectType $type): bool
     {
+        $this->hydrateVisibleInstalledModsIndex($records, $server, $type);
+
         $installedMods = [];
 
         foreach ($records as $record) {
@@ -3256,30 +3302,27 @@ class ModManagerPage extends Page implements HasTable
                                 ->badge()
                                 ->size(TextSize::Large),
                         ] : []),
-                        TextEntry::make('loader')
-                            ->label(trans('pelican-mod-manager::strings.page.loader'))
-                            ->state(fn () => MinecraftLoader::fromServer($server)?->getLabel() ?? trans('pelican-mod-manager::strings.page.unknown'))
-                            ->icon(function () use ($server) {
-                                $loader = MinecraftLoader::fromServer($server);
-                                if (!$loader) {
-                                    return null;
-                                }
-                                $name = strtolower($loader->name);
-                                $path = plugin_path('pelican-mod-manager', 'resources/icons/loaders/' . $name . '.svg');
+                        ...($type !== ProjectType::ResourcePack ? [
+                            TextEntry::make('loader')
+                                ->label(trans('pelican-mod-manager::strings.page.loader'))
+                                ->state(fn () => MinecraftLoader::fromServer($server)?->getLabel() ?? trans('pelican-mod-manager::strings.page.unknown'))
+                                ->icon(function () use ($server) {
+                                    $loader = MinecraftLoader::fromServer($server);
+                                    if (!$loader) {
+                                        return null;
+                                    }
+                                    $name = strtolower($loader->name);
+                                    $path = plugin_path('pelican-mod-manager', 'resources/icons/loaders/' . $name . '.svg');
 
-                                return file_exists($path) ? 'mcloader-' . $name : null;
-                            })
-                            // Stage 8 diagnostic (依頼 I): says which detection
-                            // tier actually decided the type/loader shown
-                            // here, so a wrong result can be traced back to
-                            // "the egg's own explicit tags" vs "a profile
-                            // database match" vs "a manual override" without
-                            // reading logs.
-                            ->tooltip(fn () => trans('pelican-mod-manager::strings.page.resolved_by', ['source' => $this->eggResolutionSourceLabel($server)]))
-                            ->badge()
-                            ->size(TextSize::Large)
-                            ->extraAttributes(['class' => 'mcloader-badge'])
-                            ->visible(fn () => $type !== ProjectType::ResourcePack),
+                                    return file_exists($path) ? 'mcloader-' . $name : null;
+                                })
+                                // Stage 8 diagnostic (依頼 I): says which
+                                // detection tier decided the shown type/loader.
+                                ->tooltip(fn () => trans('pelican-mod-manager::strings.page.resolved_by', ['source' => $this->eggResolutionSourceLabel($server)]))
+                                ->badge()
+                                ->size(TextSize::Large)
+                                ->extraAttributes(['class' => 'mcloader-badge']),
+                        ] : []),
                         TextEntry::make('installed')
                             // $type is non-null for the rest of this method
                             // (see the early return above), so unlike
@@ -3351,8 +3394,8 @@ class ModManagerPage extends Page implements HasTable
                         // $type is non-null for the rest of this method.
                         'project_type' => $type->value,
                     ], JSON_THROW_ON_ERROR),
-                    // This class is what the injected stylesheet's flex layout
-                    // and the table-layout partial both hang off, so the table
+                    // This class is what the external stylesheet's flex layout
+                    // and table-layout.js both hang off, so the table
                     // fills the remaining viewport and the paginator stays
                     // put. Deliberately nothing is queued from PHP for it:
                     // the space above the table depends on the topbar, the

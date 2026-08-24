@@ -10,6 +10,7 @@ use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
+use Kazaminosuke\ModManager\Services\InstalledMetadataResetService;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
@@ -19,6 +20,7 @@ use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
+use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
@@ -45,6 +47,8 @@ class ModManagerServiceProvider extends ServiceProvider
             VersionLookupCoordinator::class,
             InstalledProjectService::class,
             InstalledArchiveTransaction::class,
+            InstalledMetadataIndex::class,
+            InstalledMetadataResetService::class,
             InstalledProjectMutationService::class,
             InstalledOperationLease::class,
             WingsRemoteFilesystem::class,

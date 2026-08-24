@@ -111,13 +111,17 @@ class ProjectTypeTest extends TestCase
         self::assertTrue(ProjectType::supportsDatapacks($server));
     }
 
-    public function test_resource_pack_is_archive_based_and_not_loader_specific(): void
+    public function test_resource_pack_is_a_zip_source_but_uses_dedicated_non_archive_metadata(): void
     {
         $server = new Server();
 
         self::assertSame('resourcepacks', ProjectType::ResourcePack->getFolder());
         self::assertSame('.zip', ProjectType::ResourcePack->getFileExtension());
         self::assertNull(ProjectType::ResourcePack->getLoaderSlug($server));
+        self::assertFalse(ProjectType::ResourcePack->usesArchiveMetadata());
+        self::assertTrue(ProjectType::Mod->usesArchiveMetadata());
+        self::assertTrue(ProjectType::Plugin->usesArchiveMetadata());
+        self::assertTrue(ProjectType::Datapack->usesArchiveMetadata());
     }
 
     public function test_datapack_manager_disabled_flag_wins_over_the_profile_default(): void

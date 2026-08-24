@@ -1,9 +1,8 @@
-<script data-navigate-once>
     (() => {
         'use strict';
 
         if (window.__mmrTableSwrCacheV9) {
-            window.__mmrTableSwrCacheV9.scan();
+            window.__mmrTableSwrCacheV9.activate();
 
             return;
         }
@@ -17,7 +16,7 @@
         const DEBUG_STORAGE_KEY = 'mmrSwrDebug';
         // This exact URI is the server-side ImageColumn fallback. It is safe to
         // retain in sessionStorage; no arbitrary data URI is ever accepted.
-        const PROJECT_ICON_PLACEHOLDER_DATA_URI = @js(\Kazaminosuke\ModManager\Support\ProjectIconUrl::placeholderDataUri());
+        const PROJECT_ICON_PLACEHOLDER_DATA_URI = document.currentScript?.dataset.mmrProjectIconPlaceholder ?? '';
         const TTL_MS = 10 * 60 * 1000;
         const MAX_ENTRIES = 20;
         const WRAPPER_SELECTOR = '.mmr-table-scroll-ctn[data-mmr-swr-scope]';
@@ -32,8 +31,14 @@
         });
         const ROW_ACTION_COLORS = new Set(['info', 'success', 'warning', 'danger']);
         const controllers = new WeakMap();
-        let documentObserver = null;
-        let scanQueued = false;
+        const heldContentControllers = new WeakMap();
+        const heldPaginationControllers = new WeakMap();
+        const activeComponents = new WeakSet();
+        const contextByComponent = new WeakMap();
+        const contexts = new Set();
+        const pendingScanContexts = new Set();
+        const morphUnsubscribes = [];
+        let scanFrame = null;
         let debugSequence = 0;
 
         const storage = {
@@ -1081,6 +1086,8 @@
 
             if (clearImmediately) {
                 setHeldState(controller, false);
+                heldContentControllers.delete(controller.heldContent);
+                heldPaginationControllers.delete(controller.heldPagination);
                 controller.heldContent = null;
                 controller.heldPagination = null;
                 controller.heldTable = null;
@@ -1199,6 +1206,12 @@
             controller.heldContent = content;
             controller.heldPagination = pagination;
             controller.heldTable = content.closest('.fi-ta');
+            heldContentControllers.set(content, controller);
+
+            if (pagination) {
+                heldPaginationControllers.set(pagination, controller);
+            }
+
             setHeldState(controller, true);
 
             // Nothing to re-measure: the row viewport's height is fixed in
@@ -1253,29 +1266,9 @@
             });
         };
 
-        const skipHeldContentUpdate = (element) => {
-            for (const wrapper of document.querySelectorAll(WRAPPER_SELECTOR)) {
-                const controller = controllers.get(wrapper);
+        const skipHeldContentUpdate = (element) => heldContentControllers.get(element)?.holding === true;
 
-                if (controller?.holding && controller.heldContent === element) {
-                    return true;
-                }
-            }
-
-            return false;
-        };
-
-        const skipHeldPaginationRemoval = (element) => {
-            for (const wrapper of document.querySelectorAll(WRAPPER_SELECTOR)) {
-                const controller = controllers.get(wrapper);
-
-                if (controller?.holding && controller.heldPagination === element) {
-                    return true;
-                }
-            }
-
-            return false;
-        };
+        const skipHeldPaginationRemoval = (element) => heldPaginationControllers.get(element)?.holding === true;
 
         const finishMorph = (root) => {
             wrappersIn(root).forEach((wrapper) => {
@@ -1283,6 +1276,8 @@
 
                 if (controller.clearAfterMorph) {
                     setHeldState(controller, false);
+                    heldContentControllers.delete(controller.heldContent);
+                    heldPaginationControllers.delete(controller.heldPagination);
                     controller.heldContent = null;
                     controller.heldPagination = null;
                     controller.heldTable = null;
@@ -1295,10 +1290,6 @@
 
             });
 
-            // The document MutationObserver also sees this morph. Coalesce
-            // both paths through scan() so a complete table capture walks the
-            // cells and writes its session projection once, not twice.
-            scan();
         };
 
         const processWrapper = (wrapper) => {
@@ -1366,31 +1357,59 @@
             }
         };
 
-        const scan = () => {
-            if (scanQueued) {
+        const scan = (context = null) => {
+            if (context) {
+                pendingScanContexts.add(context);
+            } else {
+                contexts.forEach((active) => pendingScanContexts.add(active));
+            }
+
+            if (pendingScanContexts.size === 0 || scanFrame !== null) {
                 return;
             }
 
-            scanQueued = true;
+            // All callbacks produced by one morph share one capture frame.
+            scanFrame = requestAnimationFrame(() => {
+                scanFrame = null;
+                const scheduled = [...pendingScanContexts];
+                pendingScanContexts.clear();
 
-            requestAnimationFrame(() => {
-                scanQueued = false;
-                document.querySelectorAll(WRAPPER_SELECTOR).forEach(processWrapper);
+                scheduled.forEach((active) => {
+                    if (!active.component.isConnected) {
+                        return;
+                    }
+
+                    wrappersIn(active.component).forEach(processWrapper);
+                });
             });
         };
 
         const registerMorphHooks = () => {
-            if (window.__mmrTableSwrMorphHooksV8 || typeof window.Livewire?.hook !== 'function') {
+            if (morphUnsubscribes.length > 0 || typeof window.Livewire?.hook !== 'function') {
                 return;
             }
 
-            window.__mmrTableSwrMorphHooksV8 = true;
+            const register = (name, callback) => {
+                const unsubscribe = window.Livewire.hook(name, callback);
+
+                if (typeof unsubscribe === 'function') {
+                    morphUnsubscribes.push(unsubscribe);
+                }
+            };
 
             // Livewire merges the incoming snapshot before this hook, so
             // buildKey() reads the view being opened, not the one being left.
-            window.Livewire.hook('morph', ({ el, toEl }) => prepareMorph(el, toEl));
+            register('morph', ({ component, el, toEl }) => {
+                if (activeComponents.has(component?.el)) {
+                    prepareMorph(el, toEl);
+                }
+            });
 
-            window.Livewire.hook('morph.updating', ({ el, toEl, skip }) => {
+            register('morph.updating', ({ component, el, toEl, skip }) => {
+                if (!activeComponents.has(component?.el)) {
+                    return;
+                }
+
                 if (skipHeldContentUpdate(el)) {
                     skip();
 
@@ -1413,13 +1432,22 @@
             // Filament omits pagination while records are deferred. Preserve the
             // existing real navigation node during that one intermediate morph;
             // it is normally morphed again when fresh records arrive.
-            window.Livewire.hook('morph.removing', ({ el, skip }) => {
-                if (skipHeldPaginationRemoval(el)) {
+            register('morph.removing', ({ component, el, skip }) => {
+                if (activeComponents.has(component?.el) && skipHeldPaginationRemoval(el)) {
                     skip();
                 }
             });
 
-            window.Livewire.hook('morphed', ({ el }) => finishMorph(el));
+            register('morphed', ({ component, el }) => {
+                const context = contextByComponent.get(component?.el);
+
+                if (!context || !activeComponents.has(component?.el)) {
+                    return;
+                }
+
+                finishMorph(el);
+                scan(context);
+            });
         };
 
         const mutationTouchesWrapper = (mutation) => {
@@ -1433,30 +1461,60 @@
                 && (node.matches(WRAPPER_SELECTOR) || node.querySelector(WRAPPER_SELECTOR)));
         };
 
-        const init = () => {
-            prune();
-            registerMorphHooks();
-            document.addEventListener('livewire:init', registerMorphHooks);
-            document.addEventListener('livewire:navigated', registerMorphHooks);
-            scan();
+        const componentFor = (wrapper) => wrapper.closest('[wire\\:id]') ?? wrapper;
 
-            if (documentObserver) {
-                return;
-            }
+        const discoverContexts = () => {
+            document.querySelectorAll(WRAPPER_SELECTOR).forEach((wrapper) => {
+                const component = componentFor(wrapper);
+                const existing = contextByComponent.get(component);
 
-            documentObserver = new MutationObserver((mutations) => {
-                if (mutations.some(mutationTouchesWrapper)) {
-                    scan();
+                if (existing && contexts.has(existing)) {
+                    return;
                 }
-            });
-            documentObserver.observe(document.documentElement, {
-                childList: true,
-                subtree: true,
+
+                const context = {
+                    component,
+                    observer: new MutationObserver((mutations) => {
+                        if (mutations.some(mutationTouchesWrapper)) {
+                            scan(context);
+                        }
+                    }),
+                };
+
+                contextByComponent.set(component, context);
+                activeComponents.add(component);
+                contexts.add(context);
+                context.observer.observe(component, { childList: true, subtree: true });
             });
         };
 
-        window.__mmrTableSwrCacheV9 = { scan, init };
-        init();
-        document.addEventListener('livewire:navigated', scan);
+        const activate = () => {
+            discoverContexts();
+
+            if (contexts.size === 0) {
+                return;
+            }
+
+            prune();
+            registerMorphHooks();
+            scan();
+        };
+
+        const deactivate = () => {
+            morphUnsubscribes.splice(0).forEach((unsubscribe) => unsubscribe());
+            contexts.forEach((context) => context.observer.disconnect());
+            contexts.clear();
+            pendingScanContexts.clear();
+
+            if (scanFrame !== null) {
+                cancelAnimationFrame(scanFrame);
+                scanFrame = null;
+            }
+        };
+
+        window.__mmrTableSwrCacheV9 = { scan, activate, deactivate };
+        document.addEventListener('livewire:init', activate);
+        document.addEventListener('livewire:navigating', deactivate);
+        document.addEventListener('livewire:navigated', activate);
+        activate();
     })();
-</script>

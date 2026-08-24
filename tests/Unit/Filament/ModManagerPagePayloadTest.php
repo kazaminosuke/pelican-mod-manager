@@ -942,7 +942,23 @@ class ModManagerPagePayloadTest extends TestCase
         $source = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
 
         self::assertStringContainsString('$this->peekVisibleLatestVersions($hits, $server, $type);', $source);
+        self::assertStringContainsString('$this->hydrateVisibleInstalledModsIndex($records, $server, $type);', $source);
         self::assertStringNotContainsString('function warmVisibleLatestVersions', $source);
+    }
+
+    public function test_resource_pack_deferred_load_does_not_use_archive_scan_cache(): void
+    {
+        $source = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+        $start = strpos($source, 'public function loadTable(): void');
+        $end = strpos($source, 'public function applyTableColumnManager(', $start);
+
+        self::assertIsInt($start);
+        self::assertIsInt($end);
+        $loadTable = substr($source, $start, $end - $start);
+
+        self::assertStringContainsString('if ($type === ProjectType::ResourcePack)', $loadTable);
+        self::assertStringContainsString('$this->getInstalledModsMetadata();', $loadTable);
+        self::assertStringContainsString('ModManager::getHashScanCacheKey($server, $type)', $loadTable);
     }
 
     public function test_curseforge_datapack_external_links_use_the_data_packs_namespace(): void

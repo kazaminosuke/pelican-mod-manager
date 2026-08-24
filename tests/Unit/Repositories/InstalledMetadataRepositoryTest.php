@@ -224,6 +224,39 @@ class InstalledMetadataRepositoryTest extends TestCase
         self::assertSame(0, $repository->hydrationBumps);
     }
 
+    public function test_delete_runs_under_the_document_lock_and_bumps_hydration_after_success(): void
+    {
+        $server = $this->server();
+        $files = Mockery::mock(DaemonFileRepository::class);
+        $response = Mockery::mock(Response::class);
+        $response->shouldReceive('failed')->once()->andReturnFalse();
+        $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
+        $files->shouldReceive('deleteFiles')
+            ->once()
+            ->with('mods', ['.pelican-mod-manager.json'])
+            ->andReturn($response);
+        $repository = new SynchronousInstalledMetadataRepository();
+
+        self::assertTrue($repository->delete($server, $files, 'mods'));
+        self::assertSame(1, $repository->lockCalls);
+        self::assertSame(1, $repository->hydrationBumps);
+    }
+
+    public function test_failed_delete_does_not_bump_hydration(): void
+    {
+        $server = $this->server();
+        $files = Mockery::mock(DaemonFileRepository::class);
+        $response = Mockery::mock(Response::class);
+        $response->shouldReceive('failed')->once()->andReturnTrue();
+        $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
+        $files->shouldReceive('deleteFiles')->once()->andReturn($response);
+        $repository = new SynchronousInstalledMetadataRepository();
+
+        self::assertFalse($repository->delete($server, $files, 'mods'));
+        self::assertSame(1, $repository->lockCalls);
+        self::assertSame(0, $repository->hydrationBumps);
+    }
+
     public function test_metadata_lock_key_is_scoped_to_server_and_folder(): void
     {
         $mods = InstalledMetadataRepository::lockKey(42, 'mods');
