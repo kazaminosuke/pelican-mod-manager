@@ -12,6 +12,7 @@ use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
+use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -45,6 +46,35 @@ class InstalledArchiveTransactionTest extends TestCase
         self::assertSame('sodium.jar', $wings->activatedFilename);
         self::assertSame(['sodium.jar'], $wings->committedFilenames);
         self::assertSame([], $wings->deletedFilenames);
+    }
+
+    public function test_operation_session_reuses_its_authoritative_document_without_another_get(): void
+    {
+        $wings = new RecordingWingsRemoteFilesystem();
+        $projects = $this->projects($wings, saved: true, expectMetadataRead: false);
+        $transaction = new InstalledArchiveTransaction($projects, $wings);
+        $session = new InstalledMetadataWriteSession(
+            InstalledMetadataDocument::empty(),
+            function (InstalledMetadataDocument $document) use ($wings): bool {
+                $wings->events[] = 'metadata';
+                $wings->committedFilenames[] = $document->installedMods()[0]['filename'];
+
+                return true;
+            },
+        );
+
+        $transaction->installOrUpdate(
+            $this->server(),
+            Mockery::mock(DaemonFileRepository::class),
+            ProjectType::Mod,
+            $this->record(),
+            $this->version(),
+            $this->primaryFile(),
+            metadataSession: $session,
+        );
+
+        self::assertSame(['list', 'foreground_pull', 'list', 'rename', 'metadata'], $wings->events);
+        self::assertSame('sodium', $session->document()->installedMods()[0]['project_id']);
     }
 
     public function test_update_deletes_old_archive_only_after_metadata_commit(): void
@@ -262,6 +292,7 @@ class InstalledArchiveTransactionTest extends TestCase
         RecordingWingsRemoteFilesystem $wings,
         bool $saved,
         array $installedMods = [],
+        bool $expectMetadataRead = true,
     ): InstalledProjectService
     {
         $document = InstalledMetadataDocument::empty();
@@ -277,9 +308,13 @@ class InstalledArchiveTransactionTest extends TestCase
 
         $projects = Mockery::mock(InstalledProjectService::class);
         $projects->shouldReceive('getProjectFolder')->andReturn('mods');
-        $projects->shouldReceive('getInstalledMetadataReadResult')->andReturn(
-            new InstalledMetadataReadResult($document, $status),
-        );
+        if ($expectMetadataRead) {
+            $projects->shouldReceive('getInstalledMetadataReadResult')->andReturn(
+                new InstalledMetadataReadResult($document, $status),
+            );
+        } else {
+            $projects->shouldNotReceive('getInstalledMetadataReadResult');
+        }
         $projects->shouldReceive('saveModMetadata')
             ->andReturnUsing(function () use ($wings, $saved): bool {
                 $wings->events[] = 'metadata';

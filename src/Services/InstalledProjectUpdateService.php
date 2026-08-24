@@ -4,12 +4,12 @@ namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
-use Closure;
 use Exception;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
+use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
 use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 use Throwable;
 
@@ -39,23 +39,20 @@ final class InstalledProjectUpdateService
         }
 
         $installedMods = $metadata->document->installedMods();
-        $document = $metadata->document;
         $total = count($installedMods);
         $result = $this->versions->lookupInstalled($installedMods, $server, $type);
         $updated = 0;
         $failed = 0;
         $skipped = 0;
-        $commitMetadata = function (array $entry) use (&$document, $server, $fileRepository, $type): bool {
-            $next = $document->withUpsertedInstalledMod($entry);
-
-            if (!$this->minecraft->saveInstalledMetadataDocument($server, $fileRepository, $next, $type)) {
-                return false;
-            }
-
-            $document = $next;
-
-            return true;
-        };
+        $metadataSession = new InstalledMetadataWriteSession(
+            $metadata->document,
+            fn ($document): bool => $this->minecraft->saveInstalledMetadataDocument(
+                $server,
+                $fileRepository,
+                $document,
+                $type,
+            ),
+        );
 
         foreach ($installedMods as $index => $installedMod) {
             try {
@@ -64,7 +61,7 @@ final class InstalledProjectUpdateService
                 if ($latestVersion === null || ($installedMod['version_id'] ?? null) === ($latestVersion['id'] ?? null)) {
                     $skipped++;
                 } else {
-                    $this->installVersion($server, $fileRepository, $type, $installedMod, $latestVersion, $commitMetadata);
+                    $this->installVersion($server, $fileRepository, $type, $installedMod, $latestVersion, $metadataSession);
                     $updated++;
                 }
             } catch (Throwable $exception) {
@@ -114,7 +111,6 @@ final class InstalledProjectUpdateService
     /**
      * @param array<string, mixed> $installedMod
      * @param array<string, mixed> $version
-     * @param (Closure(array<string, mixed>): bool)|null $commitMetadata
      */
     private function installVersion(
         Server $server,
@@ -122,7 +118,7 @@ final class InstalledProjectUpdateService
         ProjectType $type,
         array $installedMod,
         array $version,
-        ?Closure $commitMetadata = null,
+        InstalledMetadataWriteSession $metadataSession,
     ): void {
         $primaryFile = ProjectPrimaryFile::requireFromFiles($version['files'] ?? null);
 
@@ -134,7 +130,7 @@ final class InstalledProjectUpdateService
             $version,
             $primaryFile,
             $installedMod,
-            $commitMetadata,
+            $metadataSession,
         );
     }
 }

@@ -14,6 +14,7 @@ use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
+use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -54,10 +55,10 @@ class InstalledProjectUpdateServiceTest extends TestCase
         $archives->shouldReceive('installOrUpdate')
             ->once()
             ->andReturnUsing(function () {
-                $commit = func_get_arg(7);
-                self::assertIsCallable($commit);
+                $session = func_get_arg(7);
+                self::assertInstanceOf(InstalledMetadataWriteSession::class, $session);
 
-                return $commit([
+                return $session->upsert([
                     'source' => ProjectSourceKey::Modrinth->value,
                     'project_id' => 'sodium',
                     'project_slug' => 'sodium',

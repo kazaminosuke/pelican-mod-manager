@@ -4,12 +4,12 @@ namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
-use Closure;
 use Exception;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
+use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Throwable;
 
@@ -35,7 +35,6 @@ class InstalledArchiveTransaction
      * @param  array<string, mixed>  $versionData
      * @param  array<string, mixed>  $primaryFile
      * @param  array<string, mixed>|null  $installedMod
-     * @param  (Closure(array<string, mixed>): bool)|null  $commitMetadata
      */
     public function installOrUpdate(
         Server $server,
@@ -45,7 +44,7 @@ class InstalledArchiveTransaction
         array $versionData,
         array $primaryFile,
         ?array $installedMod = null,
-        ?Closure $commitMetadata = null,
+        ?InstalledMetadataWriteSession $metadataSession = null,
     ): void {
         $newFilename = $this->safeFilename($this->requiredString($primaryFile, 'filename'));
         $oldFilename = is_array($installedMod)
@@ -62,7 +61,8 @@ class InstalledArchiveTransaction
         $versionId = $this->requiredString($versionData, 'id');
         $versionNumber = $this->firstRequiredString($versionData, ['version_number', 'versionNumber']);
         $author = $this->optionalString($record['author'] ?? ($installedMod['author'] ?? null));
-        $document = $this->authoritativeDocument($server, $fileRepository, $type);
+        $document = $metadataSession?->document()
+            ?? $this->authoritativeDocument($server, $fileRepository, $type);
 
         $this->assertFilenameAvailable($document, $source, $projectId, $newFilename);
 
@@ -109,7 +109,7 @@ class InstalledArchiveTransaction
                 $author,
                 $type,
                 $source,
-                $commitMetadata,
+                $metadataSession,
             );
 
             if (!$saved) {
@@ -138,7 +138,7 @@ class InstalledArchiveTransaction
                     );
                     $backupFilename = null;
 
-                    $this->restoreInstalledMetadata($server, $fileRepository, $installedMod, $type, $commitMetadata);
+                    $this->restoreInstalledMetadata($server, $fileRepository, $installedMod, $type, $metadataSession);
 
                     throw $deleteException;
                 }
@@ -213,14 +213,13 @@ class InstalledArchiveTransaction
 
     /**
      * @param  array<string, mixed>|null  $installedMod
-     * @param  (Closure(array<string, mixed>): bool)|null  $commitMetadata
      */
     private function restoreInstalledMetadata(
         Server $server,
         DaemonFileRepository $fileRepository,
         ?array $installedMod,
         ProjectType $type,
-        ?Closure $commitMetadata,
+        ?InstalledMetadataWriteSession $metadataSession,
     ): void {
         if ($installedMod === null) {
             return;
@@ -240,14 +239,13 @@ class InstalledArchiveTransaction
             $this->optionalString($installedMod['author'] ?? null),
             $type,
             $source,
-            $commitMetadata,
+            $metadataSession,
         )) {
             report(new Exception('Failed to restore old mod metadata during rollback'));
         }
     }
 
     /**
-     * @param  (Closure(array<string, mixed>): bool)|null  $commitMetadata
      */
     private function commitMetadataEntry(
         Server $server,
@@ -261,7 +259,7 @@ class InstalledArchiveTransaction
         ?string $author,
         ProjectType $type,
         ProjectSourceKey $source,
-        ?Closure $commitMetadata,
+        ?InstalledMetadataWriteSession $metadataSession,
     ): bool {
         $entry = [
             'source' => $source->value,
@@ -278,8 +276,8 @@ class InstalledArchiveTransaction
             $entry['author'] = $author;
         }
 
-        if ($commitMetadata !== null) {
-            return $commitMetadata($entry);
+        if ($metadataSession !== null) {
+            return $metadataSession->upsert($entry);
         }
 
         return $this->projects->saveModMetadata(
