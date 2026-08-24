@@ -18,6 +18,8 @@ use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Support\CacheProfile;
+use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
+use Kazaminosuke\ModManager\Support\CachedSearchOperations;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
@@ -81,9 +83,16 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     /** @var array<string, string> */
     protected array $lastWarmVersionFailures = [];
 
+    private readonly CachedProjectMetadata $cachedProjectMetadata;
+
+    private readonly CachedSearchOperations $cachedSearch;
+
     public function __construct(
         private readonly SourceCache $sourceCache,
-    ) {}
+    ) {
+        $this->cachedProjectMetadata = new CachedProjectMetadata($sourceCache);
+        $this->cachedSearch = new CachedSearchOperations($sourceCache);
+    }
 
     public function getKey(): ProjectSourceKey
     {
@@ -123,44 +132,24 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
     public function search(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): array
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-
-        if ($spec === null) {
-            return ['hits' => [], 'total_hits' => 0];
-        }
-
-        $result = $this->cache()->swr($spec, CacheProfile::Search);
+        $result = $this->cachedSearch->search($this->buildSearchSpec($server, $type, $page, $search, $filters));
 
         return $this->normalizeSearchResult($result);
     }
 
     public function hasCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-
-        return $spec === null || $this->cache()->peek($spec)['hit'];
+        return $this->cachedSearch->hasCached($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
     public function hasFreshCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-
-        return $spec === null || $this->cache()->peek($spec)['fresh'];
+        return $this->cachedSearch->hasFreshCached($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
     public function warmSearch(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): bool
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-        if ($spec === null) {
-            return false;
-        }
-
-        $peeked = $this->cache()->peek($spec);
-        if ($peeked['hit'] && $peeked['fresh']) {
-            return false;
-        }
-
-        return $this->cache()->revalidate($spec, CacheProfile::Search);
+        return $this->cachedSearch->warm($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
     /** @param array<string, mixed> $filters */
@@ -286,13 +275,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return null;
         }
 
-        $project = $this->cache()->swr(new SourceFetchSpec(
-            sourceKey: $this->getKey()->value,
-            operation: 'project',
-            arguments: ['project_id' => $projectId],
-        ), CacheProfile::ProjectMetadata);
-
-        return is_array($project) ? $project : null;
+        return $this->cachedProjectMetadata->get($this->projectSpec($projectId));
     }
 
     /** @return array{data: array<string, mixed>|null, pending: bool, retry_delayed: bool} */
@@ -302,29 +285,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return ['data' => null, 'pending' => false, 'retry_delayed' => false];
         }
 
-        $spec = new SourceFetchSpec(
-            sourceKey: $this->getKey()->value,
-            operation: 'project',
-            arguments: ['project_id' => $projectId],
-        );
-
-        if (!$dispatchOnMiss) {
-            $peeked = $this->cache()->peek($spec);
-
-            return [
-                'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-                'pending' => !$peeked['hit'] && !$peeked['retry_delayed'],
-                'retry_delayed' => $peeked['retry_delayed'],
-            ];
-        }
-
-        $peeked = $this->cache()->swrDeferred($spec, CacheProfile::ProjectMetadata);
-
-        return [
-            'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-            'pending' => $peeked['pending'],
-            'retry_delayed' => $peeked['retry_delayed'],
-        ];
+        return $this->cachedProjectMetadata->peek($this->projectSpec($projectId), $dispatchOnMiss);
     }
 
     /** @return array<string, array{data: array<string, mixed>|null, pending: bool, retry_delayed: bool}> */
@@ -336,44 +297,12 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return array_fill_keys($projectIds, ['data' => null, 'pending' => false, 'retry_delayed' => false]);
         }
 
-        $specs = [];
-        foreach ($projectIds as $projectId) {
-            $projectId = (string) $projectId;
-            $specs[$projectId] = new SourceFetchSpec(
-                sourceKey: $this->getKey()->value,
-                operation: 'project',
-                arguments: ['project_id' => $projectId],
-            );
-        }
-
-        $results = [];
-        foreach ($this->cache()->peekMany($specs) as $projectId => $peeked) {
-            $results[$projectId] = [
-                'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-                'pending' => !$peeked['hit'] && !$peeked['retry_delayed'],
-                'retry_delayed' => $peeked['retry_delayed'],
-            ];
-        }
-
-        return $results;
+        return $this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...));
     }
 
     public function primeProjects(array $dataByProjectId): void
     {
-        $entries = [];
-
-        foreach ($dataByProjectId as $projectId => $data) {
-            $entries[] = [
-                'spec' => new SourceFetchSpec(
-                    sourceKey: $this->getKey()->value,
-                    operation: 'project',
-                    arguments: ['project_id' => (string) $projectId],
-                ),
-                'data' => $data,
-            ];
-        }
-
-        $this->cache()->primeMany($entries, CacheProfile::ProjectMetadata);
+        $this->cachedProjectMetadata->primeMany($dataByProjectId, $this->projectSpec(...));
     }
 
     /**
@@ -403,21 +332,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return;
         }
 
-        $specs = [];
-
-        foreach (array_values(array_unique($projectIds)) as $projectId) {
-            $projectId = trim((string) $projectId);
-
-            if ($projectId !== '') {
-                $specs[] = new SourceFetchSpec(
-                    sourceKey: $this->getKey()->value,
-                    operation: 'project',
-                    arguments: ['project_id' => $projectId],
-                );
-            }
-        }
-
-        $this->cache()->markRetryDelayedMany($specs, CacheProfile::ProjectMetadata);
+        $this->cachedProjectMetadata->markRetryDelayedMany($projectIds, $this->projectSpec(...));
     }
 
     /**
@@ -438,13 +353,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             operation: 'projects',
             arguments: ['project_ids' => $modIds],
         );
-        $projects = $freshRequired
-            ? $this->cache()->swrRequiredFresh($spec, CacheProfile::ProjectMetadata)
-            : ($authoritative
-                ? $this->cache()->swrRequired($spec, CacheProfile::ProjectMetadata)
-                : $this->cache()->swr($spec, CacheProfile::ProjectMetadata));
-
-        return is_array($projects) ? $projects : [];
+        return $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
     }
 
     /** @param array<int, int> $modIds */
@@ -1079,13 +988,11 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return $this->getProject($identifier);
         }
 
-        $project = $this->cache()->swr(new SourceFetchSpec(
+        return $this->cachedProjectMetadata->get(new SourceFetchSpec(
             sourceKey: $this->getKey()->value,
             operation: 'resolve_identifier',
             arguments: ['identifier' => $identifier],
-        ), CacheProfile::ProjectMetadata);
-
-        return is_array($project) ? $project : null;
+        ));
     }
 
     protected function fetchProjectByIdentifier(string $identifier, float $timeoutSeconds): ?array
@@ -1397,6 +1304,15 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     protected function cache(): SourceCache
     {
         return $this->sourceCache;
+    }
+
+    private function projectSpec(string $projectId): SourceFetchSpec
+    {
+        return new SourceFetchSpec(
+            sourceKey: $this->getKey()->value,
+            operation: 'project',
+            arguments: ['project_id' => $projectId],
+        );
     }
 
     protected function apiKey(): string

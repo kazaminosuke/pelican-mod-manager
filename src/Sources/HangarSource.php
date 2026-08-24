@@ -18,6 +18,8 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Support\CacheProfile;
 use Kazaminosuke\ModManager\Support\CacheVersion;
+use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
+use Kazaminosuke\ModManager\Support\CachedSearchOperations;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
@@ -57,9 +59,16 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
 
     private const OPERATION_VERSIONS = 'versions';
 
+    private readonly CachedProjectMetadata $cachedProjectMetadata;
+
+    private readonly CachedSearchOperations $cachedSearch;
+
     public function __construct(
         private readonly SourceCache $sourceCache,
-    ) {}
+    ) {
+        $this->cachedProjectMetadata = new CachedProjectMetadata($sourceCache);
+        $this->cachedSearch = new CachedSearchOperations($sourceCache);
+    }
 
     public function getKey(): ProjectSourceKey
     {
@@ -126,44 +135,22 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
     /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
     public function search(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): array
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-
-        if ($spec === null) {
-            return ['hits' => [], 'total_hits' => 0];
-        }
-
-        $result = $this->sourceCache->swr($spec, CacheProfile::Search);
-
-        return is_array($result) ? $result : ['hits' => [], 'total_hits' => 0];
+        return $this->cachedSearch->search($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
     public function hasCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-
-        return $spec === null || $this->sourceCache->peek($spec)['hit'];
+        return $this->cachedSearch->hasCached($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
     public function hasFreshCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-
-        return $spec === null || $this->sourceCache->peek($spec)['fresh'];
+        return $this->cachedSearch->hasFreshCached($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
     public function warmSearch(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): bool
     {
-        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
-        if ($spec === null) {
-            return false;
-        }
-
-        $peeked = $this->sourceCache->peek($spec);
-        if ($peeked['hit'] && $peeked['fresh']) {
-            return false;
-        }
-
-        return $this->sourceCache->revalidate($spec, CacheProfile::Search);
+        return $this->cachedSearch->warm($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
     /** @param array<string, mixed> $filters */
@@ -218,71 +205,24 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
     /** @return array<string, mixed>|null */
     protected function getProjectUsingCache(string $projectId, bool $authoritative): ?array
     {
-        $spec = $this->spec(self::OPERATION_PROJECT, ['project_id' => $projectId]);
-        $project = $authoritative
-            ? $this->sourceCache->swrRequired($spec, CacheProfile::ProjectMetadata)
-            : $this->sourceCache->swr($spec, CacheProfile::ProjectMetadata);
-
-        return is_array($project) ? $project : null;
+        return $this->cachedProjectMetadata->get($this->projectSpec($projectId), $authoritative);
     }
 
     /** @return array{data: array<string, mixed>|null, pending: bool, retry_delayed: bool} */
     public function peekProject(string $projectId, bool $dispatchOnMiss = true): array
     {
-        $spec = $this->spec(self::OPERATION_PROJECT, ['project_id' => $projectId]);
-
-        if (!$dispatchOnMiss) {
-            $peeked = $this->sourceCache->peek($spec);
-
-            return [
-                'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-                'pending' => !$peeked['hit'] && !$peeked['retry_delayed'],
-                'retry_delayed' => $peeked['retry_delayed'],
-            ];
-        }
-
-        $peeked = $this->sourceCache->swrDeferred($spec, CacheProfile::ProjectMetadata);
-
-        return [
-            'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-            'pending' => $peeked['pending'],
-            'retry_delayed' => $peeked['retry_delayed'],
-        ];
+        return $this->cachedProjectMetadata->peek($this->projectSpec($projectId), $dispatchOnMiss);
     }
 
     /** @return array<string, array{data: array<string, mixed>|null, pending: bool, retry_delayed: bool}> */
     public function peekProjects(array $projectIds): array
     {
-        $specs = [];
-        foreach (array_values(array_unique($projectIds)) as $projectId) {
-            $projectId = (string) $projectId;
-            $specs[$projectId] = $this->spec(self::OPERATION_PROJECT, ['project_id' => $projectId]);
-        }
-
-        $results = [];
-        foreach ($this->sourceCache->peekMany($specs) as $projectId => $peeked) {
-            $results[$projectId] = [
-                'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-                'pending' => !$peeked['hit'] && !$peeked['retry_delayed'],
-                'retry_delayed' => $peeked['retry_delayed'],
-            ];
-        }
-
-        return $results;
+        return $this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...));
     }
 
     public function primeProjects(array $dataByProjectId): void
     {
-        $entries = [];
-
-        foreach ($dataByProjectId as $projectId => $data) {
-            $entries[] = [
-                'spec' => $this->spec(self::OPERATION_PROJECT, ['project_id' => (string) $projectId]),
-                'data' => $data,
-            ];
-        }
-
-        $this->sourceCache->primeMany($entries, CacheProfile::ProjectMetadata);
+        $this->cachedProjectMetadata->primeMany($dataByProjectId, $this->projectSpec(...));
     }
 
     /**
@@ -308,17 +248,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
      */
     protected function getProjectsByIdsUsingCache(array $projectIds, bool $authoritative): array
     {
-        $map = [];
-
-        foreach (array_unique($projectIds) as $projectId) {
-            $project = $this->getProjectUsingCache((string) $projectId, $authoritative);
-
-            if ($project !== null) {
-                $map[(string) $projectId] = $project;
-            }
-        }
-
-        return $map;
+        return $this->cachedProjectMetadata->getMany($projectIds, $this->projectSpec(...), $authoritative);
     }
 
     /** @return array<int, mixed> */
@@ -1038,5 +968,10 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
     protected function spec(string $operation, array $arguments = []): SourceFetchSpec
     {
         return new SourceFetchSpec($this->getKey()->value, $operation, $arguments);
+    }
+
+    private function projectSpec(string $projectId): SourceFetchSpec
+    {
+        return $this->spec(self::OPERATION_PROJECT, ['project_id' => $projectId]);
     }
 }

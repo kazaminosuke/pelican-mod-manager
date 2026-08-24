@@ -16,6 +16,8 @@ use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Support\CacheProfile;
+use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
+use Kazaminosuke\ModManager\Support\CachedSearchOperations;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
@@ -46,9 +48,16 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
 
     private const OPERATION_RELEASES = 'releases';
 
+    private readonly CachedProjectMetadata $cachedProjectMetadata;
+
+    private readonly CachedSearchOperations $cachedSearch;
+
     public function __construct(
         private readonly SourceCache $sourceCache,
-    ) {}
+    ) {
+        $this->cachedProjectMetadata = new CachedProjectMetadata($sourceCache);
+        $this->cachedSearch = new CachedSearchOperations($sourceCache);
+    }
 
     public function getKey(): ProjectSourceKey
     {
@@ -116,7 +125,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
     public function search(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): array
     {
-        return ['hits' => [], 'total_hits' => 0];
+        return $this->cachedSearch->search(null);
     }
 
     // search() never touches the cache (see supportsSearch(), which is
@@ -124,17 +133,17 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     // no I/O, and there is nothing a deferred round trip would be hiding.
     public function hasCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
-        return true;
+        return $this->cachedSearch->hasCached(null);
     }
 
     public function hasFreshCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
-        return true;
+        return $this->cachedSearch->hasFreshCached(null);
     }
 
     public function warmSearch(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): bool
     {
-        return false;
+        return $this->cachedSearch->warm(null);
     }
 
     /** @return array<string, mixed>|null */
@@ -146,90 +155,18 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     /** @return array{data: array<string, mixed>|null, pending: bool, retry_delayed: bool} */
     public function peekProject(string $projectId, bool $dispatchOnMiss = true): array
     {
-        $repo = $this->parseIdentifier($projectId);
-
-        if ($repo === null) {
-            return ['data' => null, 'pending' => false, 'retry_delayed' => false];
-        }
-
-        [$owner, $name] = array_map('strtolower', $repo);
-        $spec = $this->spec(self::OPERATION_PROJECT, [
-            'name' => $name,
-            'owner' => $owner,
-        ]);
-
-        if (!$dispatchOnMiss) {
-            $peeked = $this->sourceCache->peek($spec);
-
-            return [
-                'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-                'pending' => !$peeked['hit'] && !$peeked['retry_delayed'],
-                'retry_delayed' => $peeked['retry_delayed'],
-            ];
-        }
-
-        $peeked = $this->sourceCache->swrDeferred($spec, CacheProfile::ProjectMetadata);
-
-        return [
-            'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-            'pending' => $peeked['pending'],
-            'retry_delayed' => $peeked['retry_delayed'],
-        ];
+        return $this->cachedProjectMetadata->peek($this->projectSpec($projectId), $dispatchOnMiss);
     }
 
     /** @return array<string, array{data: array<string, mixed>|null, pending: bool, retry_delayed: bool}> */
     public function peekProjects(array $projectIds): array
     {
-        $specs = [];
-        $results = [];
-
-        foreach (array_values(array_unique($projectIds)) as $projectId) {
-            $projectId = (string) $projectId;
-            $repo = $this->parseIdentifier($projectId);
-
-            if ($repo === null) {
-                $results[$projectId] = ['data' => null, 'pending' => false, 'retry_delayed' => false];
-
-                continue;
-            }
-
-            [$owner, $name] = array_map('strtolower', $repo);
-            $specs[$projectId] = $this->spec(self::OPERATION_PROJECT, [
-                'name' => $name,
-                'owner' => $owner,
-            ]);
-        }
-
-        foreach ($this->sourceCache->peekMany($specs) as $projectId => $peeked) {
-            $results[$projectId] = [
-                'data' => is_array($peeked['data']) ? $peeked['data'] : null,
-                'pending' => !$peeked['hit'] && !$peeked['retry_delayed'],
-                'retry_delayed' => $peeked['retry_delayed'],
-            ];
-        }
-
-        return $results;
+        return $this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...));
     }
 
     public function primeProjects(array $dataByProjectId): void
     {
-        $entries = [];
-
-        foreach ($dataByProjectId as $projectId => $data) {
-            $repo = $this->parseIdentifier((string) $projectId);
-
-            if ($repo === null) {
-                continue;
-            }
-
-            [$owner, $name] = array_map('strtolower', $repo);
-            $entries[] = [
-                'spec' => $this->spec(self::OPERATION_PROJECT, ['name' => $name, 'owner' => $owner]),
-                'data' => $data,
-            ];
-        }
-
-        $this->sourceCache->primeMany($entries, CacheProfile::ProjectMetadata);
+        $this->cachedProjectMetadata->primeMany($dataByProjectId, $this->projectSpec(...));
     }
 
     /**
@@ -252,17 +189,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
      */
     protected function getProjectsByIdsUsingCache(array $projectIds, bool $authoritative): array
     {
-        $map = [];
-
-        foreach (array_unique($projectIds) as $projectId) {
-            $project = $this->resolveProjectByIdentifierUsingCache((string) $projectId, $authoritative);
-
-            if ($project !== null) {
-                $map[(string) $projectId] = $project;
-            }
-        }
-
-        return $map;
+        return $this->cachedProjectMetadata->getMany($projectIds, $this->projectSpec(...), $authoritative);
     }
 
     /** @return array<int, mixed> */
@@ -489,22 +416,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     /** @return array<string, mixed>|null */
     protected function resolveProjectByIdentifierUsingCache(string $identifier, bool $authoritative): ?array
     {
-        $repo = $this->parseIdentifier($identifier);
-
-        if ($repo === null) {
-            return null;
-        }
-
-        [$owner, $name] = array_map('strtolower', $repo);
-        $spec = $this->spec(self::OPERATION_PROJECT, [
-            'name' => $name,
-            'owner' => $owner,
-        ]);
-        $project = $authoritative
-            ? $this->sourceCache->swrRequired($spec, CacheProfile::ProjectMetadata)
-            : $this->sourceCache->swr($spec, CacheProfile::ProjectMetadata);
-
-        return is_array($project) ? $project : null;
+        return $this->cachedProjectMetadata->get($this->projectSpec($identifier), $authoritative);
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -1176,6 +1088,21 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     protected function spec(string $operation, array $arguments = []): SourceFetchSpec
     {
         return new SourceFetchSpec($this->getKey()->value, $operation, $arguments);
+    }
+
+    private function projectSpec(string $projectId): ?SourceFetchSpec
+    {
+        $repo = $this->parseIdentifier($projectId);
+        if ($repo === null) {
+            return null;
+        }
+
+        [$owner, $name] = array_map('strtolower', $repo);
+
+        return $this->spec(self::OPERATION_PROJECT, [
+            'name' => $name,
+            'owner' => $owner,
+        ]);
     }
 
     protected function token(): string
