@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Support;
 
+use Exception;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 
 /**
@@ -108,6 +109,60 @@ class InstalledMetadataDocument
             self::normalizeUnresolvedFiles($unresolvedFiles),
             $this->extra,
         );
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function installedModOwningFilename(string $filename): ?array
+    {
+        $target = strtolower($filename);
+
+        foreach ($this->installedMods as $mod) {
+            if (strtolower((string) ($mod['filename'] ?? '')) === $target) {
+                return $mod;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entry
+     */
+    public function withUpsertedInstalledMod(array $entry): self
+    {
+        $normalized = self::normalizeInstalledMod($entry);
+
+        if ($normalized === null) {
+            throw new Exception('Invalid installed metadata entry.');
+        }
+
+        $filename = strtolower($normalized['filename']);
+        $source = $normalized['source'];
+        $projectId = $normalized['project_id'];
+
+        foreach ($this->installedMods as $mod) {
+            $sameFile = strtolower((string) ($mod['filename'] ?? '')) === $filename;
+            $sameIdentity = ($mod['source'] ?? '') === $source && ($mod['project_id'] ?? '') === $projectId;
+
+            if ($sameFile && !$sameIdentity) {
+                throw new Exception('Filename is already used by another installed project.');
+            }
+        }
+
+        $installedMods = array_values(array_filter(
+            $this->installedMods,
+            fn (array $mod): bool => !(($mod['source'] ?? '') === $source && ($mod['project_id'] ?? '') === $projectId),
+        ));
+        $installedMods[] = $normalized;
+
+        $unresolvedFiles = array_values(array_filter(
+            $this->unresolvedFiles,
+            fn (array $file): bool => strtolower((string) ($file['filename'] ?? '')) !== $filename,
+        ));
+
+        return new self($installedMods, $unresolvedFiles, $this->extra);
     }
 
     /** @return array<string, mixed> */

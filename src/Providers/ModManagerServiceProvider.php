@@ -11,6 +11,7 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
@@ -19,6 +20,7 @@ use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
@@ -43,6 +45,8 @@ class ModManagerServiceProvider extends ServiceProvider
             VersionLookupCoordinator::class,
             InstalledProjectService::class,
             InstalledArchiveTransaction::class,
+            InstalledProjectMutationService::class,
+            InstalledOperationLease::class,
             WingsRemoteFilesystem::class,
             InstalledOperationManager::class,
             ProjectOperationAuthorizer::class,

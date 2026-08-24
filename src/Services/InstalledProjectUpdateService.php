@@ -9,6 +9,7 @@ use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
+use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 use Throwable;
 
 final class InstalledProjectUpdateService
@@ -108,7 +109,7 @@ final class InstalledProjectUpdateService
         array $installedMod,
         array $version,
     ): void {
-        $primaryFile = $this->primaryFile($version['files'] ?? null);
+        $primaryFile = ProjectPrimaryFile::requireFromFiles($version['files'] ?? null);
 
         $this->archives->installOrUpdate(
             $server,
@@ -119,21 +120,5 @@ final class InstalledProjectUpdateService
             $primaryFile,
             $installedMod,
         );
-    }
-
-    /** @return array<string, mixed> */
-    private function primaryFile(mixed $files): array
-    {
-        if (!is_array($files)) {
-            throw new Exception('Latest version has no files.');
-        }
-
-        foreach ($files as $file) {
-            if (is_array($file) && ($file['primary'] ?? false) === true) {
-                return $file;
-            }
-        }
-
-        throw new Exception('Latest version has no primary file.');
     }
 }

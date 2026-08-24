@@ -20,6 +20,16 @@ class InstalledMetadataRepository
     protected const LEGACY_FILENAME = '.modrinth-metadata.json';
 
     /**
+     * Panel daemon HTTP timeout is 15s. mutate() holds this lock across
+     * getContent + putContent, so the TTL must exceed two timeouts. The
+     * key includes the metadata folder so mod/plugin/datapack documents
+     * do not serialize each other.
+     */
+    public const LOCK_SECONDS = 60;
+
+    public const LOCK_WAIT_SECONDS = 20;
+
+    /**
      * Read the current document, falling back to the legacy document only
      * when the current file is missing, unavailable, or invalid.
      *
@@ -69,7 +79,7 @@ class InstalledMetadataRepository
         InstalledMetadataDocument $document,
     ): bool {
         try {
-            return $this->withinLock($server, function () use ($server, $fileRepository, $folder, $document): bool {
+            return $this->withinLock($server, $folder, function () use ($server, $fileRepository, $folder, $document): bool {
                 return $this->write($server, $fileRepository, $folder, $document);
             }) === true;
         } catch (Exception $exception) {
@@ -93,7 +103,7 @@ class InstalledMetadataRepository
         Closure $callback,
     ): bool {
         try {
-            return $this->withinLock($server, function () use ($server, $fileRepository, $folder, $callback): bool {
+            return $this->withinLock($server, $folder, function () use ($server, $fileRepository, $folder, $callback): bool {
                 $result = $this->read($server, $fileRepository, $folder);
 
                 if (!$result->isAuthoritative() && $result->status !== InstalledMetadataReadStatus::Missing) {
@@ -179,9 +189,17 @@ class InstalledMetadataRepository
         return true;
     }
 
-    protected function withinLock(Server $server, Closure $callback): mixed
+    public static function lockKey(int $serverId, string $folder): string
     {
-        return Cache::lock("modrinth_metadata:{$server->id}", 10)->block(5, $callback);
+        $normalized = strtolower(trim($folder, " \t\n\r\0\x0B/\\"));
+
+        return 'mod_manager_metadata:v1:'.$serverId.':'.hash('sha256', $normalized);
+    }
+
+    protected function withinLock(Server $server, string $folder, Closure $callback): mixed
+    {
+        return Cache::lock(self::lockKey((int) $server->id, $folder), self::LOCK_SECONDS)
+            ->block(self::LOCK_WAIT_SECONDS, $callback);
     }
 
     protected function bumpHydration(Server $server): void

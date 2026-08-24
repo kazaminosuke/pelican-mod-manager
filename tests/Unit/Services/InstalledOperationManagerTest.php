@@ -16,12 +16,14 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Jobs\BulkUpdateInstalledProjects;
 use Kazaminosuke\ModManager\Jobs\ScanInstalledProjects;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Mockery;
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 3).'/src/Enums/ProjectType.php';
 require_once dirname(__DIR__, 3).'/src/Support/InstalledOperationState.php';
+require_once dirname(__DIR__, 3).'/src/Support/InstalledOperationLease.php';
 require_once dirname(__DIR__, 3).'/src/Jobs/BulkUpdateInstalledProjects.php';
 require_once dirname(__DIR__, 3).'/src/Jobs/ScanInstalledProjects.php';
 require_once dirname(__DIR__, 3).'/src/Services/InstalledOperationManager.php';
@@ -81,6 +83,13 @@ class InstalledOperationManagerTest extends TestCase
     {
         $cache = Mockery::mock(CacheRepository::class);
         $cache->shouldReceive('get')->twice()->andReturnNull();
+        $cache->shouldReceive('add')
+            ->once()
+            ->withArgs(fn (string $key, array $payload, int $ttl): bool => $key === 'mod_manager_op_lease:v1:42:mod'
+                && $payload['operation'] === 'scan'
+                && is_string($payload['token'] ?? null)
+                && $ttl === 1200)
+            ->andReturnTrue();
         $cache->shouldReceive('put')
             ->once()
             ->withArgs(fn (string $key, array $payload): bool => $key === 'mod_manager_operation:v1:42:mod:scan'
@@ -111,6 +120,13 @@ class InstalledOperationManagerTest extends TestCase
     {
         $cache = Mockery::mock(CacheRepository::class);
         $cache->shouldReceive('get')->twice()->andReturnNull();
+        $cache->shouldReceive('add')
+            ->once()
+            ->withArgs(fn (string $key, array $payload, int $ttl): bool => $key === 'mod_manager_op_lease:v1:42:mod'
+                && $payload['operation'] === 'bulk_update'
+                && is_string($payload['token'] ?? null)
+                && $ttl === 1200)
+            ->andReturnTrue();
         $cache->shouldReceive('put')
             ->once()
             ->withArgs(fn (string $key, array $payload): bool => $key === 'mod_manager_operation:v1:42:mod:bulk_update'
@@ -177,6 +193,37 @@ class InstalledOperationManagerTest extends TestCase
         self::assertSame('already_active', $result['reason']);
         self::assertSame(InstalledOperationManager::OPERATION_SCAN, $result['state']->operation);
         self::assertTrue($result['state']->isActive());
+    }
+
+    public function test_held_operation_lease_blocks_dispatch_without_active_state(): void
+    {
+        $store = new ArrayStore();
+        $cache = new Repository($store);
+        $config = Mockery::mock(ConfigRepository::class);
+        $config->shouldReceive('get')->once()->with('queue.default', 'sync')->andReturn('database');
+        $leases = new InstalledOperationLease($cache);
+        self::assertNotNull($leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_INSTALL));
+
+        $result = (new InstalledOperationManager($cache, $config, $leases))
+            ->dispatchBulkUpdate(42, ProjectType::Mod);
+
+        self::assertFalse($result['dispatched']);
+        self::assertSame('already_active', $result['reason']);
+        self::assertTrue($leases->isHeld(42, ProjectType::Mod));
+    }
+
+    public function test_completed_operation_releases_the_lease(): void
+    {
+        $store = new ArrayStore();
+        $cache = new Repository($store);
+        $config = Mockery::mock(ConfigRepository::class);
+        $leases = new InstalledOperationLease($cache);
+        self::assertNotNull($leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_SCAN));
+
+        (new InstalledOperationManager($cache, $config, $leases))
+            ->complete(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN);
+
+        self::assertFalse($leases->isHeld(42, ProjectType::Mod));
     }
 
     public function test_progress_persists_the_running_state_in_one_cache_write(): void

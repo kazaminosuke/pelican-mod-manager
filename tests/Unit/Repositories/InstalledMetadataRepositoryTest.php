@@ -214,6 +214,20 @@ class InstalledMetadataRepositoryTest extends TestCase
         self::assertSame(0, $repository->hydrationBumps);
     }
 
+    public function test_metadata_lock_key_is_scoped_to_server_and_folder(): void
+    {
+        $mods = InstalledMetadataRepository::lockKey(42, 'mods');
+        $plugins = InstalledMetadataRepository::lockKey(42, 'plugins');
+        $normalized = InstalledMetadataRepository::lockKey(42, '/Mods/');
+
+        self::assertSame($mods, $normalized);
+        self::assertNotSame($mods, $plugins);
+        self::assertStringStartsWith('mod_manager_metadata:v1:42:', $mods);
+        self::assertGreaterThan(15 * 2, InstalledMetadataRepository::LOCK_SECONDS);
+        self::assertSame(60, InstalledMetadataRepository::LOCK_SECONDS);
+        self::assertSame(20, InstalledMetadataRepository::LOCK_WAIT_SECONDS);
+    }
+
     protected function server(): Server
     {
         $server = new Server();
@@ -243,7 +257,7 @@ class SynchronousInstalledMetadataRepository extends InstalledMetadataRepository
 
     public int $lockCalls = 0;
 
-    protected function withinLock(Server $server, \Closure $callback): mixed
+    protected function withinLock(Server $server, string $folder, \Closure $callback): mixed
     {
         $this->lockCalls++;
 

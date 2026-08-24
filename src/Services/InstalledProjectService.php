@@ -1061,23 +1061,7 @@ class InstalledProjectService
             $server,
             $fileRepository,
             $folder,
-            function (InstalledMetadataDocument $document) use ($entry, $source, $projectId, $filename): InstalledMetadataDocument {
-                $installedMods = array_values(array_filter(
-                    $document->installedMods(),
-                    fn (array $mod): bool => !(($mod['source'] ?? ProjectSourceKey::Modrinth->value) === $source->value && ($mod['project_id'] ?? null) === $projectId)
-                        && strtolower((string) ($mod['filename'] ?? '')) !== strtolower($filename),
-                ));
-                $installedMods[] = $entry;
-
-                $unresolvedFiles = array_values(array_filter(
-                    $document->unresolvedFiles(),
-                    fn (array $file): bool => strtolower((string) ($file['filename'] ?? '')) !== strtolower($filename),
-                ));
-
-                return $document
-                    ->withInstalledMods($installedMods)
-                    ->withUnresolvedFiles($unresolvedFiles);
-            },
+            fn (InstalledMetadataDocument $document): InstalledMetadataDocument => $document->withUpsertedInstalledMod($entry),
         );
     }
 

@@ -9,6 +9,9 @@ use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
+use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
+use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
+use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -37,7 +40,7 @@ class InstalledArchiveTransactionTest extends TestCase
             $this->primaryFile(),
         );
 
-        self::assertSame(['foreground_pull', 'list', 'list', 'rename', 'metadata'], $wings->events);
+        self::assertSame(['list', 'foreground_pull', 'list', 'rename', 'metadata'], $wings->events);
         self::assertTrue($wings->pulledInForeground);
         self::assertSame('sodium.jar', $wings->activatedFilename);
         self::assertSame(['sodium.jar'], $wings->committedFilenames);
@@ -62,7 +65,7 @@ class InstalledArchiveTransactionTest extends TestCase
         );
 
         self::assertSame(
-            ['foreground_pull', 'list', 'list', 'rename', 'metadata', 'delete'],
+            ['list', 'foreground_pull', 'list', 'rename', 'metadata', 'delete'],
             $wings->events,
         );
         self::assertSame(['sodium-old.jar'], $wings->deletedFilenames);
@@ -73,7 +76,7 @@ class InstalledArchiveTransactionTest extends TestCase
     {
         $wings = new RecordingWingsRemoteFilesystem();
         $wings->existingFilenames = ['sodium.jar'];
-        $projects = $this->projects($wings, saved: true);
+        $projects = $this->projects($wings, saved: true, installedMods: [$this->installed('sodium.jar')]);
         $transaction = new InstalledArchiveTransaction($projects, $wings);
 
         $transaction->installOrUpdate(
@@ -87,7 +90,7 @@ class InstalledArchiveTransactionTest extends TestCase
         );
 
         self::assertSame(
-            ['foreground_pull', 'list', 'list', 'rename', 'rename', 'metadata'],
+            ['list', 'foreground_pull', 'list', 'rename', 'rename', 'metadata'],
             $wings->events,
         );
         self::assertCount(2, $wings->renames);
@@ -201,11 +204,81 @@ class InstalledArchiveTransactionTest extends TestCase
         self::assertContains('sodium.jar', $wings->quietlyDeletedFilenames);
     }
 
-    /** @return Mockery\MockInterface&InstalledProjectService */
-    private function projects(RecordingWingsRemoteFilesystem $wings, bool $saved): InstalledProjectService
+    public function test_other_project_filename_collision_is_rejected_before_pull(): void
     {
+        $wings = new RecordingWingsRemoteFilesystem();
+        $other = $this->installed('sodium.jar');
+        $other['project_id'] = 'iris';
+        $other['project_slug'] = 'iris';
+        $other['project_title'] = 'Iris';
+        $projects = $this->projects($wings, saved: true, installedMods: [$other]);
+        $transaction = new InstalledArchiveTransaction($projects, $wings);
+
+        try {
+            $transaction->installOrUpdate(
+                $this->server(),
+                Mockery::mock(DaemonFileRepository::class),
+                ProjectType::Mod,
+                $this->record(),
+                $this->version(),
+                $this->primaryFile(),
+            );
+            self::fail('Filename collision must reject the transaction.');
+        } catch (Exception $exception) {
+            self::assertStringContainsString('already used by another installed project', $exception->getMessage());
+        }
+
+        self::assertSame([], $wings->events);
+        self::assertSame([], $wings->committedFilenames);
+    }
+
+    public function test_orphan_destination_file_is_rejected_before_pull(): void
+    {
+        $wings = new RecordingWingsRemoteFilesystem();
+        $wings->existingFilenames = ['sodium.jar'];
+        $projects = $this->projects($wings, saved: true);
+        $transaction = new InstalledArchiveTransaction($projects, $wings);
+
+        try {
+            $transaction->installOrUpdate(
+                $this->server(),
+                Mockery::mock(DaemonFileRepository::class),
+                ProjectType::Mod,
+                $this->record(),
+                $this->version(),
+                $this->primaryFile(),
+            );
+            self::fail('Orphan destination must reject the transaction.');
+        } catch (Exception $exception) {
+            self::assertStringContainsString('already exists on disk', $exception->getMessage());
+        }
+
+        self::assertSame(['list'], $wings->events);
+        self::assertSame([], $wings->committedFilenames);
+    }
+
+    /** @return Mockery\MockInterface&InstalledProjectService */
+    private function projects(
+        RecordingWingsRemoteFilesystem $wings,
+        bool $saved,
+        array $installedMods = [],
+    ): InstalledProjectService
+    {
+        $document = InstalledMetadataDocument::empty();
+        $status = InstalledMetadataReadStatus::Missing;
+
+        if ($installedMods !== []) {
+            $document = InstalledMetadataDocument::fromArray([
+                'installed_mods' => $installedMods,
+            ]) ?? InstalledMetadataDocument::empty();
+            $status = InstalledMetadataReadStatus::Current;
+        }
+
         $projects = Mockery::mock(InstalledProjectService::class);
         $projects->shouldReceive('getProjectFolder')->andReturn('mods');
+        $projects->shouldReceive('getInstalledMetadataReadResult')->andReturn(
+            new InstalledMetadataReadResult($document, $status),
+        );
         $projects->shouldReceive('saveModMetadata')
             ->andReturnUsing(function () use ($wings, $saved): bool {
                 $wings->events[] = 'metadata';
@@ -271,6 +344,7 @@ class InstalledArchiveTransactionTest extends TestCase
             'version_number' => '1.0.0',
             'filename' => $filename,
             'author' => 'jelly',
+            'installed_at' => '2026-07-30T00:00:00Z',
         ];
     }
 }

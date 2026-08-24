@@ -47,16 +47,18 @@ use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
-use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
+use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\RequestPerformanceProfiler;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
@@ -1646,18 +1648,11 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /**
-     * @param  array<int, array{primary: bool, filename: string, url: string}>  $files
-     * @return array{primary: bool, filename: string, url: string}|null
+     * @return array<string, mixed>|null
      */
-    protected function getPrimaryFile(array $files): ?array
+    protected function getPrimaryFile(mixed $files): ?array
     {
-        foreach ($files as $file) {
-            if (!empty($file['primary'])) {
-                return $file;
-            }
-        }
-
-        return null;
+        return ProjectPrimaryFile::fromFiles($files);
     }
 
     /**
@@ -1785,14 +1780,14 @@ class ModManagerPage extends Page implements HasTable
 
         $safeNewFilename = $this->validateFilename((string) ($primaryFile['filename'] ?? ''));
 
-        app(InstalledArchiveTransaction::class)->installOrUpdate(
+        app(InstalledProjectMutationService::class)->installOrUpdate(
             $server,
             $fileRepository,
             $type,
             $record,
             $versionData,
-            $primaryFile,
             $installedMod,
+            $primaryFile,
         );
 
         Cache::forget(ModManager::getHashScanCacheKey($server, $type));
@@ -1800,6 +1795,65 @@ class ModManagerPage extends Page implements HasTable
         $this->unknownFiles = array_values(
             array_filter($this->unknownFiles, fn (string $filename) => strtolower($filename) !== strtolower($safeNewFilename))
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $record
+     */
+    private function performUninstall(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        array $record,
+        ProjectType $type,
+    ): void {
+        $safeFilename = $this->getUninstallFilename($record);
+        $folder = ModManager::getProjectFolder($server, $fileRepository, $type);
+
+        Http::daemon($server->node)
+            ->post("/api/servers/{$server->uuid}/files/delete", [
+                'root' => '/',
+                'files' => [$folder.'/'.$safeFilename],
+            ])
+            ->throw();
+
+        Cache::forget(ModManager::getHashScanCacheKey($server, $type));
+        $this->setInstalledScanResult(null);
+        $this->unknownFiles = array_values(
+            array_filter($this->unknownFiles, fn (string $filename) => strtolower($filename) !== strtolower($safeFilename))
+        );
+
+        $sourceKey = ProjectSourceKey::tryFrom($record['source'] ?? '') ?? ProjectSourceKey::Modrinth;
+
+        $metadataRemoved = true;
+        if (!empty($record['project_id'])) {
+            $metadataRemoved = ModManager::removeModMetadata($server, $fileRepository, $record['project_id'], $type, $sourceKey);
+        }
+
+        if (!$metadataRemoved) {
+            Log::warning('Failed to remove mod metadata after successful file deletion', [
+                'project_id' => $record['project_id'],
+                'source' => $sourceKey->value,
+                'server_id' => $server->id,
+            ]);
+
+            if (is_array($this->installedModsMetadata)) {
+                $this->installedModsMetadata = array_values(
+                    array_filter(
+                        $this->installedModsMetadata,
+                        fn ($mod) => !($mod['project_id'] === $record['project_id'] && ($mod['source'] ?? ProjectSourceKey::Modrinth->value) === $sourceKey->value)
+                    )
+                );
+            }
+
+            $this->forgetVersionCache("{$sourceKey->value}:{$record['project_id']}");
+        } else {
+            $this->forgetInstalledModsMetadata();
+            $this->forgetVersionCaches();
+        }
+
+        if ($this->activeTab === 'installed') {
+            $this->flushCachedTableRecords();
+        }
     }
 
     /**
@@ -2487,14 +2541,17 @@ class ModManagerPage extends Page implements HasTable
                                     ->label(trans('pelican-minecraft-modrinth::strings.actions.install'))
                                     ->icon('tabler-download')
                                     ->authorize(fn (): bool => $this->canManageCurrentInstallOrUpdate())
-                                    ->action(function (DaemonFileRepository $fileRepository) use ($record, $versionData, $primaryFile, $sourceKey) {
+                                    ->disabled($primaryFile === null)
+                                    ->action(function (DaemonFileRepository $fileRepository) use ($record, $versionData, $sourceKey) {
                                         try {
                                             /** @var Server $server */
                                             $server = Filament::getTenant();
 
-                                            if (!isset($versionData['id'], $versionData['version_number'], $versionData['files'])) {
+                                            if (!isset($versionData['id'], $versionData['version_number'])) {
                                                 throw new Exception('Invalid version data structure');
                                             }
+
+                                            $primaryFile = $this->getPrimaryFile($versionData['files'] ?? null);
 
                                             if (!$primaryFile) {
                                                 throw new Exception('No downloadable file found');
@@ -2811,60 +2868,19 @@ class ModManagerPage extends Page implements HasTable
                             $server = Filament::getTenant();
                             $this->authorizeProjectOperation($server, ProjectOperation::Delete);
 
-                            $safeFilename = $this->getUninstallFilename($record);
-
                             $type = static::detectProjectType($server);
                             if (!$type) {
                                 throw new Exception('Server does not support managed mods or plugins');
                             }
 
-                            $folder = ModManager::getProjectFolder($server, $fileRepository, $type);
-
-                            Http::daemon($server->node)
-                                ->post("/api/servers/{$server->uuid}/files/delete", [
-                                    'root' => '/',
-                                    'files' => [$folder.'/'.$safeFilename],
-                                ])
-                                ->throw();
-
-                            Cache::forget(ModManager::getHashScanCacheKey($server, $type));
-                            $this->setInstalledScanResult(null);
-                            $this->unknownFiles = array_values(
-                                array_filter($this->unknownFiles, fn (string $filename) => strtolower($filename) !== strtolower($safeFilename))
+                            app(InstalledOperationLease::class)->run(
+                                (int) $server->getKey(),
+                                $type,
+                                InstalledOperationLease::OPERATION_UNINSTALL,
+                                function () use ($server, $fileRepository, $record, $type): void {
+                                    $this->performUninstall($server, $fileRepository, $record, $type);
+                                },
                             );
-
-                            $sourceKey = ProjectSourceKey::tryFrom($record['source'] ?? '') ?? ProjectSourceKey::Modrinth;
-
-                            $metadataRemoved = true;
-                            if (!empty($record['project_id'])) {
-                                $metadataRemoved = ModManager::removeModMetadata($server, $fileRepository, $record['project_id'], $type, $sourceKey);
-                            }
-
-                            if (!$metadataRemoved) {
-                                Log::warning('Failed to remove mod metadata after successful file deletion', [
-                                    'project_id' => $record['project_id'],
-                                    'source' => $sourceKey->value,
-                                    'server_id' => $server->id,
-                                ]);
-
-                                if (is_array($this->installedModsMetadata)) {
-                                    $this->installedModsMetadata = array_values(
-                                        array_filter(
-                                            $this->installedModsMetadata,
-                                            fn ($mod) => !($mod['project_id'] === $record['project_id'] && ($mod['source'] ?? ProjectSourceKey::Modrinth->value) === $sourceKey->value)
-                                        )
-                                    );
-                                }
-
-                                $this->forgetVersionCache("{$sourceKey->value}:{$record['project_id']}");
-                            } else {
-                                $this->forgetInstalledModsMetadata();
-                                $this->forgetVersionCaches();
-                            }
-
-                            if ($this->activeTab === 'installed') {
-                                $this->flushCachedTableRecords();
-                            }
 
                             Notification::make()
                                 ->title(trans('pelican-minecraft-modrinth::strings.notifications.uninstall_success'))

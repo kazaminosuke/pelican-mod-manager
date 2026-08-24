@@ -4,9 +4,12 @@ namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use Closure;
 use Exception;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
+use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Throwable;
 
@@ -20,7 +23,7 @@ use Throwable;
  * 4. commit installed metadata
  * 5. delete the previous archive (and any backup) only after metadata commit
  */
-final class InstalledArchiveTransaction
+class InstalledArchiveTransaction
 {
     public function __construct(
         private readonly InstalledProjectService $projects,
@@ -32,6 +35,7 @@ final class InstalledArchiveTransaction
      * @param  array<string, mixed>  $versionData
      * @param  array<string, mixed>  $primaryFile
      * @param  array<string, mixed>|null  $installedMod
+     * @param  (Closure(array<string, mixed>): bool)|null  $commitMetadata
      */
     public function installOrUpdate(
         Server $server,
@@ -41,6 +45,7 @@ final class InstalledArchiveTransaction
         array $versionData,
         array $primaryFile,
         ?array $installedMod = null,
+        ?Closure $commitMetadata = null,
     ): void {
         $newFilename = $this->safeFilename($this->requiredString($primaryFile, 'filename'));
         $oldFilename = is_array($installedMod)
@@ -57,6 +62,12 @@ final class InstalledArchiveTransaction
         $versionId = $this->requiredString($versionData, 'id');
         $versionNumber = $this->firstRequiredString($versionData, ['version_number', 'versionNumber']);
         $author = $this->optionalString($record['author'] ?? ($installedMod['author'] ?? null));
+        $document = $this->authoritativeDocument($server, $fileRepository, $type);
+
+        $this->assertFilenameAvailable($document, $source, $projectId, $newFilename);
+
+        $destinationExists = $this->wings->findListedFile($fileRepository, $server, $folder, $newFilename) !== null;
+        $this->assertDestinationNotOrphaned($destinationExists, $document, $newFilename, $source, $projectId, $oldFilename);
 
         set_time_limit(WingsRemoteFilesystem::FOREGROUND_PULL_TIMEOUT_SECONDS);
 
@@ -67,8 +78,6 @@ final class InstalledArchiveTransaction
         try {
             $stat = $this->wings->pullForeground($fileRepository, $server, $url, $folder, $tempFilename);
             $this->assertCompletedPull($fileRepository, $server, $folder, $tempFilename, $stat, $expectedSize);
-
-            $destinationExists = $this->wings->findListedFile($fileRepository, $server, $folder, $newFilename) !== null;
 
             if ($destinationExists) {
                 $backupFilename = $this->uniqueHiddenName('prev');
@@ -88,7 +97,7 @@ final class InstalledArchiveTransaction
 
             $activated = true;
 
-            $saved = $this->projects->saveModMetadata(
+            $saved = $this->commitMetadataEntry(
                 $server,
                 $fileRepository,
                 $projectId,
@@ -100,6 +109,7 @@ final class InstalledArchiveTransaction
                 $author,
                 $type,
                 $source,
+                $commitMetadata,
             );
 
             if (!$saved) {
@@ -128,7 +138,7 @@ final class InstalledArchiveTransaction
                     );
                     $backupFilename = null;
 
-                    $this->restoreInstalledMetadata($server, $fileRepository, $installedMod, $type);
+                    $this->restoreInstalledMetadata($server, $fileRepository, $installedMod, $type, $commitMetadata);
 
                     throw $deleteException;
                 }
@@ -203,12 +213,14 @@ final class InstalledArchiveTransaction
 
     /**
      * @param  array<string, mixed>|null  $installedMod
+     * @param  (Closure(array<string, mixed>): bool)|null  $commitMetadata
      */
     private function restoreInstalledMetadata(
         Server $server,
         DaemonFileRepository $fileRepository,
         ?array $installedMod,
         ProjectType $type,
+        ?Closure $commitMetadata,
     ): void {
         if ($installedMod === null) {
             return;
@@ -216,7 +228,7 @@ final class InstalledArchiveTransaction
 
         $source = ProjectSourceKey::tryFrom((string) ($installedMod['source'] ?? '')) ?? ProjectSourceKey::Modrinth;
 
-        if (!$this->projects->saveModMetadata(
+        if (!$this->commitMetadataEntry(
             $server,
             $fileRepository,
             $this->requiredString($installedMod, 'project_id'),
@@ -228,9 +240,119 @@ final class InstalledArchiveTransaction
             $this->optionalString($installedMod['author'] ?? null),
             $type,
             $source,
+            $commitMetadata,
         )) {
             report(new Exception('Failed to restore old mod metadata during rollback'));
         }
+    }
+
+    /**
+     * @param  (Closure(array<string, mixed>): bool)|null  $commitMetadata
+     */
+    private function commitMetadataEntry(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        string $projectId,
+        string $projectSlug,
+        string $projectTitle,
+        string $versionId,
+        string $versionNumber,
+        string $filename,
+        ?string $author,
+        ProjectType $type,
+        ProjectSourceKey $source,
+        ?Closure $commitMetadata,
+    ): bool {
+        $entry = [
+            'source' => $source->value,
+            'project_id' => $projectId,
+            'project_slug' => $projectSlug,
+            'project_title' => $projectTitle,
+            'version_id' => $versionId,
+            'version_number' => $versionNumber,
+            'filename' => $filename,
+            'installed_at' => gmdate('c'),
+        ];
+
+        if ($author !== null) {
+            $entry['author'] = $author;
+        }
+
+        if ($commitMetadata !== null) {
+            return $commitMetadata($entry);
+        }
+
+        return $this->projects->saveModMetadata(
+            $server,
+            $fileRepository,
+            $projectId,
+            $projectSlug,
+            $projectTitle,
+            $versionId,
+            $versionNumber,
+            $filename,
+            $author,
+            $type,
+            $source,
+        );
+    }
+
+    private function authoritativeDocument(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        ProjectType $type,
+    ): InstalledMetadataDocument {
+        $result = $this->projects->getInstalledMetadataReadResult($server, $fileRepository, $type);
+
+        if (!$result->isAuthoritative() && $result->status !== InstalledMetadataReadStatus::Missing) {
+            throw new Exception('Installed metadata is unavailable.');
+        }
+
+        return $result->document;
+    }
+
+    private function assertFilenameAvailable(
+        InstalledMetadataDocument $document,
+        ProjectSourceKey $source,
+        string $projectId,
+        string $newFilename,
+    ): void {
+        $owner = $document->installedModOwningFilename($newFilename);
+
+        if ($owner === null) {
+            return;
+        }
+
+        if (($owner['source'] ?? '') === $source->value && ($owner['project_id'] ?? '') === $projectId) {
+            return;
+        }
+
+        throw new Exception('Filename is already used by another installed project.');
+    }
+
+    private function assertDestinationNotOrphaned(
+        bool $destinationExists,
+        InstalledMetadataDocument $document,
+        string $newFilename,
+        ProjectSourceKey $source,
+        string $projectId,
+        ?string $oldFilename,
+    ): void {
+        if (!$destinationExists) {
+            return;
+        }
+
+        if ($oldFilename !== null && strtolower($oldFilename) === strtolower($newFilename)) {
+            return;
+        }
+
+        $owner = $document->installedModOwningFilename($newFilename);
+
+        if ($owner !== null && ($owner['source'] ?? '') === $source->value && ($owner['project_id'] ?? '') === $projectId) {
+            return;
+        }
+
+        throw new Exception('Filename already exists on disk.');
     }
 
     private function uniqueHiddenName(string $kind): string

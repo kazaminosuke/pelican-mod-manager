@@ -9,6 +9,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Jobs\BulkUpdateInstalledProjects;
 use Kazaminosuke\ModManager\Jobs\ScanInstalledProjects;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Throwable;
 
@@ -36,10 +37,15 @@ final class InstalledOperationManager
      */
     private array $progressBuffer = [];
 
+    private readonly InstalledOperationLease $leases;
+
     public function __construct(
         private readonly CacheRepository $cache,
         private readonly ConfigRepository $config,
-    ) {}
+        ?InstalledOperationLease $leases = null,
+    ) {
+        $this->leases = $leases ?? new InstalledOperationLease($cache);
+    }
 
     public function supportsAsyncDispatch(): bool
     {
@@ -89,6 +95,20 @@ final class InstalledOperationManager
             ];
         }
 
+        $leaseToken = $this->leases->tryAcquire(
+            $serverId,
+            $projectType,
+            InstalledOperationLease::OPERATION_SCAN,
+        );
+
+        if ($leaseToken === null) {
+            return [
+                'dispatched' => false,
+                'reason' => 'already_active',
+                'state' => $current,
+            ];
+        }
+
         $state = $this->queue($serverId, $projectType, self::OPERATION_SCAN, [
             'force' => $force,
             'actor_user_id' => $actorUserId,
@@ -106,6 +126,7 @@ final class InstalledOperationManager
             );
         } catch (Throwable $exception) {
             report($exception);
+            $this->leases->release($serverId, $projectType, $leaseToken);
 
             $state = $this->fail(
                 $serverId,
@@ -290,8 +311,10 @@ final class InstalledOperationManager
         $serverId = $this->serverId($server);
         $state = $this->state($serverId, $projectType, $operation)
             ?? InstalledOperationState::queued($operation, $serverId, $projectType);
+        $completed = $this->put($state->completed($result));
+        $this->leases->release($serverId, $projectType);
 
-        return $this->put($state->completed($result));
+        return $completed;
     }
 
     /**
@@ -307,8 +330,10 @@ final class InstalledOperationManager
         $serverId = $this->serverId($server);
         $state = $this->state($serverId, $projectType, $operation)
             ?? InstalledOperationState::queued($operation, $serverId, $projectType);
+        $failed = $this->put($state->failed($error, $result));
+        $this->leases->release($serverId, $projectType);
 
-        return $this->put($state->failed($error, $result));
+        return $failed;
     }
 
     public function forget(
@@ -316,9 +341,11 @@ final class InstalledOperationManager
         ProjectType $projectType,
         string $operation,
     ): void {
-        $key = $this->cacheKey($this->serverId($server), $projectType, $operation);
+        $serverId = $this->serverId($server);
+        $key = $this->cacheKey($serverId, $projectType, $operation);
         unset($this->progressBuffer[$key]);
         $this->cache->forget($key);
+        $this->leases->release($serverId, $projectType);
     }
 
     private function operationStateOrActive(
@@ -403,6 +430,20 @@ final class InstalledOperationManager
             ];
         }
 
+        $leaseToken = $this->leases->tryAcquire(
+            $serverId,
+            $projectType,
+            InstalledOperationLease::OPERATION_BULK_UPDATE,
+        );
+
+        if ($leaseToken === null) {
+            return [
+                'dispatched' => false,
+                'reason' => 'already_active',
+                'state' => $current,
+            ];
+        }
+
         $state = $this->queue($serverId, $projectType, self::OPERATION_BULK_UPDATE);
 
         try {
@@ -414,6 +455,7 @@ final class InstalledOperationManager
             );
         } catch (Throwable $exception) {
             report($exception);
+            $this->leases->release($serverId, $projectType, $leaseToken);
 
             $state = $this->fail(
                 $serverId,
