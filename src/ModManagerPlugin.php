@@ -455,13 +455,13 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
     public function saveSettings(array $data): void
     {
         $this->writeToEnvironment([
-            'LATEST_MINECRAFT_VERSION' => $data['latest_minecraft_version'],
-            'MINECRAFT_MODRINTH_MOD_NAV_SORT' => $data['mod_nav_sort'],
-            'MINECRAFT_MODRINTH_PLUGIN_NAV_SORT' => $data['plugin_nav_sort'],
-            'MINECRAFT_MODRINTH_DATAPACK_NAV_SORT' => $data['datapack_nav_sort'],
-            'MINECRAFT_MODRINTH_RESOURCEPACK_NAV_SORT' => $data['resourcepack_nav_sort'],
-            'CURSEFORGE_API_KEY' => $data['curseforge_api_key'] ?? '',
-            'GITHUB_TOKEN' => $data['github_token'] ?? '',
+            'MOD_MANAGER_LATEST_MINECRAFT_VERSION' => $data['latest_minecraft_version'],
+            'MOD_MANAGER_MOD_NAV_SORT' => $data['mod_nav_sort'],
+            'MOD_MANAGER_PLUGIN_NAV_SORT' => $data['plugin_nav_sort'],
+            'MOD_MANAGER_DATAPACK_NAV_SORT' => $data['datapack_nav_sort'],
+            'MOD_MANAGER_RESOURCEPACK_NAV_SORT' => $data['resourcepack_nav_sort'],
+            'MOD_MANAGER_CURSEFORGE_API_KEY' => $data['curseforge_api_key'] ?? '',
+            'MOD_MANAGER_GITHUB_TOKEN' => $data['github_token'] ?? '',
             'MOD_MANAGER_ALLOW_USER_EGG_PROFILE_EDIT' => ($data['allow_user_egg_profile_edit'] ?? false) ? 'true' : 'false',
             'MOD_MANAGER_ALLOW_USER_PROJECT_INSTALL' => ($data['allow_user_project_install'] ?? false) ? 'true' : 'false',
             'MOD_MANAGER_ALLOW_USER_PROJECT_UPDATE' => ($data['allow_user_project_update'] ?? false) ? 'true' : 'false',

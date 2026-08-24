@@ -77,13 +77,13 @@ CurseForgeはグローバルAPIキーが設定されるまで表示されませ�
 
 | 項目 | `.env`キー |
 |---|---|
-| 最新Minecraftバージョン | `LATEST_MINECRAFT_VERSION` |
-| Modのナビゲーション表示順 | `MINECRAFT_MODRINTH_MOD_NAV_SORT` |
-| Pluginのナビゲーション表示順 | `MINECRAFT_MODRINTH_PLUGIN_NAV_SORT` |
-| Datapackのナビゲーション表示順 | `MINECRAFT_MODRINTH_DATAPACK_NAV_SORT` |
-| Resource Packのナビゲーション表示順 | `MINECRAFT_MODRINTH_RESOURCEPACK_NAV_SORT` |
-| CurseForge APIキー | `CURSEFORGE_API_KEY` |
-| GitHubトークン | `GITHUB_TOKEN` |
+| 最新Minecraftバージョン | `MOD_MANAGER_LATEST_MINECRAFT_VERSION` |
+| Modのナビゲーション表示順 | `MOD_MANAGER_MOD_NAV_SORT` |
+| Pluginのナビゲーション表示順 | `MOD_MANAGER_PLUGIN_NAV_SORT` |
+| Datapackのナビゲーション表示順 | `MOD_MANAGER_DATAPACK_NAV_SORT` |
+| Resource Packのナビゲーション表示順 | `MOD_MANAGER_RESOURCEPACK_NAV_SORT` |
+| CurseForge APIキー | `MOD_MANAGER_CURSEFORGE_API_KEY` |
+| GitHubトークン | `MOD_MANAGER_GITHUB_TOKEN` |
 | 一般ユーザーにもegg プロファイルの編集を許可 | `MOD_MANAGER_ALLOW_USER_EGG_PROFILE_EDIT`(既定OFF) |
 | 一般サーバーユーザーにプロジェクトの追加を許可 | `MOD_MANAGER_ALLOW_USER_PROJECT_INSTALL`(既定OFF) |
 | 一般サーバーユーザーにプロジェクトの更新を許可(一括更新を含む) | `MOD_MANAGER_ALLOW_USER_PROJECT_UPDATE`(既定OFF) |

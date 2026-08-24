@@ -61,10 +61,6 @@ final class ServerModManagerSettings
     {
         $field = $this->sourceEnabledField($source);
 
-        if ($field === null) {
-            return false;
-        }
-
         $setting = $this->repository->forServer($server);
 
         return $setting?->{$field} ?? $this->defaultSourceEnabled($source);
@@ -72,7 +68,7 @@ final class ServerModManagerSettings
 
     public function hasAnyManagerTypeEnabled(Server|int $server): bool
     {
-        foreach ([ProjectType::Mod, ProjectType::Plugin, ProjectType::Datapack, ProjectType::ResourcePack] as $type) {
+        foreach (ProjectType::cases() as $type) {
             if ($this->configuredTypeEnabled($server, $type)) {
                 return true;
             }
@@ -160,20 +156,12 @@ final class ServerModManagerSettings
 
     private function typeEnabledField(ProjectType $type): string
     {
-        return $type === ProjectType::ResourcePack
-            ? 'resourcepack_enabled'
-            : $type->value.'_enabled';
+        return $type->value.'_enabled';
     }
 
-    private function sourceEnabledField(ProjectSourceKey $source): ?string
+    private function sourceEnabledField(ProjectSourceKey $source): string
     {
-        return match ($source) {
-            ProjectSourceKey::Modrinth => 'modrinth_enabled',
-            ProjectSourceKey::CurseForge => 'curseforge_enabled',
-            ProjectSourceKey::Hangar => 'hangar_enabled',
-            ProjectSourceKey::GitHubReleases => 'github_releases_enabled',
-            ProjectSourceKey::Voxel => null,
-        };
+        return $source->value.'_enabled';
     }
 
     private function defaultSourceEnabled(ProjectSourceKey $source): bool
@@ -183,8 +171,6 @@ final class ServerModManagerSettings
 
     private function navigationSortField(ProjectType $type): string
     {
-        return $type === ProjectType::ResourcePack
-            ? 'resourcepack_navigation_sort'
-            : $type->value.'_navigation_sort';
+        return $type->value.'_navigation_sort';
     }
 }

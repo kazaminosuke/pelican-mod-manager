@@ -1285,13 +1285,11 @@ docs/architecture.md（新規）:
 | キャッシュ | 接頭辞バージョンを上げて破棄（TTL 付きなので移行不要） |
 | プラグイン設定画面の設定 | `.env` に書かれているので引き継がれる |
 
-**`.env` キーの名前空間化（この機会に実施）:**
-現在 `LATEST_MINECRAFT_VERSION` / `CURSEFORGE_API_KEY` / `GITHUB_TOKEN` は**名前空間が無く、
-他プラグインと衝突しうる**。新 id では名前空間付きキーを導入し、**1リリースだけ旧キーへの
-フォールバック読み**を残す:
-```php
-env('MOD_MANAGER_CURSEFORGE_API_KEY', env('CURSEFORGE_API_KEY'))
-```
+**`.env` キーの名前空間化（実装済み）:**
+全設定を `MOD_MANAGER_*` に統一する。pre-releaseのため旧キーへのfallbackは持たない。
+API credentialは `MOD_MANAGER_CURSEFORGE_API_KEY` / `MOD_MANAGER_GITHUB_TOKEN`、
+fallback versionは `MOD_MANAGER_LATEST_MINECRAFT_VERSION`、navigation sortは
+`MOD_MANAGER_{MOD|PLUGIN|DATAPACK|RESOURCEPACK}_NAV_SORT` を使用する。
 
 ## Codex 依頼文（Stage 8-C）
 
@@ -1324,10 +1322,8 @@ A. 一括置換（文字列リテラル pelican-mod-manager → pelican-mod-mana
    ※ plugin.json の update_url は Stage 8-B で専用リポジトリに移してあるので変更しません
 
 B. .env キーの名前空間化
-   ナビゲーション順は、現行の専用キー
-   MINECRAFT_MODRINTH_MOD_NAV_SORT / MINECRAFT_MODRINTH_PLUGIN_NAV_SORT /
-   MINECRAFT_MODRINTH_DATAPACK_NAV_SORT のみを使用してください。
-   旧sharedキーへのフォールバックはpre-releaseのため追加しません。
+   `MOD_MANAGER_*` 専用キーのみを使用してください。
+   旧キーへのフォールバックはpre-releaseのため追加しません。
 
 C. キャッシュキーの接頭辞バージョンを一斉に上げる
    （id が変わってもキャッシュストアは共有されるため、混線を避ける）

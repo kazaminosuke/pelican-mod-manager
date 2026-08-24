@@ -3,7 +3,7 @@
     "name": "Minecraft Mod Manager",
     "author": "Boy132 & H1ghSyst3m & Yonn & kazaminosuke",
     "version": "v1beta1",
-    "description": "Search, install, update, and manage Minecraft mods and plugins from Modrinth, CurseForge, Hangar, and GitHub Releases.",
+    "description": "Search, install, update, and manage Minecraft mods, plugins, datapacks, and resource packs from supported sources.",
     "category": "plugin",
     "url": "https://github.com/kazaminosuke/pelican-mod-manager",
     "update_url": "https://raw.githubusercontent.com/kazaminosuke/pelican-mod-manager/refs/heads/main/update.json",

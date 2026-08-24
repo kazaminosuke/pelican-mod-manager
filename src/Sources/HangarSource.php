@@ -71,11 +71,6 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         return 'Hangar';
     }
 
-    public function requiresApiKey(): bool
-    {
-        return false;
-    }
-
     public function isConfigured(): bool
     {
         return true;
@@ -99,11 +94,6 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
     public function getHashAlgorithm(): ?string
     {
         return 'sha256';
-    }
-
-    public function supportsDirectIdentifier(): bool
-    {
-        return true;
     }
 
     public function fetchSourceData(SourceFetchSpec $spec, float $timeoutSeconds): mixed

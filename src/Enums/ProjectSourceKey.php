@@ -8,7 +8,6 @@ enum ProjectSourceKey: string
     case CurseForge = 'curseforge';
     case Hangar = 'hangar';
     case GitHubReleases = 'github_releases';
-    case Voxel = 'voxel';
 
     public function getLabel(): string
     {
@@ -17,7 +16,6 @@ enum ProjectSourceKey: string
             self::CurseForge => 'CurseForge',
             self::Hangar => 'Hangar',
             self::GitHubReleases => 'GitHub Releases',
-            self::Voxel => 'Voxel',
         };
     }
 }

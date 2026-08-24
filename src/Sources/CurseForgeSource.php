@@ -95,11 +95,6 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         return 'CurseForge';
     }
 
-    public function requiresApiKey(): bool
-    {
-        return true;
-    }
-
     public function isConfigured(): bool
     {
         return filled($this->apiKey());
@@ -123,11 +118,6 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     public function getHashAlgorithm(): ?string
     {
         return 'murmur2';
-    }
-
-    public function supportsDirectIdentifier(): bool
-    {
-        return true;
     }
 
     /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */

@@ -56,11 +56,6 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         return 'Modrinth';
     }
 
-    public function requiresApiKey(): bool
-    {
-        return false;
-    }
-
     public function isConfigured(): bool
     {
         return true;
@@ -84,11 +79,6 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
     public function getHashAlgorithm(): ?string
     {
         return 'sha512';
-    }
-
-    public function supportsDirectIdentifier(): bool
-    {
-        return true;
     }
 
     public function fetchSourceData(SourceFetchSpec $spec, float $timeoutSeconds): mixed

@@ -77,13 +77,13 @@ CurseForge, and Hangar default to on. CurseForge is still hidden until its globa
 
 | Field | `.env` key |
 |---|---|
-| Latest Minecraft version | `LATEST_MINECRAFT_VERSION` |
-| Mod navigation sort order | `MINECRAFT_MODRINTH_MOD_NAV_SORT` |
-| Plugin navigation sort order | `MINECRAFT_MODRINTH_PLUGIN_NAV_SORT` |
-| Datapack navigation sort order | `MINECRAFT_MODRINTH_DATAPACK_NAV_SORT` |
-| Resource Pack navigation sort order | `MINECRAFT_MODRINTH_RESOURCEPACK_NAV_SORT` |
-| CurseForge API key | `CURSEFORGE_API_KEY` |
-| GitHub token | `GITHUB_TOKEN` |
+| Latest Minecraft version | `MOD_MANAGER_LATEST_MINECRAFT_VERSION` |
+| Mod navigation sort order | `MOD_MANAGER_MOD_NAV_SORT` |
+| Plugin navigation sort order | `MOD_MANAGER_PLUGIN_NAV_SORT` |
+| Datapack navigation sort order | `MOD_MANAGER_DATAPACK_NAV_SORT` |
+| Resource Pack navigation sort order | `MOD_MANAGER_RESOURCEPACK_NAV_SORT` |
+| CurseForge API key | `MOD_MANAGER_CURSEFORGE_API_KEY` |
+| GitHub token | `MOD_MANAGER_GITHUB_TOKEN` |
 | Allow non-admins to edit egg profiles | `MOD_MANAGER_ALLOW_USER_EGG_PROFILE_EDIT` (default off) |
 | Allow server users to install projects | `MOD_MANAGER_ALLOW_USER_PROJECT_INSTALL` (default off) |
 | Allow server users to update projects, including bulk update | `MOD_MANAGER_ALLOW_USER_PROJECT_UPDATE` (default off) |

@@ -60,11 +60,6 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
         return 'GitHub Releases';
     }
 
-    public function requiresApiKey(): bool
-    {
-        return false;
-    }
-
     public function isConfigured(): bool
     {
         return true;
@@ -92,11 +87,6 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     public function getHashAlgorithm(): ?string
     {
         return null;
-    }
-
-    public function supportsDirectIdentifier(): bool
-    {
-        return true;
     }
 
     public function fetchSourceData(SourceFetchSpec $spec, float $timeoutSeconds): mixed

@@ -17,9 +17,18 @@ return new class extends Migration
             $table->boolean('mod_enabled')->default(true);
             $table->boolean('plugin_enabled')->default(true);
             $table->boolean('datapack_enabled')->default(true);
+            $table->boolean('resourcepack_enabled')->default(true);
+            $table->boolean('modrinth_enabled')->default(true);
+            $table->boolean('curseforge_enabled')->default(true);
+            $table->boolean('hangar_enabled')->default(true);
+            // GitHub Releases was opt-in before server-specific source
+            // settings, so a missing settings row and a fresh row both keep
+            // it disabled until an administrator enables it explicitly.
+            $table->boolean('github_releases_enabled')->default(false);
             $table->integer('mod_navigation_sort')->nullable();
             $table->integer('plugin_navigation_sort')->nullable();
             $table->integer('datapack_navigation_sort')->nullable();
+            $table->integer('resourcepack_navigation_sort')->nullable();
             $table->boolean('allow_user_egg_profile_edit')->nullable();
             $table->boolean('allow_user_project_install')->nullable();
             $table->boolean('allow_user_project_update')->nullable();

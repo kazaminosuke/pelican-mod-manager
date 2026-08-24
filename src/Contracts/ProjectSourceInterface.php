@@ -10,9 +10,9 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
  * Contract implemented by every mod/plugin/datapack/resource-pack source
  * (Modrinth, CurseForge, Hangar, ...).
  *
- * Methods that depend on an optional capability (search, hash lookup, direct-identifier
- * resolution) must be guarded by the matching `supports*()` / `requiresApiKey()` /
- * `isConfigured()` check before being called. Unsupported calls should degrade gracefully
+ * Methods that depend on an optional capability (search or hash lookup) must be
+ * guarded by the matching `supports*()` / `isConfigured()` check before being
+ * called. Unsupported calls should degrade gracefully
  * (empty array / null) rather than throw, except where noted otherwise.
  */
 interface ProjectSourceInterface
@@ -20,8 +20,6 @@ interface ProjectSourceInterface
     public function getKey(): ProjectSourceKey;
 
     public function getLabel(): string;
-
-    public function requiresApiKey(): bool;
 
     public function isConfigured(): bool;
 
@@ -32,7 +30,7 @@ interface ProjectSourceInterface
      *
      * Sources without a catalog (e.g. GitHub Releases, which tracks a specific
      * "owner/repo" rather than browsing an index) return false here and instead
-     * rely on `supportsDirectIdentifier()` / `resolveProjectByIdentifier()`.
+     * use their source-specific direct identifier flow instead.
      */
     public function supportsSearch(): bool;
 
@@ -40,12 +38,6 @@ interface ProjectSourceInterface
 
     /** @return string|null e.g. 'sha512', 'murmur2', or null when `supportsHashLookup()` is false */
     public function getHashAlgorithm(): ?string;
-
-    /**
-     * Whether a project can be tracked by a source-specific direct identifier
-     * (e.g. "owner/repo" for GitHub Releases) instead of catalog search.
-     */
-    public function supportsDirectIdentifier(): bool;
 
     /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
     public function search(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): array;

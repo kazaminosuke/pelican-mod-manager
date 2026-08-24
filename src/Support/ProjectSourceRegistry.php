@@ -28,9 +28,11 @@ class ProjectSourceRegistry
         protected readonly InstalledOperationManager $operations,
         protected readonly ServerModManagerSettings $settings,
     ) {
+        // Preserve the established catalog/hash priority while keeping the
+        // availability filter source-agnostic below.
         $this->sources = [
-            ProjectSourceKey::Modrinth->value => $modrinth,
             ProjectSourceKey::CurseForge->value => $curseForge,
+            ProjectSourceKey::Modrinth->value => $modrinth,
             ProjectSourceKey::Hangar->value => $hangar,
             ProjectSourceKey::GitHubReleases->value => $githubReleases,
         ];
@@ -63,28 +65,12 @@ class ProjectSourceRegistry
      */
     public function availableFor(Server $server, ProjectType $type): array
     {
-        $enabled = [];
-
-        $curseForge = $this->sources[ProjectSourceKey::CurseForge->value];
-        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::CurseForge) && $curseForge->isConfigured()) {
-            $enabled[] = $this->sources[ProjectSourceKey::CurseForge->value];
-        }
-
-        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::Modrinth)) {
-            $enabled[] = $this->sources[ProjectSourceKey::Modrinth->value];
-        }
-
-        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::Hangar)) {
-            $enabled[] = $this->sources[ProjectSourceKey::Hangar->value];
-        }
-
-        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::GitHubReleases)) {
-            $enabled[] = $this->sources[ProjectSourceKey::GitHubReleases->value];
-        }
-
         return array_values(array_filter(
-            $enabled,
-            fn (ProjectSourceInterface $source) => $source->supportsProjectType($type)
+            $this->sources,
+            fn (ProjectSourceInterface $source, string $sourceKey): bool => $this->settings->isSourceEnabled($server, ProjectSourceKey::from($sourceKey))
+                && $source->isConfigured()
+                && $source->supportsProjectType($type),
+            ARRAY_FILTER_USE_BOTH,
         ));
     }
 

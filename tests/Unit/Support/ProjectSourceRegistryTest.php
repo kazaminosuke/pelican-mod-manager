@@ -465,6 +465,20 @@ class ProjectSourceRegistryTest extends TestCase
         bool $supportsAsyncDispatch = false,
         ?ServerModManagerSettings $settings = null,
     ): ProjectSourceRegistry {
+        $modrinth ??= Mockery::mock(ModrinthSource::class);
+        $curseForge ??= Mockery::mock(CurseForgeSource::class);
+        $hangar ??= Mockery::mock(HangarSource::class);
+        $github ??= Mockery::mock(GitHubReleasesSource::class);
+
+        // Registry availability is deliberately source-agnostic: every
+        // registered source owns its configured state, even though only
+        // CurseForge can currently return false. These defaults keep each
+        // test focused on the capability or server switch it varies.
+        $modrinth->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
+        $curseForge->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
+        $hangar->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
+        $github->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
+
         // InstalledOperationManager is final, so it can't be Mockery-mocked
         // directly - construct a real instance and drive
         // supportsAsyncDispatch() through its queue.default config, same
@@ -478,10 +492,10 @@ class ProjectSourceRegistryTest extends TestCase
         );
 
         return new ProjectSourceRegistry(
-            $modrinth ?? Mockery::mock(ModrinthSource::class),
-            $curseForge ?? Mockery::mock(CurseForgeSource::class),
-            $hangar ?? Mockery::mock(HangarSource::class),
-            $github ?? Mockery::mock(GitHubReleasesSource::class),
+            $modrinth,
+            $curseForge,
+            $hangar,
+            $github,
             $operations,
             $settings ?? new ServerModManagerSettings(new ServerModManagerSettingRepository()),
         );
