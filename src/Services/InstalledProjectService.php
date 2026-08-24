@@ -533,22 +533,17 @@ class InstalledProjectService
 
         $scannedInstalled = $this->upsertInstalledEntries($scannedInstalled, array_values($matchedEntries));
 
-        $scannedUnresolved = [];
-        foreach ($remainingFilenames as $filename) {
-            $entry = [
-                'filename' => $filename,
-                'file_signature' => $filesToResolve[$filename]['file_signature'],
-            ];
-
-            if (isset($hashesByFilename[$filename])) {
-                $entry['hashes'] = $hashesByFilename[$filename];
-            }
-
-            $existingUnresolved = $unresolvedByFilename[strtolower($filename)] ?? null;
-            $entry['last_checked_at'] = $this->unresolvedLastCheckedAt($existingUnresolved, $entry);
-
-            $scannedUnresolved[] = $entry;
-        }
+        $resolvedUnmatched = $this->resolveUnmatchedScanFiles(
+            $remainingFilenames,
+            $hashFailures,
+            $lookupFailures,
+            $filesToResolve,
+            $hashesByFilename,
+            $installedByFilename,
+            $unresolvedByFilename,
+        );
+        $scannedInstalled = array_merge($scannedInstalled, $resolvedUnmatched['installed']);
+        $scannedUnresolved = $resolvedUnmatched['unresolved'];
 
         $metadataPersistenceStartedAt = $this->debugTimingEnabled ? microtime(true) : 0.0;
         $saved = $this->metadataRepository->mutate(
@@ -637,6 +632,80 @@ class InstalledProjectService
         }
 
         return $hashes;
+    }
+
+    /**
+     * Keep known installed entries when this scan could not authoritatively
+     * identify a file. Hash/API transport failures are not the same as every
+     * source confirming that the file is unknown.
+     *
+     * @param  array<int, string>  $remainingFilenames
+     * @param  array<int, string>  $hashFailures
+     * @param  array<int, string>  $lookupFailures
+     * @param  array<string, array<string, mixed>>  $filesToResolve
+     * @param  array<string, array{murmur2?: string, sha512?: string, sha256?: string}>  $hashesByFilename
+     * @param  array<string, array<string, mixed>>  $installedByFilename
+     * @param  array<string, array<string, mixed>>  $unresolvedByFilename
+     * @return array{installed: array<int, array<string, mixed>>, unresolved: array<int, array<string, mixed>>}
+     */
+    protected function resolveUnmatchedScanFiles(
+        array $remainingFilenames,
+        array $hashFailures,
+        array $lookupFailures,
+        array $filesToResolve,
+        array $hashesByFilename,
+        array $installedByFilename,
+        array $unresolvedByFilename,
+    ): array {
+        $installed = [];
+        $unresolved = [];
+
+        foreach ($remainingFilenames as $filename) {
+            $key = strtolower($filename);
+            $transient = $this->isTransientScanIdentificationFailure($filename, $hashFailures, $lookupFailures);
+            $existingInstalled = $installedByFilename[$key] ?? null;
+
+            if ($transient && is_array($existingInstalled)) {
+                $existingInstalled['file_signature'] = $filesToResolve[$filename]['file_signature'];
+                $installed[] = $existingInstalled;
+
+                continue;
+            }
+
+            $existingUnresolved = $unresolvedByFilename[$key] ?? null;
+
+            if ($transient && is_array($existingUnresolved)) {
+                $unresolved[] = $existingUnresolved;
+
+                continue;
+            }
+
+            $entry = [
+                'filename' => $filename,
+                'file_signature' => $filesToResolve[$filename]['file_signature'],
+            ];
+
+            if (isset($hashesByFilename[$filename])) {
+                $entry['hashes'] = $hashesByFilename[$filename];
+            }
+
+            $entry['last_checked_at'] = $this->unresolvedLastCheckedAt($existingUnresolved, $entry);
+            $unresolved[] = $entry;
+        }
+
+        return [
+            'installed' => $installed,
+            'unresolved' => $unresolved,
+        ];
+    }
+
+    /**
+     * @param  array<int, string>  $hashFailures
+     * @param  array<int, string>  $lookupFailures
+     */
+    protected function isTransientScanIdentificationFailure(string $filename, array $hashFailures, array $lookupFailures): bool
+    {
+        return in_array($filename, $hashFailures, true) || $lookupFailures !== [];
     }
 
     /**

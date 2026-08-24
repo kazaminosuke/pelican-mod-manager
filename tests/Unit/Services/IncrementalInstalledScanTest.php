@@ -130,6 +130,71 @@ class IncrementalInstalledScanTest extends TestCase
         );
     }
 
+    public function test_transient_hash_or_lookup_failure_keeps_known_installed_entries(): void
+    {
+        $service = new TestableInstalledProjectService();
+        $known = $this->entry('sodium', 'sodium.jar', '1');
+        $resolved = $service->exposeResolveUnmatched(
+            remainingFilenames: ['sodium.jar', 'mystery.jar'],
+            hashFailures: ['sodium.jar'],
+            lookupFailures: [],
+            filesToResolve: [
+                'sodium.jar' => ['file_signature' => ['size' => 10, 'modified_at' => 't']],
+                'mystery.jar' => ['file_signature' => ['size' => 11, 'modified_at' => 't']],
+            ],
+            hashesByFilename: [],
+            installedByFilename: ['sodium.jar' => $known],
+            unresolvedByFilename: [],
+        );
+
+        self::assertSame(['sodium'], array_column($resolved['installed'], 'project_id'));
+        self::assertSame(['mystery.jar'], array_column($resolved['unresolved'], 'filename'));
+    }
+
+    public function test_authoritative_miss_without_lookup_failure_demotes_known_entry(): void
+    {
+        $service = new TestableInstalledProjectService();
+        $known = $this->entry('sodium', 'sodium.jar', '1');
+        $resolved = $service->exposeResolveUnmatched(
+            remainingFilenames: ['sodium.jar'],
+            hashFailures: [],
+            lookupFailures: [],
+            filesToResolve: [
+                'sodium.jar' => ['file_signature' => ['size' => 10, 'modified_at' => 't']],
+            ],
+            hashesByFilename: [
+                'sodium.jar' => ['murmur2' => '1', 'sha512' => '2', 'sha256' => '3'],
+            ],
+            installedByFilename: ['sodium.jar' => $known],
+            unresolvedByFilename: [],
+        );
+
+        self::assertSame([], $resolved['installed']);
+        self::assertSame(['sodium.jar'], array_column($resolved['unresolved'], 'filename'));
+    }
+
+    public function test_source_lookup_exception_keeps_known_entry_instead_of_unresolved(): void
+    {
+        $service = new TestableInstalledProjectService();
+        $known = $this->entry('sodium', 'sodium.jar', '1');
+        $resolved = $service->exposeResolveUnmatched(
+            remainingFilenames: ['sodium.jar'],
+            hashFailures: [],
+            lookupFailures: ['modrinth'],
+            filesToResolve: [
+                'sodium.jar' => ['file_signature' => ['size' => 10, 'modified_at' => 't']],
+            ],
+            hashesByFilename: [
+                'sodium.jar' => ['murmur2' => '1', 'sha512' => '2', 'sha256' => '3'],
+            ],
+            installedByFilename: ['sodium.jar' => $known],
+            unresolvedByFilename: [],
+        );
+
+        self::assertSame(['sodium'], array_column($resolved['installed'], 'project_id'));
+        self::assertSame([], $resolved['unresolved']);
+    }
+
     /** @param array<int, array<string, mixed>> $entries */
     private function document(array $entries): InstalledMetadataDocument
     {
@@ -212,5 +277,35 @@ class TestableInstalledProjectService extends InstalledProjectService
     public function exposeUnresolvedLastCheckedAt(?array $existing, array $entry): string
     {
         return $this->unresolvedLastCheckedAt($existing, $entry);
+    }
+
+    /**
+     * @param  array<int, string>  $remainingFilenames
+     * @param  array<int, string>  $hashFailures
+     * @param  array<int, string>  $lookupFailures
+     * @param  array<string, array<string, mixed>>  $filesToResolve
+     * @param  array<string, array<string, string>>  $hashesByFilename
+     * @param  array<string, array<string, mixed>>  $installedByFilename
+     * @param  array<string, array<string, mixed>>  $unresolvedByFilename
+     * @return array{installed: array<int, array<string, mixed>>, unresolved: array<int, array<string, mixed>>}
+     */
+    public function exposeResolveUnmatched(
+        array $remainingFilenames,
+        array $hashFailures,
+        array $lookupFailures,
+        array $filesToResolve,
+        array $hashesByFilename,
+        array $installedByFilename,
+        array $unresolvedByFilename,
+    ): array {
+        return $this->resolveUnmatchedScanFiles(
+            $remainingFilenames,
+            $hashFailures,
+            $lookupFailures,
+            $filesToResolve,
+            $hashesByFilename,
+            $installedByFilename,
+            $unresolvedByFilename,
+        );
     }
 }
