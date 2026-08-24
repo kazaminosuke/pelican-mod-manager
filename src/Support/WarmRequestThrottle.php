@@ -16,7 +16,7 @@ use Illuminate\Cache\RateLimiter;
  * rather than being tracked per-process - a single in-memory counter would
  * only cap one worker's traffic, not the fleet's.
  *
- * See config/pelican-minecraft-modrinth.php's warm_rate_limit block for
+ * See config/pelican-mod-manager.php's warm_rate_limit block for
  * where the per-source default numbers come from and which ones are
  * officially published versus a conservative guess.
  */
@@ -63,7 +63,7 @@ final class WarmRequestThrottle
     /** Null means no self-imposed limit is configured for this source. */
     public function perMinuteLimit(string $sourceKey): ?int
     {
-        $configured = config("pelican-minecraft-modrinth.warm_rate_limit.$sourceKey");
+        $configured = config("pelican-mod-manager.warm_rate_limit.$sourceKey");
 
         return is_numeric($configured) ? (int) $configured : null;
     }

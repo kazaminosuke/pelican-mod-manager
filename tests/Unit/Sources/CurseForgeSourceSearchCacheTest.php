@@ -132,7 +132,7 @@ class CurseForgeSourceSearchCacheTest extends TestCase
             // MinecraftVersionResolver::resolve() (called from search())
             // would also invoke EggProfileResolver::resolve() against the
             // bare Server mock below, which stubs none of that.
-            'pelican-minecraft-modrinth' => ['curseforge_api_key' => $key, 'egg_autodetect_enabled' => false],
+            'pelican-mod-manager' => ['curseforge_api_key' => $key, 'egg_autodetect_enabled' => false],
         ]));
         Container::setInstance($container);
     }

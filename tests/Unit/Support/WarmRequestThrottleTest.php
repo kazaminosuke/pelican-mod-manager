@@ -96,7 +96,7 @@ class WarmRequestThrottleTest extends TestCase
     {
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => ['warm_rate_limit' => $limits],
+            'pelican-mod-manager' => ['warm_rate_limit' => $limits],
         ]));
         Container::setInstance($container);
 

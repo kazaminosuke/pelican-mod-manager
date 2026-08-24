@@ -203,7 +203,7 @@ holding `SubuserPermission::StartupUpdate` on that server can save one, the same
 already lets them edit its Minecraft-version startup variable. A save applies to every server
 sharing that egg, not just the one it was made from.
 
-`config('pelican-minecraft-modrinth.egg_autodetect_enabled')` (env `MOD_MANAGER_EGG_AUTODETECT`,
+`config('pelican-mod-manager.egg_autodetect_enabled')` (env `MOD_MANAGER_EGG_AUTODETECT`,
 default `true`) is the overall kill switch - `false` reverts every wired method to exactly its
 pre-auto-detection behavior. `egg_profiles_extra_path` (env `MOD_MANAGER_EGG_PROFILES_PATH`) merges
 in an operator-supplied JSON file in the same shape as `resources/egg-profiles.json`, for a
@@ -278,5 +278,5 @@ expire on their own TTL later.
    `Support\ProjectSourceRegistry` (constructor wiring + `availableFor()`'s egg-feature gate, if the
    source should be opt-in per egg like CurseForge/Hangar/GitHub Releases).
 4. Add its config keys (API key, rate limit default) to
-   `config/pelican-minecraft-modrinth.php` and the settings screen if it needs one.
+   `config/pelican-mod-manager.php` and the settings screen if it needs one.
 5. Update the source table in `README.md` (and `README.ja.md`) and this document.

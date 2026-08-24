@@ -183,7 +183,7 @@ class ProjectOperationAuthorizerTest extends TestCase
         $previousContainer = Container::getInstance();
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => $config,
+            'pelican-mod-manager' => $config,
         ]));
         Container::setInstance($container);
 

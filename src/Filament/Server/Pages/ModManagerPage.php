@@ -328,7 +328,7 @@ class ModManagerPage extends Page implements HasTable
 
     protected static function needsManualEggSetup(Server $server): bool
     {
-        if (!(bool) config('pelican-minecraft-modrinth.egg_autodetect_enabled', true)) {
+        if (!(bool) config('pelican-mod-manager.egg_autodetect_enabled', true)) {
             return false;
         }
 
@@ -362,7 +362,7 @@ class ModManagerPage extends Page implements HasTable
 
     public function boot(): void
     {
-        $this->modManagerTimingEnabled = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $this->modManagerTimingEnabled = (bool) config('pelican-mod-manager.debug_timing', false);
 
         if (!$this->modManagerTimingEnabled) {
             return;
@@ -529,7 +529,7 @@ class ModManagerPage extends Page implements HasTable
      */
     protected function dispatchCatalogWarm(bool $includeOtherSources = true): void
     {
-        if (!(bool) config('pelican-minecraft-modrinth.warm_catalog_enabled', true)) {
+        if (!(bool) config('pelican-mod-manager.warm_catalog_enabled', true)) {
             return;
         }
 
@@ -765,7 +765,7 @@ class ModManagerPage extends Page implements HasTable
             $this->pollInstalledOperations = false;
 
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.operations.queue_required'))
+                ->title(trans('pelican-mod-manager::strings.operations.queue_required'))
                 ->danger()
                 ->send();
         }
@@ -794,9 +794,9 @@ class ModManagerPage extends Page implements HasTable
     protected function getCatalogSortOptions(): array
     {
         return [
-            'downloads' => trans('pelican-minecraft-modrinth::strings.table.sort.downloads'),
-            'updated' => trans('pelican-minecraft-modrinth::strings.table.sort.updated'),
-            'popularity' => trans('pelican-minecraft-modrinth::strings.table.sort.popularity'),
+            'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
+            'updated' => trans('pelican-mod-manager::strings.table.sort.updated'),
+            'popularity' => trans('pelican-mod-manager::strings.table.sort.popularity'),
         ];
     }
 
@@ -812,7 +812,7 @@ class ModManagerPage extends Page implements HasTable
         /** @var Server $server */
         $server = Filament::getTenant();
 
-        return 'pelican-minecraft-modrinth.catalog-sort.'.$server->getKey();
+        return 'pelican-mod-manager.catalog-sort.'.$server->getKey();
     }
 
     public function updatedCatalogSort(mixed $sort): void
@@ -1283,14 +1283,14 @@ class ModManagerPage extends Page implements HasTable
         $tabs = [];
 
         if (count($sources) <= 1) {
-            $tabs['all'] = Tab::make($sources[0]?->getLabel() ?? trans('pelican-minecraft-modrinth::strings.page.view_all'));
+            $tabs['all'] = Tab::make($sources[0]?->getLabel() ?? trans('pelican-mod-manager::strings.page.view_all'));
         } else {
             foreach ($sources as $source) {
                 $tabs[$source->getKey()->value] = Tab::make($source->getLabel());
             }
         }
 
-        $installedTab = Tab::make(trans('pelican-minecraft-modrinth::strings.page.view_installed'));
+        $installedTab = Tab::make(trans('pelican-mod-manager::strings.page.view_installed'));
         if ($this->installedFilesCount !== null && $this->installedFilesCount >= 0) {
             $installedTab = $installedTab->badge($this->installedFilesCount);
         }
@@ -2211,7 +2211,7 @@ class ModManagerPage extends Page implements HasTable
                         if ($dispatch['reason'] === 'sync_queue' && !$this->operationQueueWarningShown) {
                             $this->operationQueueWarningShown = true;
                             Notification::make()
-                                ->title(trans('pelican-minecraft-modrinth::strings.operations.queue_required'))
+                                ->title(trans('pelican-mod-manager::strings.operations.queue_required'))
                                 ->warning()
                                 ->send();
                         }
@@ -2388,14 +2388,14 @@ class ModManagerPage extends Page implements HasTable
             ->filtersFormWidth(Width::Medium)
             ->filters([
                 SelectFilter::make('catalog_category')
-                    ->label(trans('pelican-minecraft-modrinth::strings.table.filters.category'))
+                    ->label(trans('pelican-mod-manager::strings.table.filters.category'))
                     ->options(fn () => $this->getCatalogCategoryOptions())
                     ->visible(fn () => $this->activeTab !== 'installed' && $this->getCatalogCategoryOptions() !== []),
                 SelectFilter::make('catalog_environment')
-                    ->label(trans('pelican-minecraft-modrinth::strings.table.filters.environment'))
+                    ->label(trans('pelican-mod-manager::strings.table.filters.environment'))
                     ->options([
-                        'server' => trans('pelican-minecraft-modrinth::strings.table.filters.environment_server'),
-                        'client' => trans('pelican-minecraft-modrinth::strings.table.filters.environment_client'),
+                        'server' => trans('pelican-mod-manager::strings.table.filters.environment_server'),
+                        'client' => trans('pelican-mod-manager::strings.table.filters.environment_client'),
                     ])
                     ->visible(fn () => $this->activeTab !== 'installed' && $this->getCurrentSource()?->getKey() === ProjectSourceKey::Modrinth),
             ])
@@ -2403,7 +2403,7 @@ class ModManagerPage extends Page implements HasTable
                 $currentSource = $this->getCurrentSource();
 
                 if ($this->activeTab !== 'installed' && $currentSource && !$currentSource->isConfigured()) {
-                    return trans('pelican-minecraft-modrinth::strings.page.source_not_configured_heading');
+                    return trans('pelican-mod-manager::strings.page.source_not_configured_heading');
                 }
 
                 return null;
@@ -2412,7 +2412,7 @@ class ModManagerPage extends Page implements HasTable
                 $currentSource = $this->getCurrentSource();
 
                 if ($this->activeTab !== 'installed' && $currentSource && !$currentSource->isConfigured()) {
-                    return trans('pelican-minecraft-modrinth::strings.page.source_not_configured');
+                    return trans('pelican-mod-manager::strings.page.source_not_configured');
                 }
 
                 return null;
@@ -2431,14 +2431,14 @@ class ModManagerPage extends Page implements HasTable
                     ->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])
                     ->extraImgAttributes(fn (array $record): array => $this->projectIconImgAttributes($record)),
                 TextColumn::make('title')
-                    ->label(trans('pelican-minecraft-modrinth::strings.table.columns.title'))
+                    ->label(trans('pelican-mod-manager::strings.table.columns.title'))
                     ->searchable()
                     ->wrap()
                     ->lineClamp(1)
                     ->extraCellAttributes(['data-mmr-swr-cell' => 'title'])
                     ->description(function (array $record): ?string {
                         if ($record['untracked'] ?? false) {
-                            return trans('pelican-minecraft-modrinth::strings.badges.untracked');
+                            return trans('pelican-mod-manager::strings.badges.untracked');
                         }
 
                         $description = $record['description'] ?? null;
@@ -2449,7 +2449,7 @@ class ModManagerPage extends Page implements HasTable
                         return $this->truncateProjectDescription($description);
                     }),
                 TextColumn::make('source')
-                    ->label(trans('pelican-minecraft-modrinth::strings.table.columns.source'))
+                    ->label(trans('pelican-mod-manager::strings.table.columns.source'))
                     ->badge()
                     ->extraCellAttributes(['data-mmr-swr-cell' => 'source'])
                     ->formatStateUsing(fn (?string $state) => $this->getSourceLabel($state))
@@ -2463,18 +2463,18 @@ class ModManagerPage extends Page implements HasTable
                     ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1)
                     ->toggleable(),
                 TextColumn::make('author')
-                    ->label(trans('pelican-minecraft-modrinth::strings.table.columns.author'))
+                    ->label(trans('pelican-mod-manager::strings.table.columns.author'))
                     ->url(fn (array $record, $state) => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && $state) ? "https://modrinth.com/user/$state" : null, true)
                     ->extraCellAttributes(['data-mmr-swr-cell' => 'author'])
                     ->toggleable(),
                 TextColumn::make('downloads')
-                    ->label(trans('pelican-minecraft-modrinth::strings.table.columns.downloads'))
+                    ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
                     ->numeric()
                     ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="downloads" aria-hidden="true"></span>'))
                     ->extraCellAttributes(['data-mmr-swr-cell' => 'downloads'])
                     ->toggleable(),
                 TextColumn::make('date_modified')
-                    ->label(trans('pelican-minecraft-modrinth::strings.table.columns.date_modified'))
+                    ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
                     ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="calendar" aria-hidden="true"></span>'))
                     ->formatStateUsing(fn ($state): string => $this->formatExternalProjectDate($state))
                     ->tooltip(function ($state) use ($table): string {
@@ -2494,7 +2494,7 @@ class ModManagerPage extends Page implements HasTable
             }, true)
             ->recordActions([
                 CatalogRowAction::compact('versions', 'info')
-                    ->tooltip(trans('pelican-minecraft-modrinth::strings.actions.versions'))
+                    ->tooltip(trans('pelican-mod-manager::strings.actions.versions'))
                     ->hidden(fn (array $record): bool => $record['untracked'] ?? false)
                     ->modalSubmitAction(false)
                     ->schema(function (array $record) {
@@ -2510,7 +2510,7 @@ class ModManagerPage extends Page implements HasTable
 
                             $sectionComponents = [
                                 TextEntry::make('type_' . $versionIndex)
-                                    ->label(trans('pelican-minecraft-modrinth::strings.version.type'))
+                                    ->label(trans('pelican-mod-manager::strings.version.type'))
                                     ->state($versionData['version_type'] ?? '')
                                     ->badge()
                                     ->color(match ($versionData['version_type'] ?? '') {
@@ -2520,25 +2520,25 @@ class ModManagerPage extends Page implements HasTable
                                         default => 'gray',
                                     }),
                                 TextEntry::make('downloads_' . $versionIndex)
-                                    ->label(trans('pelican-minecraft-modrinth::strings.version.downloads'))
+                                    ->label(trans('pelican-mod-manager::strings.version.downloads'))
                                     ->state($versionData['downloads'] ?? 0)
                                     ->icon('tabler-download')
                                     ->numeric(),
                                 TextEntry::make('published_' . $versionIndex)
-                                    ->label(trans('pelican-minecraft-modrinth::strings.version.published'))
+                                    ->label(trans('pelican-mod-manager::strings.version.published'))
                                     ->state(fn (): string => $this->formatExternalProjectDate($versionData['date_published'] ?? null)),
                             ];
 
                             if (!empty($versionData['changelog'])) {
                                 $sectionComponents[] = TextEntry::make('changelog_' . $versionIndex)
-                                    ->label(trans('pelican-minecraft-modrinth::strings.version.changelog'))
+                                    ->label(trans('pelican-mod-manager::strings.version.changelog'))
                                     ->state($versionData['changelog'])
                                     ->markdown();
                             }
 
                             if (($versionData['id'] ?? null) === $installedVersionId) {
                                 $headerAction = Action::make('installed_' . $versionIndex)
-                                    ->label(trans('pelican-minecraft-modrinth::strings.actions.installed'))
+                                    ->label(trans('pelican-mod-manager::strings.actions.installed'))
                                     ->icon('tabler-check')
                                     ->color('success')
                                     ->disabled();
@@ -2546,7 +2546,7 @@ class ModManagerPage extends Page implements HasTable
                                 $sectionIconColor = 'success';
                             } else {
                                 $headerAction = Action::make('install_version_' . $versionIndex)
-                                    ->label(trans('pelican-minecraft-modrinth::strings.actions.install'))
+                                    ->label(trans('pelican-mod-manager::strings.actions.install'))
                                     ->icon('tabler-download')
                                     ->authorize(fn (): bool => $this->canManageCurrentInstallOrUpdate())
                                     ->disabled($primaryFile === null)
@@ -2585,8 +2585,8 @@ class ModManagerPage extends Page implements HasTable
                                             $this->flushCachedTableRecords();
 
                                             Notification::make()
-                                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.install_success'))
-                                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.install_success_body', [
+                                                ->title(trans('pelican-mod-manager::strings.notifications.install_success'))
+                                                ->body(trans('pelican-mod-manager::strings.notifications.install_success_body', [
                                                     'name' => $record['title'],
                                                     'version' => $versionData['version_number'],
                                                 ]))
@@ -2600,8 +2600,8 @@ class ModManagerPage extends Page implements HasTable
                                             $this->flushCachedTableRecords();
 
                                             Notification::make()
-                                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.install_failed'))
-                                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.install_failed_body'))
+                                                ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
+                                                ->body(trans('pelican-mod-manager::strings.notifications.install_failed_body'))
                                                 ->danger()
                                                 ->send();
                                         }
@@ -2626,7 +2626,7 @@ class ModManagerPage extends Page implements HasTable
                         return $sections;
                     }),
                 CatalogRowAction::compact('install_latest', 'success')
-                    ->tooltip(trans('pelican-minecraft-modrinth::strings.actions.install_latest'))
+                    ->tooltip(trans('pelican-mod-manager::strings.actions.install_latest'))
                     ->authorize(fn (): bool => $this->canManageCurrentInstallOrUpdate())
                     ->hidden(fn (array $record): bool => $record['untracked'] ?? false)
                     ->visible(function (array $record) {
@@ -2681,8 +2681,8 @@ class ModManagerPage extends Page implements HasTable
                             $this->forgetVersionCaches();
 
                             Notification::make()
-                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.install_success'))
-                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.install_success_body', [
+                                ->title(trans('pelican-mod-manager::strings.notifications.install_success'))
+                                ->body(trans('pelican-mod-manager::strings.notifications.install_success_body', [
                                     'name' => $record['title'],
                                     'version' => $latestVersion['version_number'],
                                 ]))
@@ -2695,14 +2695,14 @@ class ModManagerPage extends Page implements HasTable
                             $this->forgetVersionCaches();
 
                             Notification::make()
-                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.install_failed'))
-                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.install_failed_body'))
+                                ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
+                                ->body(trans('pelican-mod-manager::strings.notifications.install_failed_body'))
                                 ->danger()
                                 ->send();
                         }
                     }),
                 CatalogRowAction::compact('update', 'warning')
-                    ->tooltip(trans('pelican-minecraft-modrinth::strings.actions.update'))
+                    ->tooltip(trans('pelican-mod-manager::strings.actions.update'))
                     ->authorize(fn (): bool => $this->canManageCurrentProjectOperation(ProjectOperation::Update))
                     ->hidden(fn (array $record): bool => $record['untracked'] ?? false)
                     ->visible(function (array $record) {
@@ -2734,13 +2734,13 @@ class ModManagerPage extends Page implements HasTable
                         return $installedMod['version_id'] !== ($latestVersion['id'] ?? null);
                     })
                     ->requiresConfirmation()
-                    ->modalHeading(trans('pelican-minecraft-modrinth::strings.modals.update_heading'))
+                    ->modalHeading(trans('pelican-mod-manager::strings.modals.update_heading'))
                     ->modalDescription(function (array $record) {
                         $sourceKey = $record['source'] ?? ProjectSourceKey::Modrinth->value;
                         $installedMod = $this->getInstalledMod($record['project_id'], $sourceKey);
                         $latestVersion = $this->getCachedLatestVersion($record['project_id'], $sourceKey);
 
-                        return trans('pelican-minecraft-modrinth::strings.modals.update_description', [
+                        return trans('pelican-mod-manager::strings.modals.update_description', [
                             'old_version' => $installedMod['version_number'] ?? 'unknown',
                             'new_version' => $latestVersion['version_number'] ?? 'unknown',
                         ]);
@@ -2800,8 +2800,8 @@ class ModManagerPage extends Page implements HasTable
                             $this->forgetVersionCaches();
 
                             Notification::make()
-                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.update_success'))
-                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.update_success_body', [
+                                ->title(trans('pelican-mod-manager::strings.notifications.update_success'))
+                                ->body(trans('pelican-mod-manager::strings.notifications.update_success_body', [
                                     'version' => $latestVersion['version_number'],
                                 ]))
                                 ->success()
@@ -2813,14 +2813,14 @@ class ModManagerPage extends Page implements HasTable
                             $this->forgetVersionCaches();
 
                             Notification::make()
-                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.update_failed'))
-                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.update_failed_body'))
+                                ->title(trans('pelican-mod-manager::strings.notifications.update_failed'))
+                                ->body(trans('pelican-mod-manager::strings.notifications.update_failed_body'))
                                 ->danger()
                                 ->send();
                         }
                     }),
                 CatalogRowAction::compact('installed', 'success')
-                    ->tooltip(trans('pelican-minecraft-modrinth::strings.actions.installed'))
+                    ->tooltip(trans('pelican-mod-manager::strings.actions.installed'))
                     ->disabled()
                     ->hidden(fn (array $record): bool => $record['untracked'] ?? false)
                     ->visible(function (array $record) {
@@ -2854,7 +2854,7 @@ class ModManagerPage extends Page implements HasTable
                         return $installedMod['version_id'] === ($latestVersion['id'] ?? null);
                     }),
                 CatalogRowAction::compact('uninstall', 'danger')
-                    ->tooltip(trans('pelican-minecraft-modrinth::strings.actions.uninstall'))
+                    ->tooltip(trans('pelican-mod-manager::strings.actions.uninstall'))
                     ->authorize(fn (): bool => $this->canManageCurrentProjectOperation(ProjectOperation::Delete))
                     ->visible(function (array $record) {
                         if (($record['untracked'] ?? false) === true) {
@@ -2868,8 +2868,8 @@ class ModManagerPage extends Page implements HasTable
                         return !is_null($this->getInstalledMod($record['project_id'], $record['source'] ?? ProjectSourceKey::Modrinth->value));
                     })
                     ->requiresConfirmation()
-                    ->modalHeading(fn (array $record) => trans('pelican-minecraft-modrinth::strings.modals.uninstall_heading'))
-                    ->modalDescription(fn (array $record) => trans('pelican-minecraft-modrinth::strings.modals.uninstall_description', ['name' => $record['title']]))
+                    ->modalHeading(fn (array $record) => trans('pelican-mod-manager::strings.modals.uninstall_heading'))
+                    ->modalDescription(fn (array $record) => trans('pelican-mod-manager::strings.modals.uninstall_description', ['name' => $record['title']]))
                     ->action(function (array $record, DaemonFileRepository $fileRepository) {
                         try {
                             /** @var Server $server */
@@ -2891,8 +2891,8 @@ class ModManagerPage extends Page implements HasTable
                             );
 
                             Notification::make()
-                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.uninstall_success'))
-                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.uninstall_success_body', [
+                                ->title(trans('pelican-mod-manager::strings.notifications.uninstall_success'))
+                                ->body(trans('pelican-mod-manager::strings.notifications.uninstall_success_body', [
                                     'name' => $record['title'],
                                 ]))
                                 ->success()
@@ -2908,8 +2908,8 @@ class ModManagerPage extends Page implements HasTable
                             }
 
                             Notification::make()
-                                ->title(trans('pelican-minecraft-modrinth::strings.notifications.uninstall_failed'))
-                                ->body(trans('pelican-minecraft-modrinth::strings.notifications.uninstall_failed_body'))
+                                ->title(trans('pelican-mod-manager::strings.notifications.uninstall_failed'))
+                                ->body(trans('pelican-mod-manager::strings.notifications.uninstall_failed_body'))
                                 ->danger()
                                 ->send();
                         }
@@ -2966,21 +2966,21 @@ class ModManagerPage extends Page implements HasTable
 
         return [
             Action::make('open_folder')
-                ->label(fn () => trans('pelican-minecraft-modrinth::strings.page.open_folder', ['folder' => $folder]))
-                ->tooltip(fn () => trans('pelican-minecraft-modrinth::strings.page.open_folder', ['folder' => $folder]))
+                ->label(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
+                ->tooltip(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->icon('tabler-folder-open')
                 ->url(fn () => ListFiles::getUrl(['path' => $folder]), true),
             Action::make('track_github_repo')
-                ->label(trans('pelican-minecraft-modrinth::strings.actions.track_github_repo'))
+                ->label(trans('pelican-mod-manager::strings.actions.track_github_repo'))
                 ->icon('tabler-brand-github')
                 ->authorize(fn (): bool => $this->canManageInstallOrUpdate($server))
                 ->disabled(fn () => !$githubSource?->isConfigured())
-                ->tooltip(fn () => $githubSource?->isConfigured() ? null : trans('pelican-minecraft-modrinth::strings.page.source_not_configured'))
+                ->tooltip(fn () => $githubSource?->isConfigured() ? null : trans('pelican-mod-manager::strings.page.source_not_configured'))
                 ->schema([
                     TextInput::make('repository')
-                        ->label(trans('pelican-minecraft-modrinth::strings.page.github_repo_label'))
+                        ->label(trans('pelican-mod-manager::strings.page.github_repo_label'))
                         ->placeholder('owner/repo')
-                        ->helperText(trans('pelican-minecraft-modrinth::strings.page.github_repo_helper'))
+                        ->helperText(trans('pelican-mod-manager::strings.page.github_repo_helper'))
                         ->required(),
                 ])
                 ->action(function (array $data, DaemonFileRepository $fileRepository) use ($server, $type, $githubSource) {
@@ -3031,8 +3031,8 @@ class ModManagerPage extends Page implements HasTable
                         $this->flushCachedTableRecords();
 
                         Notification::make()
-                            ->title(trans('pelican-minecraft-modrinth::strings.notifications.install_success'))
-                            ->body(trans('pelican-minecraft-modrinth::strings.notifications.install_success_body', [
+                            ->title(trans('pelican-mod-manager::strings.notifications.install_success'))
+                            ->body(trans('pelican-mod-manager::strings.notifications.install_success_body', [
                                 'name' => $project['title'],
                                 'version' => $latestVersion['version_number'],
                             ]))
@@ -3042,8 +3042,8 @@ class ModManagerPage extends Page implements HasTable
                         report($exception);
 
                         Notification::make()
-                            ->title(trans('pelican-minecraft-modrinth::strings.notifications.install_failed'))
-                            ->body(trans('pelican-minecraft-modrinth::strings.notifications.install_failed_body'))
+                            ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
+                            ->body(trans('pelican-mod-manager::strings.notifications.install_failed_body'))
                             ->danger()
                             ->send();
                     }
@@ -3051,9 +3051,9 @@ class ModManagerPage extends Page implements HasTable
                 ->visible(fn () => $githubAvailable && $this->canManageInstallOrUpdate($server)),
             Action::make('update_all')
                 ->label(fn () => trans(match ($type) {
-                    ProjectType::Plugin => 'pelican-minecraft-modrinth::strings.actions.update_all_plugins',
-                    ProjectType::Datapack => 'pelican-minecraft-modrinth::strings.actions.update_all_datapacks',
-                    default => 'pelican-minecraft-modrinth::strings.actions.update_all_mods',
+                    ProjectType::Plugin => 'pelican-mod-manager::strings.actions.update_all_plugins',
+                    ProjectType::Datapack => 'pelican-mod-manager::strings.actions.update_all_datapacks',
+                    default => 'pelican-mod-manager::strings.actions.update_all_mods',
                 }))
                 ->icon('tabler-download')
                 ->color('warning')
@@ -3108,27 +3108,27 @@ class ModManagerPage extends Page implements HasTable
                     ->extraAttributes(['class' => 'mmr-page-header'])
                     ->schema([
                         TextEntry::make('minecraft_version')
-                            ->label(trans('pelican-minecraft-modrinth::strings.page.minecraft_version'))
-                            ->state(fn () => ModManager::getMinecraftVersion($server) ?? trans('pelican-minecraft-modrinth::strings.page.unknown'))
+                            ->label(trans('pelican-mod-manager::strings.page.minecraft_version'))
+                            ->state(fn () => ModManager::getMinecraftVersion($server) ?? trans('pelican-mod-manager::strings.page.unknown'))
                             ->badge()
                             ->size(TextSize::Large),
                         ...($type === ProjectType::Datapack ? [
                             TextEntry::make('world')
-                                ->label(trans('pelican-minecraft-modrinth::strings.page.world'))
+                                ->label(trans('pelican-mod-manager::strings.page.world'))
                                 ->state(fn (DaemonFileRepository $fileRepository) => $this->getCachedDatapackWorldName($server, $fileRepository))
                                 ->badge()
                                 ->size(TextSize::Large),
                         ] : []),
                         TextEntry::make('loader')
-                            ->label(trans('pelican-minecraft-modrinth::strings.page.loader'))
-                            ->state(fn () => MinecraftLoader::fromServer($server)?->getLabel() ?? trans('pelican-minecraft-modrinth::strings.page.unknown'))
+                            ->label(trans('pelican-mod-manager::strings.page.loader'))
+                            ->state(fn () => MinecraftLoader::fromServer($server)?->getLabel() ?? trans('pelican-mod-manager::strings.page.unknown'))
                             ->icon(function () use ($server) {
                                 $loader = MinecraftLoader::fromServer($server);
                                 if (!$loader) {
                                     return null;
                                 }
                                 $name = strtolower($loader->name);
-                                $path = plugin_path('pelican-minecraft-modrinth', 'resources/icons/loaders/' . $name . '.svg');
+                                $path = plugin_path('pelican-mod-manager', 'resources/icons/loaders/' . $name . '.svg');
 
                                 return file_exists($path) ? 'mcloader-' . $name : null;
                             })
@@ -3138,7 +3138,7 @@ class ModManagerPage extends Page implements HasTable
                             // "the egg's own explicit tags" vs "a profile
                             // database match" vs "a manual override" without
                             // reading logs.
-                            ->tooltip(fn () => trans('pelican-minecraft-modrinth::strings.page.resolved_by', ['source' => $this->eggResolutionSourceLabel($server)]))
+                            ->tooltip(fn () => trans('pelican-mod-manager::strings.page.resolved_by', ['source' => $this->eggResolutionSourceLabel($server)]))
                             ->badge()
                             ->size(TextSize::Large)
                             ->extraAttributes(['class' => 'mcloader-badge']),
@@ -3149,10 +3149,10 @@ class ModManagerPage extends Page implements HasTable
                             // own $type?-> uses, this one is provably dead
                             // defensiveness - confirmed by PHPStan flagging
                             // it once that guard was added.
-                            ->label(fn () => trans('pelican-minecraft-modrinth::strings.page.installed', ['type' => $type->getLabel()]))
+                            ->label(fn () => trans('pelican-mod-manager::strings.page.installed', ['type' => $type->getLabel()]))
                             ->state(fn () => match (true) {
                                 $this->installedFilesCount === null => '…',
-                                $this->installedFilesCount < 0 => trans('pelican-minecraft-modrinth::strings.page.unknown'),
+                                $this->installedFilesCount < 0 => trans('pelican-mod-manager::strings.page.unknown'),
                                 default => $this->installedFilesCount,
                             })
                             ->badge()
@@ -3263,7 +3263,7 @@ class ModManagerPage extends Page implements HasTable
         $noticeEntries = [
             TextEntry::make('egg_manual_setup_notice')
                 ->hiddenLabel()
-                ->state(trans('pelican-minecraft-modrinth::strings.page.egg_manual_setup_heading').' — '.trans('pelican-minecraft-modrinth::strings.page.egg_manual_setup_description'))
+                ->state(trans('pelican-mod-manager::strings.page.egg_manual_setup_heading').' — '.trans('pelican-mod-manager::strings.page.egg_manual_setup_description'))
                 ->icon('tabler-alert-triangle')
                 ->color('warning'),
         ];
@@ -3271,7 +3271,7 @@ class ModManagerPage extends Page implements HasTable
         if (!$canEdit && !$isAdmin) {
             $noticeEntries[] = TextEntry::make('egg_manual_setup_readonly')
                 ->hiddenLabel()
-                ->state(trans('pelican-minecraft-modrinth::strings.page.egg_manual_setup_readonly'))
+                ->state(trans('pelican-mod-manager::strings.page.egg_manual_setup_readonly'))
                 ->color('gray');
         }
 
@@ -3279,11 +3279,11 @@ class ModManagerPage extends Page implements HasTable
 
         if ($canEdit) {
             $actions[] = Action::make('configure_egg_profile')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles'))
+                ->label(trans('pelican-mod-manager::strings.settings.egg_profiles'))
                 ->color('primary')
                 ->icon('tabler-egg')
-                ->modalHeading(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_confirmation_heading'))
-                ->modalDescription(trans('pelican-minecraft-modrinth::strings.page.egg_manual_setup_form_warning'))
+                ->modalHeading(trans('pelican-mod-manager::strings.settings.egg_profiles_confirmation_heading'))
+                ->modalDescription(trans('pelican-mod-manager::strings.page.egg_manual_setup_form_warning'))
                 ->schema(ModManagerPlugin::eggProfileFormSchema(includeEggSelect: false))
                 ->fillForm(function () use ($server): array {
                     $server->loadMissing('egg');
@@ -3312,7 +3312,7 @@ class ModManagerPage extends Page implements HasTable
             // canEditEggProfile()) - the settings screen's own version of
             // this form isn't server-scoped, so it works regardless.
             $actions[] = Action::make('goto_egg_settings')
-                ->label(trans('pelican-minecraft-modrinth::strings.page.egg_manual_setup_admin_action'))
+                ->label(trans('pelican-mod-manager::strings.page.egg_manual_setup_admin_action'))
                 ->color('gray')
                 ->icon('tabler-settings')
                 ->url(fn () => PluginResource::getUrl('index', panel: 'admin'));
@@ -3350,24 +3350,24 @@ class ModManagerPage extends Page implements HasTable
         $server->loadMissing('egg');
 
         if (ProjectType::fromServerExplicit($server) !== null || MinecraftLoader::fromTags($server->egg->tags ?? []) !== null) {
-            return trans('pelican-minecraft-modrinth::strings.page.resolved_by_explicit');
+            return trans('pelican-mod-manager::strings.page.resolved_by_explicit');
         }
 
-        if (!(bool) config('pelican-minecraft-modrinth.egg_autodetect_enabled', true)) {
-            return trans('pelican-minecraft-modrinth::strings.page.resolved_by_none');
+        if (!(bool) config('pelican-mod-manager.egg_autodetect_enabled', true)) {
+            return trans('pelican-mod-manager::strings.page.resolved_by_none');
         }
 
         $source = EggProfileResolver::resolve($server)->source;
 
-        return trans('pelican-minecraft-modrinth::strings.page.resolved_by_'.$source);
+        return trans('pelican-mod-manager::strings.page.resolved_by_'.$source);
     }
 
     protected function getRescanActionLabel(?ProjectType $type): string
     {
         return trans(match ($type) {
-            ProjectType::Plugin => 'pelican-minecraft-modrinth::strings.actions.rescan_plugins_for_updates',
-            ProjectType::Datapack => 'pelican-minecraft-modrinth::strings.actions.rescan_datapacks_for_updates',
-            default => 'pelican-minecraft-modrinth::strings.actions.rescan_mods_for_updates',
+            ProjectType::Plugin => 'pelican-mod-manager::strings.actions.rescan_plugins_for_updates',
+            ProjectType::Datapack => 'pelican-mod-manager::strings.actions.rescan_datapacks_for_updates',
+            default => 'pelican-mod-manager::strings.actions.rescan_mods_for_updates',
         });
     }
 
@@ -3746,26 +3746,26 @@ class ModManagerPage extends Page implements HasTable
 
         if ($installedOperation === null) {
             return trans($this->operationQueueWarningShown
-                ? 'pelican-minecraft-modrinth::strings.operations.queue_required'
-                : 'pelican-minecraft-modrinth::strings.operations.checking');
+                ? 'pelican-mod-manager::strings.operations.queue_required'
+                : 'pelican-mod-manager::strings.operations.checking');
         }
 
         $operation = trans(
             $installedOperation['operation'] === InstalledOperationManager::OPERATION_BULK_UPDATE
-                ? 'pelican-minecraft-modrinth::strings.operations.bulk_update'
-                : 'pelican-minecraft-modrinth::strings.operations.scan',
+                ? 'pelican-mod-manager::strings.operations.bulk_update'
+                : 'pelican-mod-manager::strings.operations.scan',
         );
         $status = $installedOperation['status'] ?? null;
         $progress = (int) ($installedOperation['progress'] ?? 0);
         $total = $installedOperation['total'] ?? null;
 
         return match ($status) {
-            InstalledOperationState::STATUS_QUEUED => trans('pelican-minecraft-modrinth::strings.operations.queued', compact('operation')),
+            InstalledOperationState::STATUS_QUEUED => trans('pelican-mod-manager::strings.operations.queued', compact('operation')),
             InstalledOperationState::STATUS_RUNNING => is_int($total) && $total > 0
-                ? trans('pelican-minecraft-modrinth::strings.operations.running_progress', compact('operation', 'progress', 'total'))
-                : trans('pelican-minecraft-modrinth::strings.operations.running', compact('operation')),
-            InstalledOperationState::STATUS_COMPLETED => trans('pelican-minecraft-modrinth::strings.operations.completed', compact('operation')),
-            InstalledOperationState::STATUS_FAILED => trans('pelican-minecraft-modrinth::strings.operations.failed', compact('operation')),
+                ? trans('pelican-mod-manager::strings.operations.running_progress', compact('operation', 'progress', 'total'))
+                : trans('pelican-mod-manager::strings.operations.running', compact('operation')),
+            InstalledOperationState::STATUS_COMPLETED => trans('pelican-mod-manager::strings.operations.completed', compact('operation')),
+            InstalledOperationState::STATUS_FAILED => trans('pelican-mod-manager::strings.operations.failed', compact('operation')),
             default => '',
         };
     }
@@ -3774,11 +3774,11 @@ class ModManagerPage extends Page implements HasTable
     {
         if ($state->status === InstalledOperationState::STATUS_FAILED) {
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.operations.failed', [
+                ->title(trans('pelican-mod-manager::strings.operations.failed', [
                     'operation' => trans(
                         $state->operation === InstalledOperationManager::OPERATION_BULK_UPDATE
-                            ? 'pelican-minecraft-modrinth::strings.operations.bulk_update'
-                            : 'pelican-minecraft-modrinth::strings.operations.scan',
+                            ? 'pelican-mod-manager::strings.operations.bulk_update'
+                            : 'pelican-mod-manager::strings.operations.scan',
                     ),
                 ]))
                 ->danger()
@@ -3793,7 +3793,7 @@ class ModManagerPage extends Page implements HasTable
 
             if ($updated === 0 && $failed === 0) {
                 Notification::make()
-                    ->title(trans('pelican-minecraft-modrinth::strings.notifications.bulk_update_none'))
+                    ->title(trans('pelican-mod-manager::strings.notifications.bulk_update_none'))
                     ->info()
                     ->send();
 
@@ -3802,11 +3802,11 @@ class ModManagerPage extends Page implements HasTable
 
             $notification = Notification::make()
                 ->title($failed > 0
-                    ? trans('pelican-minecraft-modrinth::strings.notifications.bulk_update_partial', [
+                    ? trans('pelican-mod-manager::strings.notifications.bulk_update_partial', [
                         'updated' => $updated,
                         'failed' => $failed,
                     ])
-                    : trans('pelican-minecraft-modrinth::strings.notifications.bulk_update_success', ['count' => $updated]));
+                    : trans('pelican-mod-manager::strings.notifications.bulk_update_success', ['count' => $updated]));
 
             if ($failed > 0) {
                 $notification->warning();
@@ -3842,7 +3842,7 @@ class ModManagerPage extends Page implements HasTable
             }
 
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.operations.dispatched'))
+                ->title(trans('pelican-mod-manager::strings.operations.dispatched'))
                 ->info()
                 ->send();
 
@@ -3866,9 +3866,9 @@ class ModManagerPage extends Page implements HasTable
         }
 
         $title = match ($reason) {
-            'already_active' => trans('pelican-minecraft-modrinth::strings.operations.already_active'),
-            'sync_queue' => trans('pelican-minecraft-modrinth::strings.operations.queue_required'),
-            default => trans('pelican-minecraft-modrinth::strings.operations.dispatch_failed'),
+            'already_active' => trans('pelican-mod-manager::strings.operations.already_active'),
+            'sync_queue' => trans('pelican-mod-manager::strings.operations.queue_required'),
+            default => trans('pelican-mod-manager::strings.operations.dispatch_failed'),
         };
 
         $notification = Notification::make()

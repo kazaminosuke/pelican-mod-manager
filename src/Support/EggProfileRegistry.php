@@ -4,7 +4,7 @@ namespace Kazaminosuke\ModManager\Support;
 
 /**
  * Loads and indexes resources/egg-profiles.json (plus an optional operator
- * extra file - see config('pelican-minecraft-modrinth.egg_profiles_extra_path')),
+ * extra file - see config('pelican-mod-manager.egg_profiles_extra_path')),
  * and implements the pure matching primitives EggProfileResolver's cascade
  * calls in order (uuid -> update_url -> name+signature -> name -> signature).
  *
@@ -210,9 +210,9 @@ final class EggProfileRegistry
             return self::$profiles;
         }
 
-        $profiles = self::loadFile(plugin_path('pelican-minecraft-modrinth', 'resources', 'egg-profiles.json'));
+        $profiles = self::loadFile(plugin_path('pelican-mod-manager', 'resources', 'egg-profiles.json'));
 
-        $extraPath = config('pelican-minecraft-modrinth.egg_profiles_extra_path');
+        $extraPath = config('pelican-mod-manager.egg_profiles_extra_path');
         if (is_string($extraPath) && $extraPath !== '') {
             $profiles = array_merge($profiles, self::loadFile($extraPath));
         }

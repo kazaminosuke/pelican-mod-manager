@@ -87,7 +87,7 @@ class InstalledProjectService
     {
         set_time_limit(240);
 
-        $this->debugTimingEnabled = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $this->debugTimingEnabled = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = $this->debugTimingEnabled ? microtime(true) : 0.0;
         $resolvedType = $type ?? ProjectType::fromServer($server);
         $cacheKey = $this->getHashScanCacheKey($server, $resolvedType);

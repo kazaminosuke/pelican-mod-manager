@@ -43,7 +43,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
 
     public function getId(): string
     {
-        return 'pelican-minecraft-modrinth';
+        return 'pelican-mod-manager';
     }
 
     public function register(Panel $panel): void
@@ -91,11 +91,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
             fn () => new HtmlString(
                 '<div class="mmr-catalog-sort-toolbar" x-cloak x-show="$wire.activeTab !== \'installed\'">'
-                .'<label for="mmr-catalog-sort" class="fi-sr-only">'.e(trans('pelican-minecraft-modrinth::strings.table.sort.label')).'</label>'
+                .'<label for="mmr-catalog-sort" class="fi-sr-only">'.e(trans('pelican-mod-manager::strings.table.sort.label')).'</label>'
                 .'<select id="mmr-catalog-sort" wire:model.live="catalogSort" class="mmr-catalog-sort-select">'
-                .'<option value="downloads">'.e(trans('pelican-minecraft-modrinth::strings.table.sort.downloads')).'</option>'
-                .'<option value="updated">'.e(trans('pelican-minecraft-modrinth::strings.table.sort.updated')).'</option>'
-                .'<option value="popularity">'.e(trans('pelican-minecraft-modrinth::strings.table.sort.popularity')).'</option>'
+                .'<option value="downloads">'.e(trans('pelican-mod-manager::strings.table.sort.downloads')).'</option>'
+                .'<option value="updated">'.e(trans('pelican-mod-manager::strings.table.sort.updated')).'</option>'
+                .'<option value="popularity">'.e(trans('pelican-mod-manager::strings.table.sort.popularity')).'</option>'
                 .'</select></div>',
             ),
             $pageClasses,
@@ -266,23 +266,23 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // paginator's inline offset back after a morph strips it.
         $panel->renderHook(
             PanelsRenderHook::BODY_END,
-            fn () => view('pelican-minecraft-modrinth::components.table-layout'),
+            fn () => view('pelican-mod-manager::components.table-layout'),
             $pageClasses,
         );
         $panel->renderHook(
             PanelsRenderHook::BODY_END,
-            fn () => view('pelican-minecraft-modrinth::components.table-swr-cache'),
+            fn () => view('pelican-mod-manager::components.table-swr-cache'),
             $pageClasses,
         );
         $panel->renderHook(
             PanelsRenderHook::BODY_END,
-            fn () => view('pelican-minecraft-modrinth::components.catalog-url-history'),
+            fn () => view('pelican-mod-manager::components.catalog-url-history'),
             $pageClasses,
         );
         $panel->renderHook(
             PanelsRenderHook::BODY_END,
-            fn () => config('pelican-minecraft-modrinth.debug_timing')
-                ? view('pelican-minecraft-modrinth::components.performance-profiler')
+            fn () => config('pelican-mod-manager.debug_timing')
+                ? view('pelican-mod-manager::components.performance-profiler')
                 : '',
             $pageClasses,
         );
@@ -299,16 +299,16 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
     public function getSettingsFormData(): array
     {
         return [
-            'latest_minecraft_version' => config('pelican-minecraft-modrinth.latest_minecraft_version', '26.1.2'),
-            'mod_nav_sort' => config('pelican-minecraft-modrinth.navigation_sort.mod', 11),
-            'plugin_nav_sort' => config('pelican-minecraft-modrinth.navigation_sort.plugin', 11),
-            'datapack_nav_sort' => config('pelican-minecraft-modrinth.navigation_sort.datapack', 12),
-            'curseforge_api_key' => config('pelican-minecraft-modrinth.curseforge_api_key'),
-            'github_token' => config('pelican-minecraft-modrinth.github_token'),
-            'allow_user_egg_profile_edit' => (bool) config('pelican-minecraft-modrinth.allow_user_egg_profile_edit', false),
-            'allow_user_project_install' => (bool) config('pelican-minecraft-modrinth.allow_user_project_install', false),
-            'allow_user_project_update' => (bool) config('pelican-minecraft-modrinth.allow_user_project_update', false),
-            'allow_user_project_delete' => (bool) config('pelican-minecraft-modrinth.allow_user_project_delete', false),
+            'latest_minecraft_version' => config('pelican-mod-manager.latest_minecraft_version', '26.1.2'),
+            'mod_nav_sort' => config('pelican-mod-manager.navigation_sort.mod', 11),
+            'plugin_nav_sort' => config('pelican-mod-manager.navigation_sort.plugin', 11),
+            'datapack_nav_sort' => config('pelican-mod-manager.navigation_sort.datapack', 12),
+            'curseforge_api_key' => config('pelican-mod-manager.curseforge_api_key'),
+            'github_token' => config('pelican-mod-manager.github_token'),
+            'allow_user_egg_profile_edit' => (bool) config('pelican-mod-manager.allow_user_egg_profile_edit', false),
+            'allow_user_project_install' => (bool) config('pelican-mod-manager.allow_user_project_install', false),
+            'allow_user_project_update' => (bool) config('pelican-mod-manager.allow_user_project_update', false),
+            'allow_user_project_delete' => (bool) config('pelican-mod-manager.allow_user_project_delete', false),
         ];
     }
 
@@ -316,65 +316,65 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
     {
         return [
             TextInput::make('latest_minecraft_version')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.latest_minecraft_version'))
+                ->label(trans('pelican-mod-manager::strings.settings.latest_minecraft_version'))
                 ->required()
-                ->default(fn () => config('pelican-minecraft-modrinth.latest_minecraft_version', '26.1.2')),
+                ->default(fn () => config('pelican-mod-manager.latest_minecraft_version', '26.1.2')),
             TextInput::make('mod_nav_sort')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.mod_nav_sort'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.nav_sort_helper'))
+                ->label(trans('pelican-mod-manager::strings.settings.mod_nav_sort'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.nav_sort_helper'))
                 ->required()
                 ->integer()
                 ->minValue(NavigationSort::MIN_VALUE)
                 ->maxValue(NavigationSort::MAX_VALUE)
-                ->default(fn () => config('pelican-minecraft-modrinth.navigation_sort.mod', 11)),
+                ->default(fn () => config('pelican-mod-manager.navigation_sort.mod', 11)),
             TextInput::make('plugin_nav_sort')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.plugin_nav_sort'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.nav_sort_helper'))
+                ->label(trans('pelican-mod-manager::strings.settings.plugin_nav_sort'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.nav_sort_helper'))
                 ->required()
                 ->integer()
                 ->minValue(NavigationSort::MIN_VALUE)
                 ->maxValue(NavigationSort::MAX_VALUE)
-                ->default(fn () => config('pelican-minecraft-modrinth.navigation_sort.plugin', 11)),
+                ->default(fn () => config('pelican-mod-manager.navigation_sort.plugin', 11)),
             TextInput::make('datapack_nav_sort')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.datapack_nav_sort'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.nav_sort_helper'))
+                ->label(trans('pelican-mod-manager::strings.settings.datapack_nav_sort'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.nav_sort_helper'))
                 ->required()
                 ->integer()
                 ->minValue(NavigationSort::MIN_VALUE)
                 ->maxValue(NavigationSort::MAX_VALUE)
-                ->default(fn () => config('pelican-minecraft-modrinth.navigation_sort.datapack', 12)),
+                ->default(fn () => config('pelican-mod-manager.navigation_sort.datapack', 12)),
             TextInput::make('curseforge_api_key')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.curseforge_api_key'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.curseforge_api_key_helper'))
+                ->label(trans('pelican-mod-manager::strings.settings.curseforge_api_key'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.curseforge_api_key_helper'))
                 ->password()
                 ->revealable()
-                ->default(fn () => config('pelican-minecraft-modrinth.curseforge_api_key')),
+                ->default(fn () => config('pelican-mod-manager.curseforge_api_key')),
             TextInput::make('github_token')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.github_token'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.github_token_helper'))
+                ->label(trans('pelican-mod-manager::strings.settings.github_token'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.github_token_helper'))
                 ->password()
                 ->revealable()
-                ->default(fn () => config('pelican-minecraft-modrinth.github_token')),
+                ->default(fn () => config('pelican-mod-manager.github_token')),
             // Stage 8: off by default (admin-only egg profile editing). See
             // ModManagerPage's manual-profile form for where this is
             // actually consulted, and EggProfileResolver's docblock for the
             // full auto-detection cascade this only ever supplements.
             Toggle::make('allow_user_egg_profile_edit')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.allow_user_egg_profile_edit'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.allow_user_egg_profile_edit_helper'))
-                ->default(fn () => (bool) config('pelican-minecraft-modrinth.allow_user_egg_profile_edit', false)),
+                ->label(trans('pelican-mod-manager::strings.settings.allow_user_egg_profile_edit'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.allow_user_egg_profile_edit_helper'))
+                ->default(fn () => (bool) config('pelican-mod-manager.allow_user_egg_profile_edit', false)),
             Toggle::make('allow_user_project_install')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_install'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_install_helper'))
-                ->default(fn () => (bool) config('pelican-minecraft-modrinth.allow_user_project_install', false)),
+                ->label(trans('pelican-mod-manager::strings.settings.allow_user_project_install'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.allow_user_project_install_helper'))
+                ->default(fn () => (bool) config('pelican-mod-manager.allow_user_project_install', false)),
             Toggle::make('allow_user_project_update')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_update'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_update_helper'))
-                ->default(fn () => (bool) config('pelican-minecraft-modrinth.allow_user_project_update', false)),
+                ->label(trans('pelican-mod-manager::strings.settings.allow_user_project_update'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.allow_user_project_update_helper'))
+                ->default(fn () => (bool) config('pelican-mod-manager.allow_user_project_update', false)),
             Toggle::make('allow_user_project_delete')
-                ->label(trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_delete'))
-                ->helperText(trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_delete_helper'))
-                ->default(fn () => (bool) config('pelican-minecraft-modrinth.allow_user_project_delete', false)),
+                ->label(trans('pelican-mod-manager::strings.settings.allow_user_project_delete'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.allow_user_project_delete_helper'))
+                ->default(fn () => (bool) config('pelican-mod-manager.allow_user_project_delete', false)),
             // A standalone action embedded in the settings form's schema
             // (rather than a plugin-settings form field) - it runs
             // independently of the "Save" submission that PluginResource
@@ -382,11 +382,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             // require or trigger a settings save.
             Actions::make([
                 Action::make('clear_cache')
-                    ->label(trans('pelican-minecraft-modrinth::strings.settings.clear_cache'))
+                    ->label(trans('pelican-mod-manager::strings.settings.clear_cache'))
                     ->color('danger')
                     ->icon('tabler-trash')
-                    ->modalHeading(trans('pelican-minecraft-modrinth::strings.settings.clear_cache_confirmation_heading'))
-                    ->modalDescription(trans('pelican-minecraft-modrinth::strings.settings.clear_cache_confirmation_description'))
+                    ->modalHeading(trans('pelican-mod-manager::strings.settings.clear_cache_confirmation_heading'))
+                    ->modalDescription(trans('pelican-mod-manager::strings.settings.clear_cache_confirmation_description'))
                     // A schema already makes this action open a confirmation
                     // modal (with the heading/description above) before
                     // running, the same as requiresConfirmation() would - so
@@ -394,7 +394,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                     // a second, redundant confirmation step in front of it.
                     ->schema([
                         Select::make('server_id')
-                            ->label(trans('pelican-minecraft-modrinth::strings.settings.clear_cache_server_label'))
+                            ->label(trans('pelican-mod-manager::strings.settings.clear_cache_server_label'))
                             ->native(false)
                             ->required()
                             ->default('all')
@@ -403,7 +403,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                             // instead of preserving them, which would silently
                             // replace every server's real id with an unrelated
                             // sequential number as this Select's option value.
-                            ->options(fn () => ['all' => trans('pelican-minecraft-modrinth::strings.settings.clear_cache_all_servers')]
+                            ->options(fn () => ['all' => trans('pelican-mod-manager::strings.settings.clear_cache_all_servers')]
                                 + Server::query()->orderBy('name')->pluck('name', 'id')->all()),
                     ])
                     ->action(function (array $data) {
@@ -420,7 +420,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
 
                         self::clearSingleServer($service, $fileRepository, $operations, (int) $data['server_id']);
                     }),
-            ])->belowContent(trans('pelican-minecraft-modrinth::strings.settings.clear_cache_helper')),
+            ])->belowContent(trans('pelican-mod-manager::strings.settings.clear_cache_helper')),
             // Stage 8's admin-facing half of the GUI fallback: always
             // available regardless of the allow_user_egg_profile_edit
             // toggle above (this action is on the plugin settings screen,
@@ -431,14 +431,14 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             // docblock for why per-egg rather than per-server.
             Actions::make([
                 Action::make('egg_profiles')
-                    ->label(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles'))
+                    ->label(trans('pelican-mod-manager::strings.settings.egg_profiles'))
                     ->color('gray')
                     ->icon('tabler-egg')
-                    ->modalHeading(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_confirmation_heading'))
-                    ->modalDescription(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_confirmation_description'))
+                    ->modalHeading(trans('pelican-mod-manager::strings.settings.egg_profiles_confirmation_heading'))
+                    ->modalDescription(trans('pelican-mod-manager::strings.settings.egg_profiles_confirmation_description'))
                     ->schema(self::eggProfileFormSchema())
                     ->action(fn (array $data) => self::saveEggProfile($data)),
-            ])->belowContent(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_helper')),
+            ])->belowContent(trans('pelican-mod-manager::strings.settings.egg_profiles_helper')),
         ];
     }
 
@@ -458,7 +458,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         ]);
 
         Notification::make()
-            ->title(trans('pelican-minecraft-modrinth::strings.settings.settings_saved'))
+            ->title(trans('pelican-mod-manager::strings.settings.settings_saved'))
             ->success()
             ->send();
     }
@@ -478,7 +478,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
 
         if ($includeEggSelect) {
             $fields[] = Select::make('egg_id')
-                ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_egg_label'))
+                ->label(fn (): string => trans('pelican-mod-manager::strings.settings.egg_profiles_egg_label'))
                 ->native(false)
                 ->required()
                 ->searchable()
@@ -490,27 +490,27 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         }
 
         $fields[] = Select::make('project_type')
-            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_project_type_label'))
+            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.egg_profiles_project_type_label'))
             ->native(false)
             ->required()
             ->options(fn (): array => [
-                'auto' => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_project_type_auto'),
+                'auto' => trans('pelican-mod-manager::strings.settings.egg_profiles_project_type_auto'),
                 ProjectType::Mod->value => ProjectType::Mod->getLabel(),
                 ProjectType::Plugin->value => ProjectType::Plugin->getLabel(),
                 ProjectType::Datapack->value => ProjectType::Datapack->getLabel(),
             ])
             ->default('auto');
         $fields[] = Select::make('loader')
-            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_loader_label'))
+            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.egg_profiles_loader_label'))
             ->native(false)
-            ->options(fn (): array => ['' => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_loader_none')]
+            ->options(fn (): array => ['' => trans('pelican-mod-manager::strings.settings.egg_profiles_loader_none')]
                 + collect(MinecraftLoader::cases())->mapWithKeys(fn (MinecraftLoader $loader) => [$loader->value => $loader->getLabel()])->all())
             ->default('');
         $fields[] = TextInput::make('minecraft_version')
-            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_minecraft_version_label'))
-            ->helperText(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_minecraft_version_helper'));
+            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.egg_profiles_minecraft_version_label'))
+            ->helperText(fn (): string => trans('pelican-mod-manager::strings.settings.egg_profiles_minecraft_version_helper'));
         $fields[] = Toggle::make('supports_datapacks')
-            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_supports_datapacks_label'));
+            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.egg_profiles_supports_datapacks_label'));
 
         return $fields;
     }
@@ -578,7 +578,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             ModManagerEggProfile::query()->where('egg_id', $egg->getKey())->delete();
 
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_removed', ['egg' => $egg->name]))
+                ->title(trans('pelican-mod-manager::strings.settings.egg_profiles_removed', ['egg' => $egg->name]))
                 ->success()
                 ->send();
 
@@ -597,7 +597,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         );
 
         Notification::make()
-            ->title(trans('pelican-minecraft-modrinth::strings.settings.egg_profiles_saved', ['egg' => $egg->name]))
+            ->title(trans('pelican-mod-manager::strings.settings.egg_profiles_saved', ['egg' => $egg->name]))
             ->success()
             ->send();
     }
@@ -648,7 +648,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
 
         if ($failureCount > 0) {
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.notifications.reset_metadata_failed'))
+                ->title(trans('pelican-mod-manager::strings.notifications.reset_metadata_failed'))
                 ->danger()
                 ->send();
 
@@ -656,7 +656,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         }
 
         Notification::make()
-            ->title(trans('pelican-minecraft-modrinth::strings.settings.cache_cleared', ['count' => count($clearedServers)]))
+            ->title(trans('pelican-mod-manager::strings.settings.cache_cleared', ['count' => count($clearedServers)]))
             ->success()
             ->send();
     }
@@ -676,7 +676,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
     ): void {
         if (!$operations->supportsAsyncDispatch()) {
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.operations.queue_required'))
+                ->title(trans('pelican-mod-manager::strings.operations.queue_required'))
                 ->danger()
                 ->send();
 
@@ -687,7 +687,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
 
         if (!$server) {
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.notifications.reset_metadata_failed'))
+                ->title(trans('pelican-mod-manager::strings.notifications.reset_metadata_failed'))
                 ->danger()
                 ->send();
 
@@ -732,7 +732,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             report($exception);
 
             Notification::make()
-                ->title(trans('pelican-minecraft-modrinth::strings.notifications.reset_metadata_failed'))
+                ->title(trans('pelican-mod-manager::strings.notifications.reset_metadata_failed'))
                 ->danger()
                 ->send();
 
@@ -740,7 +740,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         }
 
         Notification::make()
-            ->title(trans('pelican-minecraft-modrinth::strings.settings.cache_cleared_single', ['name' => $server->name]))
+            ->title(trans('pelican-mod-manager::strings.settings.cache_cleared_single', ['name' => $server->name]))
             ->success()
             ->send();
     }

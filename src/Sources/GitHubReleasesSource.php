@@ -734,7 +734,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
         array $requestsByRepository,
         float $timeoutSeconds,
     ): LatestVersionLookupResult {
-        $startedAt = (bool) config('pelican-minecraft-modrinth.debug_timing', false)
+        $startedAt = (bool) config('pelican-mod-manager.debug_timing', false)
             ? microtime(true)
             : 0.0;
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
@@ -838,7 +838,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
         array $requestsByRepository,
         float $timeoutSeconds,
     ): LatestVersionLookupResult {
-        $startedAt = (bool) config('pelican-minecraft-modrinth.debug_timing', false)
+        $startedAt = (bool) config('pelican-mod-manager.debug_timing', false)
             ? microtime(true)
             : 0.0;
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
@@ -1109,7 +1109,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
         int $requestCount,
         int $failureCount,
     ): void {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return;
         }
 
@@ -1130,7 +1130,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
 
     protected function getModManagerTimingElapsedMs(?float $timestamp = null): ?int
     {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return null;
         }
 
@@ -1190,6 +1190,6 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
 
     protected function token(): string
     {
-        return (string) config('pelican-minecraft-modrinth.github_token');
+        return (string) config('pelican-mod-manager.github_token');
     }
 }

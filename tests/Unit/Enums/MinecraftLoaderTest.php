@@ -117,7 +117,7 @@ class MinecraftLoaderTest extends TestCase
     {
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => ['egg_autodetect_enabled' => $enabled],
+            'pelican-mod-manager' => ['egg_autodetect_enabled' => $enabled],
         ]));
         Container::setInstance($container);
     }

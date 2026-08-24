@@ -28,7 +28,7 @@ class MinecraftVersionResolver
         // fallback) is the most direct signal available - an operator typed
         // this in because nothing else could tell. It wins over every other
         // source below, including the server's own variables.
-        $profile = (bool) config('pelican-minecraft-modrinth.egg_autodetect_enabled', true)
+        $profile = (bool) config('pelican-mod-manager.egg_autodetect_enabled', true)
             ? EggProfileResolver::resolve($server)
             : null;
 
@@ -62,7 +62,7 @@ class MinecraftVersionResolver
         }
 
         if (!$version || $version === 'latest') {
-            $version = config('pelican-minecraft-modrinth.latest_minecraft_version');
+            $version = config('pelican-mod-manager.latest_minecraft_version');
         }
 
         return self::$resolvedVersions[$serverKey] = is_string($version) ? $version : null;

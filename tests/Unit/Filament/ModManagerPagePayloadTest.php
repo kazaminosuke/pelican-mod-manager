@@ -672,7 +672,7 @@ class ModManagerPagePayloadTest extends TestCase
         $previousFacadeApplication = Facade::getFacadeApplication();
         $container = new Container();
         $config = new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => [
+            'pelican-mod-manager' => [
                 'navigation_sort' => [
                     'mod' => 10,
                     'plugin' => 20,
@@ -683,7 +683,7 @@ class ModManagerPagePayloadTest extends TestCase
         $container->instance('config', $config);
         $settings = Mockery::mock(new ServerModManagerSettings(new \Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository()));
         $settings->shouldReceive('navigationSort')
-            ->andReturnUsing(static fn (Server $server, ProjectType $type): int => (int) $config->get('pelican-minecraft-modrinth.navigation_sort.'.$type->value));
+            ->andReturnUsing(static fn (Server $server, ProjectType $type): int => (int) $config->get('pelican-mod-manager.navigation_sort.'.$type->value));
         $container->instance(ServerModManagerSettings::class, $settings);
         Container::setInstance($container);
         Facade::setFacadeApplication($container);

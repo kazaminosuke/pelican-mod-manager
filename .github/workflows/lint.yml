@@ -63,8 +63,8 @@ jobs:
 
       - name: Move plugin files
         run: |
-          mkdir -p pelican/plugins/pelican-minecraft-modrinth
-          rsync -av --progress ./ pelican/plugins/pelican-minecraft-modrinth/ \
+          mkdir -p pelican/plugins/pelican-mod-manager
+          rsync -av --progress ./ pelican/plugins/pelican-mod-manager/ \
             --exclude=pelican \
             --exclude=.git \
             --exclude=.github \
@@ -100,8 +100,8 @@ jobs:
 
       - name: Move plugin files
         run: |
-          mkdir -p pelican/plugins/pelican-minecraft-modrinth
-          rsync -av --progress ./ pelican/plugins/pelican-minecraft-modrinth/ \
+          mkdir -p pelican/plugins/pelican-mod-manager
+          rsync -av --progress ./ pelican/plugins/pelican-mod-manager/ \
             --exclude=pelican \
             --exclude=.git \
             --exclude=.github \
@@ -110,4 +110,4 @@ jobs:
       - name: Run plugin unit tests
         run: |
           cd pelican
-          vendor/bin/phpunit --configuration plugins/pelican-minecraft-modrinth/phpunit.xml
+          vendor/bin/phpunit --configuration plugins/pelican-mod-manager/phpunit.xml

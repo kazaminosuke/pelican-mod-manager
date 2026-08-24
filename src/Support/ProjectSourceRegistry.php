@@ -343,7 +343,7 @@ class ProjectSourceRegistry
             'project_id' => $mod['project_id'] ?? '',
             'slug' => $mod['project_slug'] ?? '',
             'title' => $mod['project_title'] ?? '',
-            'description' => trans('pelican-minecraft-modrinth::strings.page.mod_unavailable'),
+            'description' => trans('pelican-mod-manager::strings.page.mod_unavailable'),
             'icon_url' => null,
             'author' => $mod['author'] ?? '',
             'downloads' => 0,

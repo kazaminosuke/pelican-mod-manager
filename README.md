@@ -38,10 +38,10 @@ GitHub Releases works without a token, but its unauthenticated rate limit (60 re
 **Option 1: Direct URL** - paste this into the Pelican Panel plugin installer:
 
 ```txt
-https://github.com/kazaminosuke/pelican-minecraft-modrinth/releases/latest/download/pelican-minecraft-modrinth.zip
+https://github.com/kazaminosuke/pelican-mod-manager/releases/latest/download/pelican-mod-manager.zip
 ```
 
-**Option 2: Upload ZIP** - download the latest ZIP from the [Releases](https://github.com/kazaminosuke/pelican-minecraft-modrinth/releases) page and upload it in the plugin installer.
+**Option 2: Upload ZIP** - download the latest ZIP from the [Releases](https://github.com/kazaminosuke/pelican-mod-manager/releases) page and upload it in the plugin installer.
 
 ## Egg configuration
 
@@ -143,7 +143,7 @@ including the detection order and how to configure an egg manually.
 
 ## Repository
 
-<https://github.com/kazaminosuke/pelican-minecraft-modrinth>
+<https://github.com/kazaminosuke/pelican-mod-manager>
 
 ## Fork lineage & license
 
@@ -157,5 +157,5 @@ Licensed under the GNU General Public License v3.0 (GPL-3.0) - see [`LICENSE`](L
 
 - [`docs/architecture.md`](docs/architecture.md) - cache layers, metadata format, and how to add a
   new source.
-- [Issues](https://github.com/kazaminosuke/pelican-minecraft-modrinth/issues) /
-  [Pull requests](https://github.com/kazaminosuke/pelican-minecraft-modrinth/pulls)
+- [Issues](https://github.com/kazaminosuke/pelican-mod-manager/issues) /
+  [Pull requests](https://github.com/kazaminosuke/pelican-mod-manager/pulls)

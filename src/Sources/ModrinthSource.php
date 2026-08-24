@@ -260,7 +260,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         Server $server,
         ProjectType $type,
     ): LatestVersionLookupResult {
-        $debugTiming = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $debugTiming = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = $debugTiming ? microtime(true) : 0.0;
         $validRequests = array_values(array_filter(
             $requests,
@@ -611,7 +611,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             throw new Exception('Invalid Modrinth search arguments.');
         }
 
-        $debugTiming = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $debugTiming = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = microtime(true);
         $responseBytes = null;
 
@@ -785,7 +785,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             $requestsByHash[$hash][] = $key;
         }
 
-        $debugTiming = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $debugTiming = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = microtime(true);
         $returnedHashCount = 0;
 
@@ -976,7 +976,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
 
     protected function getModManagerTimingElapsedMs(?float $timestamp = null): ?int
     {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return null;
         }
 

@@ -37,10 +37,10 @@ Modrinthは常に有効です。CurseForgeはAPIキーを設定するとMod/Plug
 **方法1: 直接URL** - Pelican Panelのプラグインインストーラーに以下を貼り付けてください。
 
 ```txt
-https://github.com/kazaminosuke/pelican-minecraft-modrinth/releases/latest/download/pelican-minecraft-modrinth.zip
+https://github.com/kazaminosuke/pelican-mod-manager/releases/latest/download/pelican-mod-manager.zip
 ```
 
-**方法2: ZIPアップロード** - [Releases](https://github.com/kazaminosuke/pelican-minecraft-modrinth/releases)ページから最新のZIPをダウンロードし、プラグインインストーラーからアップロードしてください。
+**方法2: ZIPアップロード** - [Releases](https://github.com/kazaminosuke/pelican-mod-manager/releases)ページから最新のZIPをダウンロードし、プラグインインストーラーからアップロードしてください。
 
 ## Egg設定
 
@@ -136,7 +136,7 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
 
 ## リポジトリ
 
-<https://github.com/kazaminosuke/pelican-minecraft-modrinth>
+<https://github.com/kazaminosuke/pelican-mod-manager>
 
 ## フォークの系譜とライセンス
 
@@ -152,5 +152,5 @@ GNU General Public License v3.0(GPL-3.0)の下でライセンスされていま�
 
 - [`docs/architecture.md`](docs/architecture.md)(英語) - キャッシュ層、Metadataフォーマット、
   新しいソースの追加方法。
-- [Issues](https://github.com/kazaminosuke/pelican-minecraft-modrinth/issues) /
-  [Pull requests](https://github.com/kazaminosuke/pelican-minecraft-modrinth/pulls)
+- [Issues](https://github.com/kazaminosuke/pelican-mod-manager/issues) /
+  [Pull requests](https://github.com/kazaminosuke/pelican-mod-manager/pulls)

@@ -37,8 +37,8 @@ final class WarmCatalogCacheCommand extends Command
         ProjectSourceRegistry $registry,
         ServerModManagerSettings $settings,
     ): int {
-        if (!(bool) config('pelican-minecraft-modrinth.warm_catalog_enabled', true)) {
-            $this->comment('Catalog warming is disabled (pelican-minecraft-modrinth.warm_catalog_enabled).');
+        if (!(bool) config('pelican-mod-manager.warm_catalog_enabled', true)) {
+            $this->comment('Catalog warming is disabled (pelican-mod-manager.warm_catalog_enabled).');
 
             return self::SUCCESS;
         }
@@ -64,7 +64,7 @@ final class WarmCatalogCacheCommand extends Command
         // server to prioritize.
         usort($combos, static fn (array $left, array $right): int => $right['server_count'] <=> $left['server_count']);
 
-        $maxTargets = max(0, (int) config('pelican-minecraft-modrinth.warm_max_targets', 50));
+        $maxTargets = max(0, (int) config('pelican-mod-manager.warm_max_targets', 50));
         $selected = array_slice($combos, 0, $maxTargets);
         $skipped = count($combos) - count($selected);
 
@@ -171,7 +171,7 @@ final class WarmCatalogCacheCommand extends Command
             $mcVersionsByServerId[(int) $row->server_id][$row->env_variable] = $row->variable_value;
         }
 
-        $defaultMcVersion = config('pelican-minecraft-modrinth.latest_minecraft_version');
+        $defaultMcVersion = config('pelican-mod-manager.latest_minecraft_version');
         $combos = [];
 
         foreach ($servers as $server) {

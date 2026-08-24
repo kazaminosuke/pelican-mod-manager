@@ -1,6 +1,6 @@
 # pelican-mod-manager 改修設計書
 
-対象リポジトリ: `kazaminosuke/pelican-minecraft-modrinth` (branch: main)
+対象リポジトリ: `kazaminosuke/pelican-mod-manager` (branch: main)
 作成日: 2026-08-06
 目的: Codex への段階的実装依頼のマスタードキュメント
 
@@ -114,14 +114,14 @@ plugin id・ディレクトリ構造・インストールパス・ユーザー�
 
 ## 絶対に変更してはならないもの（S8 まで据え置き）
 
-**ルール: 文字列リテラル `pelican-minecraft-modrinth` は 1 箇所も変更しない。**
+**ルール: 文字列リテラル `pelican-mod-manager` は 1 箇所も変更しない。**
 
 具体的には:
 - `plugin.json` の `id`
-- `config/pelican-minecraft-modrinth.php` のファイル名と `config('pelican-minecraft-modrinth.*')` 全て
-- `trans('pelican-minecraft-modrinth::strings.*')` 全て（約140箇所）
-- `view('pelican-minecraft-modrinth::*')`、`plugin_path('pelican-minecraft-modrinth', ...)`
-- session キー `'pelican-minecraft-modrinth.catalog-sort.'`
+- `config/pelican-mod-manager.php` のファイル名と `config('pelican-mod-manager.*')` 全て
+- `trans('pelican-mod-manager::strings.*')` 全て（約140箇所）
+- `view('pelican-mod-manager::*')`、`plugin_path('pelican-mod-manager', ...)`
+- session キー `'pelican-mod-manager.catalog-sort.'`
 - `.github/workflows/lint.yml` のパス、`update.json`
 
 ## 変更してはならないもの（Modrinth 固有で正当なもの）
@@ -189,15 +189,15 @@ plugin id・ディレクトリ構造・インストールパス・ユーザー�
 ## Codex 依頼文（Stage 1）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main)
+リポジトリ: kazaminosuke/pelican-mod-manager (main)
 
 【タスク】内部命名のみをリネームする「リング0」を実施してください。
 plugin id・ディレクトリ構造・インストールパス・ユーザーデータには一切触れません。
 
 【絶対に変更しないもの】
-1. 文字列リテラル "pelican-minecraft-modrinth" は 1 箇所も変更しないでください。
+1. 文字列リテラル "pelican-mod-manager" は 1 箇所も変更しないでください。
    （plugin.json の id、config ファイル名と config() 呼び出し、
-     trans('pelican-minecraft-modrinth::...') 約140箇所、view()/plugin_path()、
+     trans('pelican-mod-manager::...') 約140箇所、view()/plugin_path()、
      session キー、.github/workflows/lint.yml のパス、update.json すべて含む）
 2. ProjectSourceKey の enum ケース Modrinth と値 'modrinth'
    （インストール済みメタデータに永続化されているため）
@@ -251,12 +251,12 @@ E. 内部例外メッセージ・コメントの Modrinth 前提表現を実態�
 1. vendor/bin/pint --test が通ること
 2. PHPStan が通ること（.github/workflows/lint.yml と同じ手順:
    pelican-dev/panel を clone → composer install →
-   plugins/pelican-minecraft-modrinth/ に配置 → phpstan analyse）
-   ※ 配置先ディレクトリ名は pelican-minecraft-modrinth のままです
-3. vendor/bin/phpunit --configuration plugins/pelican-minecraft-modrinth/phpunit.xml
+   plugins/pelican-mod-manager/ に配置 → phpstan analyse）
+   ※ 配置先ディレクトリ名は pelican-mod-manager のままです
+3. vendor/bin/phpunit --configuration plugins/pelican-mod-manager/phpunit.xml
    が全て green であること
-4. 以下の grep で "pelican-minecraft-modrinth" のヒット数が変更前と完全に一致すること
-   grep -ro "pelican-minecraft-modrinth" --include="*.php" --include="*.json" \
+4. 以下の grep で "pelican-mod-manager" のヒット数が変更前と完全に一致すること
+   grep -ro "pelican-mod-manager" --include="*.php" --include="*.json" \
      --include="*.yml" --include="*.xml" . | wc -l
 5. 残存する "Modrinth" / "modrinth" が、上記【絶対に変更しないもの】の
    許可リストのいずれかに該当することを一覧で報告すること
@@ -277,7 +277,7 @@ E. 内部例外メッセージ・コメントの Modrinth 前提表現を実態�
 ## 完了条件（S1 → S2 へ進む条件）
 
 - [ ] Pint / PHPStan / PHPUnit がすべて green
-- [ ] `pelican-minecraft-modrinth` のヒット数が変更前と一致（＝ id 系に一切触れていない）
+- [ ] `pelican-mod-manager` のヒット数が変更前と一致（＝ id 系に一切触れていない）
 - [ ] 残存する `Modrinth` が許可リストに完全に収まっていることをレビュー済み
 - [ ] 実パネルに配置して mod-manager ページが開き、カタログ／Installed 両タブが従来通り動作すること（手動確認）
 - [ ] 旧 URL redirectを登録せず、現行slugだけが登録されること（手動確認）
@@ -305,7 +305,7 @@ E. 内部例外メッセージ・コメントの Modrinth 前提表現を実態�
   `getModManagerTimingElapsedMs()`、および **`$responseBytes = strlen($response->body())`**
   （レスポンス全体を文字列化しているため、`config('app.debug')` が false でも実行される）
 
-**方針:** 削除ではなく、`config('pelican-minecraft-modrinth.debug_timing', false)` によるオプトイン化。
+**方針:** 削除ではなく、`config('pelican-mod-manager.debug_timing', false)` によるオプトイン化。
 - フラグ false のときは **配列構築すら行わない**（早期 return）。
 - 出力先は `Log::info` の乱発をやめ、リクエスト終端で `Server-Timing` ヘッダ 1 本にまとめる案を提示させる（実装可否は Codex に判断させる）。
 
@@ -359,12 +359,12 @@ static 配列で `$server->id` をキーにメモ化する。
 ## Codex 依頼文（Stage 2）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main) ※ Stage 1 完了後
+リポジトリ: kazaminosuke/pelican-mod-manager (main) ※ Stage 1 完了後
 
 【タスク】挙動を変えずに、mod-manager 画面の初回ロードから無駄な処理を除去してください。
 
 A. 計測インストルメンテーションのフラグ化
-   config/pelican-minecraft-modrinth.php に 'debug_timing' => env('MOD_MANAGER_DEBUG_TIMING', false)
+   config/pelican-mod-manager.php に 'debug_timing' => env('MOD_MANAGER_DEBUG_TIMING', false)
    を追加し、以下をすべてこのフラグでガードしてください。
    フラグが false のときは、ログ用配列の構築すら行わないこと（早期 return）。
    - ModManagerPage: boot() / dehydrate() / getModManagerTimingElapsedMs() /
@@ -537,7 +537,7 @@ theseus `CacheValueType::expiry()`（`cache.rs:97-109`）が採用している�
 ## Codex 依頼文（Stage 3）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main) ※ Stage 2 完了後
+リポジトリ: kazaminosuke/pelican-mod-manager (main) ※ Stage 2 完了後
 
 【背景】
 現在キャッシュは各呼び出し箇所の cache()->remember(..., 30分) が24箇所に散在しており、
@@ -703,7 +703,7 @@ TTL はファイルマネージャ経由の外部編集への保険にすぎな�
 ## Codex 依頼文（Stage 4）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main) ※ Stage 3 完了後
+リポジトリ: kazaminosuke/pelican-mod-manager (main) ※ Stage 3 完了後
 
 【背景】
 Installed タブの描画パスには現在、Modrinth の bulk POST が2本乗っています:
@@ -843,7 +843,7 @@ Livewire の実装依存。**飛ばなくても設計は成立するためブロ
 ## Codex 依頼文（Stage 5）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main) ※ Stage 3 完了後
+リポジトリ: kazaminosuke/pelican-mod-manager (main) ※ Stage 3 完了後
 
 【前提（調査済み・再確認不要）】
 Pelican Panel は app/Providers/Filament/PanelProvider.php:32 で
@@ -988,7 +988,7 @@ morph フック（`morph` / `morph.updating` / `morph.removing` / `morphed`）�
 ## Codex 依頼文（Stage 6）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main) ※ Stage 3, 5 完了後
+リポジトリ: kazaminosuke/pelican-mod-manager (main) ※ Stage 3, 5 完了後
 
 【前提（調査済み・再確認不要）】
 Filament v5.7.5 の実装を確認済みです:
@@ -1117,7 +1117,7 @@ resources/views/components/table-swr-cache.blade.php（1458行）は
 ## Codex 依頼文（Stage 7）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main) ※ Stage 6 完了後
+リポジトリ: kazaminosuke/pelican-mod-manager (main) ※ Stage 6 完了後
 
 【背景】
 README.md は Pelican Panel の管理画面内でもレンダリングされます
@@ -1179,7 +1179,7 @@ docs/architecture.md（新規）:
 - スクリーンショットの配置場所（docs/images/ 等）を提案してください。
 - 日本語版 README（README.ja.md）を用意すべきか判断・提案してください。
   lang/ に ja があるので需要はありそうですが、メンテコストとのトレードオフです。
-- 名称について: この時点ではまだ plugin id は pelican-minecraft-modrinth のままですが、
+- 名称について: この時点ではまだ plugin id は pelican-mod-manager のままですが、
   README の表記は "Minecraft Mod Manager" に統一してください。
   インストール URL 等、id に依存する記述は現行のままにしてください（Stage 8 で更新）。
 
@@ -1251,16 +1251,16 @@ docs/architecture.md（新規）:
 **変更対象:**
 | 対象 | 変更 |
 |---|---|
-| ディレクトリ名 | `plugins/pelican-minecraft-modrinth` → `plugins/pelican-mod-manager` |
+| ディレクトリ名 | `plugins/pelican-mod-manager` → `plugins/pelican-mod-manager` |
 | `plugin.json` の `id` | `pelican-mod-manager` |
 | ZIP ファイル名 | `pelican-mod-manager.zip` |
 | `update.json` の `download_url` | 新リポジトリ・新ファイル名 |
-| `config/pelican-minecraft-modrinth.php` | `config/pelican-mod-manager.php` |
-| `config('pelican-minecraft-modrinth.*')` | 4キーすべて |
-| `trans('pelican-minecraft-modrinth::strings.*')` | 約140箇所 |
-| `view('pelican-minecraft-modrinth::*')` | 2箇所 |
-| `plugin_path('pelican-minecraft-modrinth', ...)` | 2箇所 |
-| session キー `'pelican-minecraft-modrinth.catalog-sort.'` | 新 id へ |
+| `config/pelican-mod-manager.php` | `config/pelican-mod-manager.php` |
+| `config('pelican-mod-manager.*')` | 4キーすべて |
+| `trans('pelican-mod-manager::strings.*')` | 約140箇所 |
+| `view('pelican-mod-manager::*')` | 2箇所 |
+| `plugin_path('pelican-mod-manager', ...)` | 2箇所 |
+| session キー `'pelican-mod-manager.catalog-sort.'` | 新 id へ |
 | `.github/workflows/lint.yml` のパス | 5箇所 |
 | `phpunit.xml` 起動パス（CI 内） | 追随 |
 
@@ -1296,16 +1296,16 @@ env('MOD_MANAGER_CURSEFORGE_API_KEY', env('CURSEFORGE_API_KEY'))
   旧ディレクトリは残って有効なままなのでページが二重登録される
   → これは Stage 8-B の橋渡しリリースと告知で対処済みの前提です
 
-【タスク】plugin id を pelican-minecraft-modrinth → pelican-mod-manager に変更してください。
+【タスク】plugin id を pelican-mod-manager → pelican-mod-manager に変更してください。
 
-A. 一括置換（文字列リテラル pelican-minecraft-modrinth → pelican-mod-manager）
+A. 一括置換（文字列リテラル pelican-mod-manager → pelican-mod-manager）
    - plugin.json の "id"
-   - config/pelican-minecraft-modrinth.php → config/pelican-mod-manager.php（ファイル名）
-   - config('pelican-minecraft-modrinth.*') 全4キー
-   - trans('pelican-minecraft-modrinth::strings.*') 全箇所（約140）
-   - view('pelican-minecraft-modrinth::*') 2箇所
-   - plugin_path('pelican-minecraft-modrinth', ...) 2箇所
-   - session キー 'pelican-minecraft-modrinth.catalog-sort.'
+   - config/pelican-mod-manager.php → config/pelican-mod-manager.php（ファイル名）
+   - config('pelican-mod-manager.*') 全4キー
+   - trans('pelican-mod-manager::strings.*') 全箇所（約140）
+   - view('pelican-mod-manager::*') 2箇所
+   - plugin_path('pelican-mod-manager', ...) 2箇所
+   - session キー 'pelican-mod-manager.catalog-sort.'
    - .github/workflows/lint.yml のパス5箇所
    - update.json の download_url（新リポジトリ・新ファイル名 pelican-mod-manager.zip）
    ※ plugin.json の update_url は Stage 8-B で専用リポジトリに移してあるので変更しません
@@ -1325,7 +1325,7 @@ D. ディレクトリ名の変更手順を README または RELEASING.md に文�
 
 【検証】
 1. Pint / PHPStan / PHPUnit green（CI のパスも新 id に更新済みであること）
-2. grep で "pelican-minecraft-modrinth" のヒットが 0 件であること
+2. grep で "pelican-mod-manager" のヒットが 0 件であること
    （移行告知の文言を除く）
 3. クリーンな Pelican に新 ZIP をインストールし、以下を確認:
    - plugins/pelican-mod-manager に展開されること
@@ -1360,7 +1360,7 @@ D. ディレクトリ名の変更手順を README または RELEASING.md に文�
 
 - [ ] 8-A の検証結果が記録され、対応方針が決定済み
 - [ ] 8-B の橋渡しリリースが配布され、浸透期間を経過
-- [ ] `pelican-minecraft-modrinth` の grep ヒットが 0（フォールバック読みと告知文言を除く）
+- [ ] `pelican-mod-manager` の grep ヒットが 0（フォールバック読みと告知文言を除く）
 - [ ] クリーン環境で新 ZIP がインストールでき、全機能が動作
 - [ ] 既存環境からの移行でサーバ上メタデータと `.env` 設定が引き継がれる
 - [ ] 移行手順書が公開されている

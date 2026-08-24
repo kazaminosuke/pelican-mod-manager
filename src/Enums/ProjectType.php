@@ -15,9 +15,9 @@ enum ProjectType: string implements HasLabel
     public function getLabel(): string
     {
         return match ($this) {
-            self::Mod => trans('pelican-minecraft-modrinth::strings.minecraft_mods'),
-            self::Plugin => trans('pelican-minecraft-modrinth::strings.minecraft_plugins'),
-            self::Datapack => trans('pelican-minecraft-modrinth::strings.minecraft_datapacks'),
+            self::Mod => trans('pelican-mod-manager::strings.minecraft_mods'),
+            self::Plugin => trans('pelican-mod-manager::strings.minecraft_plugins'),
+            self::Datapack => trans('pelican-mod-manager::strings.minecraft_datapacks'),
         };
     }
 
@@ -98,7 +98,7 @@ enum ProjectType: string implements HasLabel
             return $explicit;
         }
 
-        if (!(bool) config('pelican-minecraft-modrinth.egg_autodetect_enabled', true)) {
+        if (!(bool) config('pelican-mod-manager.egg_autodetect_enabled', true)) {
             return null;
         }
 
@@ -139,7 +139,7 @@ enum ProjectType: string implements HasLabel
             return true;
         }
 
-        if (!(bool) config('pelican-minecraft-modrinth.egg_autodetect_enabled', true)) {
+        if (!(bool) config('pelican-mod-manager.egg_autodetect_enabled', true)) {
             return false;
         }
 

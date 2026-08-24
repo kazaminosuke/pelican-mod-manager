@@ -79,7 +79,7 @@ final class ServerModManagerSettings
         $default = $type === ProjectType::Datapack ? 12 : 11;
 
         return $override
-            ?? NavigationSort::nullable(config('pelican-minecraft-modrinth.navigation_sort.'.$type->value, $default))
+            ?? NavigationSort::nullable(config('pelican-mod-manager.navigation_sort.'.$type->value, $default))
             ?? $default;
     }
 
@@ -93,7 +93,7 @@ final class ServerModManagerSettings
     /**
      * Resolve one global permission key through its server override.
      *
-     * @param string $globalConfigKey A key under pelican-minecraft-modrinth.
+     * @param string $globalConfigKey A key under pelican-mod-manager.
      */
     public function resolve(Server|int $server, string $globalConfigKey): bool
     {
@@ -104,7 +104,7 @@ final class ServerModManagerSettings
 
     public function global(string $globalConfigKey): bool
     {
-        return (bool) config('pelican-minecraft-modrinth.'.$globalConfigKey, false);
+        return (bool) config('pelican-mod-manager.'.$globalConfigKey, false);
     }
 
     public function override(Server|int $server, string $globalConfigKey): ?bool

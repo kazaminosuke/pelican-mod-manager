@@ -176,7 +176,7 @@ class MinecraftVersionResolverTest extends TestCase
     {
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => $values,
+            'pelican-mod-manager' => $values,
         ]));
         Container::setInstance($container);
     }

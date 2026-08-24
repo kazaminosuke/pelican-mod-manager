@@ -26,7 +26,7 @@ final class ServerModManagerSettingsTest extends TestCase
         $this->previousContainer = Container::getInstance();
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => [
+            'pelican-mod-manager' => [
                 'allow_user_egg_profile_edit' => true,
                 'allow_user_project_install' => true,
                 'allow_user_project_update' => false,
@@ -146,7 +146,7 @@ final class ServerModManagerSettingsTest extends TestCase
             'datapack_navigation_sort' => 0,
         ]);
 
-        Container::getInstance()->make('config')->set('pelican-minecraft-modrinth.navigation_sort', [
+        Container::getInstance()->make('config')->set('pelican-mod-manager.navigation_sort', [
             'mod' => 10,
             'plugin' => 11,
             'datapack' => 12,

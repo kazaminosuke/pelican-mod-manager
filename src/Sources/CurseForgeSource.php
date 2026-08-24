@@ -234,7 +234,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
      */
     protected function fetchSearch(array $params, ProjectType $type, float $timeoutSeconds): array
     {
-        $debugTiming = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $debugTiming = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = $debugTiming ? microtime(true) : 0.0;
         $responseBytes = null;
 
@@ -513,7 +513,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             $pending[$projectId] = true;
         }
 
-        $bulkStartedAt = (bool) config('pelican-minecraft-modrinth.debug_timing', false)
+        $bulkStartedAt = (bool) config('pelican-mod-manager.debug_timing', false)
             ? microtime(true)
             : 0.0;
         $deadline = microtime(true) + $timeoutSeconds;
@@ -698,7 +698,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         ProjectType $type,
         float $timeoutSeconds,
     ): LatestVersionLookupResult {
-        $debugTiming = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $debugTiming = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = $debugTiming ? microtime(true) : 0.0;
         $validRequests = array_values(array_filter(
             $requests,
@@ -825,7 +825,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $missingFileIds = array_values(array_diff($requiredFileIds, array_keys($filesById)));
 
         if ($missingFileIds !== []) {
-            $bulkFilesStartedAt = (bool) config('pelican-minecraft-modrinth.debug_timing', false)
+            $bulkFilesStartedAt = (bool) config('pelican-mod-manager.debug_timing', false)
                 ? microtime(true)
                 : 0.0;
             $bulkFilesResponse = $this->getBulkFiles(
@@ -892,7 +892,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
 
     protected function logBulkVersionsTiming(float $startedAt, int $requestedProjectCount, int $returnedProjectCount): void
     {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return;
         }
 
@@ -910,7 +910,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
 
     protected function logBulkFilesTiming(float $startedAt, int $requestedFileCount, int $returnedFileCount, int $requestCount): void
     {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return;
         }
 
@@ -929,7 +929,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
 
     protected function getModManagerTimingElapsedMs(?float $timestamp = null): ?int
     {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return null;
         }
 
@@ -1391,6 +1391,6 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
 
     protected function apiKey(): string
     {
-        return (string) config('pelican-minecraft-modrinth.curseforge_api_key');
+        return (string) config('pelican-mod-manager.curseforge_api_key');
     }
 }

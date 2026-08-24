@@ -331,7 +331,7 @@ mod のインストール・削除・一括更新ができます**（実体は�
 
 ### 6-3. 永続化: プラグイン専用テーブル（egg 単位）
 
-`plugins/pelican-minecraft-modrinth/database/migrations/` にマイグレーションを置くと
+`plugins/pelican-mod-manager/database/migrations/` にマイグレーションを置くと
 `PluginService::installPlugin()` が自動実行します（0 章の訂正 1）。
 
 ```
@@ -375,7 +375,7 @@ mod のインストール・削除・一括更新ができます**（実体は�
 ## 7. Codex 依頼文（Stage 8）
 
 ```
-リポジトリ: kazaminosuke/pelican-minecraft-modrinth (main) ※ Stage 7（コミット 6fbb5ff）完了後
+リポジトリ: kazaminosuke/pelican-mod-manager (main) ※ Stage 7（コミット 6fbb5ff）完了後
 
 【前提（調査済み・再確認不要。推測で上書きしないこと）】
 
@@ -496,7 +496,7 @@ E. 手動プロファイル設定 UI ＋ 権限トグル
 
    E-2. 編集可否の判定
      $canEdit =
-       config('pelican-minecraft-modrinth.allow_user_egg_profile_edit')
+       config('pelican-mod-manager.allow_user_egg_profile_edit')
          ? user()?->can(SubuserPermission::StartupUpdate, $server)   // 管理者/所有者/startup.update
          : user()?->isAdmin();
      ★ SubuserPermission::StartupUpdate を選んだ理由:

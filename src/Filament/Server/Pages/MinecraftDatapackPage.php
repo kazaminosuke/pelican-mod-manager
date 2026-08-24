@@ -22,7 +22,7 @@ class MinecraftDatapackPage extends ModManagerPage
 
     public static function getNavigationLabel(): string
     {
-        return trans('pelican-minecraft-modrinth::strings.minecraft_datapacks');
+        return trans('pelican-mod-manager::strings.minecraft_datapacks');
     }
 
     /** @return array<int, ProjectType> */

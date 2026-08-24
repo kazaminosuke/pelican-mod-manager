@@ -52,7 +52,7 @@ final class ServerModManagerTab
     public static function make(): Tab
     {
         return Tab::make('mod_manager')
-            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.tab'))
+            ->label(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.tab'))
             ->icon('tabler-packages')
             ->visible(fn (): bool => self::isRootAdmin())
             // EditRecord calls this during its normal form getState() flow.
@@ -63,8 +63,8 @@ final class ServerModManagerTab
             })
             ->saveRelationshipsWhenHidden()
             ->schema([
-                Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.access'))
-                    ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.access_helper'))
+                Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.access'))
+                    ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.access_helper'))
                     // EditServer renders tabs inside a six-column grid; without
                     // an explicit span every top-level section is squeezed into
                     // a single ~106px cell. Full-width sections restore normal
@@ -77,8 +77,8 @@ final class ServerModManagerTab
                         self::typeToggle(ProjectType::Plugin),
                         self::typeToggle(ProjectType::Datapack),
                     ]),
-                Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.navigation'))
-                    ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.navigation_helper'))
+                Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.navigation'))
+                    ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.navigation_helper'))
                     ->columnSpanFull()
                     ->columns(['default' => 1, 'sm' => 2, 'lg' => 3])
                     ->schema([
@@ -86,43 +86,43 @@ final class ServerModManagerTab
                         self::navigationSortInput(ProjectType::Plugin),
                         self::navigationSortInput(ProjectType::Datapack),
                     ]),
-                Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.permissions'))
-                    ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.permissions_helper'))
+                Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.permissions'))
+                    ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.permissions_helper'))
                     ->columnSpanFull()
                     ->columns(['default' => 1, 'lg' => 2])
                     ->schema([
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_egg_profile_edit'])
-                            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_egg_profile_edit'))
+                            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.allow_user_egg_profile_edit'))
                             ->options(fn (): array => self::permissionOptions('allow_user_egg_profile_edit'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_egg_profile_edit'))
                             ->inline()
                             ->dehydrated(false),
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_project_install'])
-                            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_install'))
+                            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.allow_user_project_install'))
                             ->options(fn (): array => self::permissionOptions('allow_user_project_install'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_project_install'))
                             ->inline()
                             ->dehydrated(false),
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_project_update'])
-                            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_update'))
+                            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.allow_user_project_update'))
                             ->options(fn (): array => self::permissionOptions('allow_user_project_update'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_project_update'))
                             ->inline()
                             ->dehydrated(false),
                         ToggleButtons::make(self::PERMISSION_FIELDS['allow_user_project_delete'])
-                            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.settings.allow_user_project_delete'))
+                            ->label(fn (): string => trans('pelican-mod-manager::strings.settings.allow_user_project_delete'))
                             ->options(fn (): array => self::permissionOptions('allow_user_project_delete'))
                             ->formatStateUsing(fn (Server $record): string => self::overrideState($record, 'allow_user_project_delete'))
                             ->inline()
                             ->dehydrated(false),
                     ]),
-                Section::make(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.egg_profile'))
-                    ->description(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.egg_profile_helper'))
+                Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.egg_profile'))
+                    ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.egg_profile_helper'))
                     ->columnSpanFull()
                     ->schema([
                         Actions::make([
                             Action::make('edit_egg_profile')
-                                ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.edit_egg_profile'))
+                                ->label(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.edit_egg_profile'))
                                 ->icon('tabler-egg')
                                 ->schema(ModManagerPlugin::eggProfileFormSchema(includeEggSelect: false))
                                 ->fillForm(function (Server $record): array {
@@ -186,13 +186,13 @@ final class ServerModManagerTab
     {
         $global = app(ServerModManagerSettings::class)->global($globalKey);
         $globalState = $global
-            ? trans('pelican-minecraft-modrinth::strings.server_mod_manager.on')
-            : trans('pelican-minecraft-modrinth::strings.server_mod_manager.off');
+            ? trans('pelican-mod-manager::strings.server_mod_manager.on')
+            : trans('pelican-mod-manager::strings.server_mod_manager.off');
 
         return [
-            'inherit' => trans('pelican-minecraft-modrinth::strings.server_mod_manager.inherit', ['state' => $globalState]),
-            'allow' => trans('pelican-minecraft-modrinth::strings.server_mod_manager.allow'),
-            'deny' => trans('pelican-minecraft-modrinth::strings.server_mod_manager.deny'),
+            'inherit' => trans('pelican-mod-manager::strings.server_mod_manager.inherit', ['state' => $globalState]),
+            'allow' => trans('pelican-mod-manager::strings.server_mod_manager.allow'),
+            'deny' => trans('pelican-mod-manager::strings.server_mod_manager.deny'),
         ];
     }
 
@@ -201,8 +201,8 @@ final class ServerModManagerTab
         $field = self::TYPE_ENABLED_FIELDS[$type->value];
 
         return Toggle::make($field)
-            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.type_enabled', ['type' => $type->getLabel()]))
-            ->helperText(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.type_enabled_helper'))
+            ->label(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.type_enabled', ['type' => $type->getLabel()]))
+            ->helperText(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.type_enabled_helper'))
             ->formatStateUsing(fn (Server $record): bool => app(ServerModManagerSettings::class)->configuredTypeEnabled($record, $type))
             ->visible(fn (Server $record): bool => self::isTypeVisible($record, $type))
             ->dehydrated(false);
@@ -213,8 +213,8 @@ final class ServerModManagerTab
         $field = self::NAVIGATION_SORT_FIELDS[$type->value];
 
         return TextInput::make($field)
-            ->label(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.navigation_sort', ['type' => $type->getLabel()]))
-            ->helperText(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.navigation_sort_helper'))
+            ->label(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.navigation_sort', ['type' => $type->getLabel()]))
+            ->helperText(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.navigation_sort_helper'))
             ->placeholder(fn (Server $record): string => (string) app(ServerModManagerSettings::class)->navigationSort($record, $type))
             ->formatStateUsing(fn (Server $record): ?int => app(ServerModManagerSettings::class)->navigationSortOverride($record, $type))
             ->integer()

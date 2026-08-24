@@ -44,7 +44,7 @@ class ModrinthSourceSearchCacheTest extends TestCase
         // mock below, which stubs none of that.
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => ['egg_autodetect_enabled' => false],
+            'pelican-mod-manager' => ['egg_autodetect_enabled' => false],
         ]));
         Container::setInstance($container);
     }

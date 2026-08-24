@@ -74,7 +74,7 @@ class WarmCatalogSearchTest extends TestCase
     {
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => ['warm_rate_limit' => ['modrinth' => 0]],
+            'pelican-mod-manager' => ['warm_rate_limit' => ['modrinth' => 0]],
         ]));
         Container::setInstance($container);
 

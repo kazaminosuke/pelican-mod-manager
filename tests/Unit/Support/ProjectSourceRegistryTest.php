@@ -52,7 +52,7 @@ class ProjectSourceRegistryTest extends TestCase
         $container = new Container();
         $container->instance('translator', $translator);
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => ['egg_autodetect_enabled' => true],
+            'pelican-mod-manager' => ['egg_autodetect_enabled' => true],
         ]));
         Container::setInstance($container);
         Facade::setFacadeApplication($container);

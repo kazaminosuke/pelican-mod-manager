@@ -39,7 +39,7 @@ class WarmCatalogCacheCommandTest extends TestCase
         $this->previousFacadeApplication = Facade::getFacadeApplication();
         $container = new Container();
         $container->instance('config', new LaravelConfigRepository([
-            'pelican-minecraft-modrinth' => [
+            'pelican-mod-manager' => [
                 'egg_autodetect_enabled' => true,
                 'latest_minecraft_version' => '26.1.2',
             ],
@@ -150,8 +150,8 @@ class WarmCatalogCacheCommandTest extends TestCase
         ]);
 
         $container = Container::getInstance();
-        $container->make('config')->set('pelican-minecraft-modrinth.warm_catalog_enabled', true);
-        $container->make('config')->set('pelican-minecraft-modrinth.warm_max_targets', 50);
+        $container->make('config')->set('pelican-mod-manager.warm_catalog_enabled', true);
+        $container->make('config')->set('pelican-mod-manager.warm_max_targets', 50);
 
         $queueConfig = Mockery::mock(ConfigRepository::class);
         $queueConfig->shouldReceive('get')->with('queue.default', 'sync')->andReturn('database');

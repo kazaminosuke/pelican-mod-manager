@@ -571,7 +571,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             throw new Exception('Invalid Hangar search parameters.');
         }
 
-        $debugTiming = (bool) config('pelican-minecraft-modrinth.debug_timing', false);
+        $debugTiming = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = $debugTiming ? microtime(true) : 0.0;
         $responseBytes = null;
 
@@ -663,7 +663,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             $projectIds,
             fn ($projectId): bool => is_string($projectId) && $projectId !== '',
         ));
-        $startedAt = (bool) config('pelican-minecraft-modrinth.debug_timing', false)
+        $startedAt = (bool) config('pelican-mod-manager.debug_timing', false)
             ? microtime(true)
             : 0.0;
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
@@ -981,7 +981,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         int $cacheHitCount,
         int $failureCount,
     ): void {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return;
         }
 
@@ -1003,7 +1003,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
 
     protected function getModManagerTimingElapsedMs(?float $timestamp = null): ?int
     {
-        if (!(bool) config('pelican-minecraft-modrinth.debug_timing', false)) {
+        if (!(bool) config('pelican-mod-manager.debug_timing', false)) {
             return null;
         }
 

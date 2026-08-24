@@ -68,7 +68,7 @@ enum MinecraftLoader: string implements HasIcon, HasLabel
             return $explicit;
         }
 
-        if (!(bool) config('pelican-minecraft-modrinth.egg_autodetect_enabled', true)) {
+        if (!(bool) config('pelican-mod-manager.egg_autodetect_enabled', true)) {
             return null;
         }
 
