@@ -53,6 +53,16 @@ final class ServerModManagerSettings
         return false;
     }
 
+    /**
+     * Prime per-server settings before a bulk resolver pass.
+     *
+     * @param iterable<Server> $servers
+     */
+    public function preload(iterable $servers): void
+    {
+        $this->repository->preload($servers);
+    }
+
     public function allowsEggProfileEdit(Server|int $server): bool
     {
         return $this->resolve($server, 'allow_user_egg_profile_edit');

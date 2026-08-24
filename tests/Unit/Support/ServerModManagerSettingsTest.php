@@ -80,6 +80,22 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertFalse($settings->allowsProjectOperation($server, ProjectOperation::Update));
     }
 
+    public function test_preload_memoizes_existing_and_missing_rows_for_bulk_resolution(): void
+    {
+        $first = $this->server(1);
+        $second = $this->server(2);
+        ModManagerServerSetting::query()->create([
+            'server_id' => 1,
+            'mod_enabled' => false,
+        ]);
+        $settings = $this->settings();
+
+        $settings->preload([$first, $second]);
+
+        self::assertFalse($settings->isTypeEnabled($first, ProjectType::Mod));
+        self::assertTrue($settings->isTypeEnabled($second, ProjectType::Mod));
+    }
+
     public function test_null_inherits_and_false_stays_false_when_global_is_true(): void
     {
         $server = $this->server(1);

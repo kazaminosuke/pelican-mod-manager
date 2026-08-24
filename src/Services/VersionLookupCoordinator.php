@@ -68,53 +68,17 @@ class VersionLookupCoordinator
         Server $server,
         ProjectType $type,
     ): LatestVersionLookupResult {
-        $bySource = [];
-
-        foreach ($requests as $request) {
-            if ($request instanceof LatestVersionLookupRequest) {
-                $bySource[$request->source][] = $request;
-            }
-        }
-
-        $result = LatestVersionLookupResult::empty();
-
-        foreach ($bySource as $sourceKey => $sourceRequests) {
-            $source = $this->registry->getByValue($sourceKey);
-
-            if (!$source instanceof BatchLatestVersionSourceInterface || !$source->isConfigured()) {
-                $result = $result->merge(LatestVersionLookupResult::failed(
-                    $sourceRequests,
-                    "Latest-version lookup is unavailable for source [$sourceKey]",
-                ));
-
-                continue;
-            }
-
-            try {
-                $result = $result->merge($source->lookupLatestVersions($sourceRequests, $server, $type));
-            } catch (Throwable $exception) {
-                report($exception);
-                $result = $result->merge(LatestVersionLookupResult::failed(
-                    $sourceRequests,
-                    "Latest-version lookup failed for source [$sourceKey]",
-                ));
-            }
-        }
-
-        return $result;
+        return $this->execute($requests, $server, $type, blocking: true);
     }
 
     /**
-     * Non-blocking counterpart to lookup(): never performs an inline fetch.
-     * A source whose batch is a cold cache miss contributes its request
-     * keys to the merged result's pendingKeys() instead of blocking.
-     *
      * @param array<int, LatestVersionLookupRequest> $requests
      */
-    public function peek(
+    private function execute(
         array $requests,
         Server $server,
         ProjectType $type,
+        bool $blocking,
     ): LatestVersionLookupResult {
         $bySource = [];
 
@@ -139,7 +103,10 @@ class VersionLookupCoordinator
             }
 
             try {
-                $result = $result->merge($source->peekLatestVersions($sourceRequests, $server, $type));
+                $latest = $blocking
+                    ? $source->lookupLatestVersions($sourceRequests, $server, $type)
+                    : $source->peekLatestVersions($sourceRequests, $server, $type);
+                $result = $result->merge($latest);
             } catch (Throwable $exception) {
                 report($exception);
                 $result = $result->merge(LatestVersionLookupResult::failed(
@@ -150,5 +117,20 @@ class VersionLookupCoordinator
         }
 
         return $result;
+    }
+
+    /**
+     * Non-blocking counterpart to lookup(): never performs an inline fetch.
+     * A source whose batch is a cold cache miss contributes its request
+     * keys to the merged result's pendingKeys() instead of blocking.
+     *
+     * @param array<int, LatestVersionLookupRequest> $requests
+     */
+    public function peek(
+        array $requests,
+        Server $server,
+        ProjectType $type,
+    ): LatestVersionLookupResult {
+        return $this->execute($requests, $server, $type, blocking: false);
     }
 }

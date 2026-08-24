@@ -479,7 +479,6 @@ class ModManagerPage extends Page implements HasTable
         );
 
         $this->refreshInstalledScanDataReady();
-        $this->dispatchInstalledScanIfMissing();
         // HasTabs resolves and then caches getTabs() while choosing the default
         // tab. Read the persisted scan result first, otherwise that first
         // cached definition permanently misses the Installed count badge for
@@ -487,6 +486,9 @@ class ModManagerPage extends Page implements HasTable
         $this->loadDefaultActiveTab();
         $this->restoreCatalogStateFromUrl();
         $this->rejectUnauthorizedInstalledTab();
+        if ($this->activeTab === 'installed') {
+            $this->dispatchInstalledScanIfMissing();
+        }
         $this->paginators[self::TABLE_PAGINATOR_NAME] = max(1, $this->catalogPage);
         $this->refreshInstalledOperationState();
 
@@ -722,11 +724,9 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /**
-     * Start the first Installed scan from any mod-manager page, rather than
-     * making the visitor discover the Installed tab just to populate its
-     * count.  This is intentionally separate from catalog warming: it is a
-     * per-server Wings request, not speculative traffic to a shared upstream
-     * catalog API.
+     * Start the first Installed scan when the Installed tab is opened. Catalog
+     * visitors should not incur a server-wide Wings scan merely to render
+     * catalog rows; the tab-switch path remains the explicit lazy entry point.
      *
      * The durable scan cache is the normal ten-minute cooldown. On a cache
      * miss, InstalledOperationManager's per-server/type active state prevents
@@ -876,11 +876,11 @@ class ModManagerPage extends Page implements HasTable
         unset($this->paginators[self::TABLE_PAGINATOR_NAME]);
         $this->catalogPage = 1;
         $this->refreshInstalledScanDataReady();
-        // A long-lived component can outlive the ten-minute scan cache. A
-        // catalog-tab switch is still a manager-page visit, so restore the
-        // same cache-miss behavior as mount() instead of leaving the badge at
-        // an ellipsis until the user opens Installed manually.
-        $this->dispatchInstalledScanIfMissing();
+        // A tab switch into Installed is the explicit lazy entry point for a
+        // missing scan. Catalog visits do not dispatch server-wide work.
+        if ($activeTab === 'installed') {
+            $this->dispatchInstalledScanIfMissing();
+        }
         $this->refreshInstalledOperationState();
 
         // Category IDs and the Modrinth-only environment filter are scoped to

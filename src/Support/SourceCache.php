@@ -260,6 +260,12 @@ final class SourceCache
         return $this->dispatchRevalidation($spec, $profile);
     }
 
+    /** Clear the queue-worker memo between jobs. */
+    public function clearRuntimeCaches(): void
+    {
+        $this->processMemos = null;
+    }
+
     /**
      * Non-blocking counterpart to swr(): never performs an inline fetch.
      *
@@ -369,11 +375,15 @@ final class SourceCache
             return $this->performFetchAndStore($spec, $profile, $timeoutSeconds);
         } catch (LockTimeoutException) {
             $entry = $this->readEntry($spec, refresh: true);
-            if ($entry !== null && $entry['fresh_until'] > time()) {
+            if ($entry !== null) {
+                // Do not start a second upstream request while the lock holder
+                // is still in flight; stale data is safer than a herd.
                 return $entry['data'];
             }
 
-            return $this->performFetchAndStore($spec, $profile, $timeoutSeconds);
+            throw new RuntimeException(
+                "Source [{$spec->sourceKey}] operation [{$spec->operation}] is already being fetched.",
+            );
         } finally {
             if ($acquired) {
                 try {

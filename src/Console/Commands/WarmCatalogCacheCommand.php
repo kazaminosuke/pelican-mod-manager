@@ -129,8 +129,8 @@ final class WarmCatalogCacheCommand extends Command
      * servers at once - Server::with('variables') would silently scope
      * every row to one server's id instead of each row's own.
      *
-     * Three total queries (servers+eggs, egg variable names, then direct
-     * server-variable values) rather than one query per server.
+     * Four total queries (servers+eggs, egg variable names, server settings,
+     * then direct server-variable values) rather than one query per server.
      *
      * @return array<int, array{loader: string, mc_version: string, project_type: string, server_id: int, server_count: int}>
      */
@@ -148,6 +148,11 @@ final class WarmCatalogCacheCommand extends Command
         if ($servers->isEmpty()) {
             return [];
         }
+
+        // The resolver checks settings several times per server. Prime its
+        // request-local repository once so scheduled warming avoids a query
+        // per server/type combination.
+        $settings->preload($servers);
 
         /** @var Collection<int, object{server_id: int, env_variable: string, variable_value: string|null}> $serverVariableRows */
         $serverVariableRows = DB::table('server_variables')

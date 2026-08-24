@@ -91,6 +91,10 @@ class ModManagerServiceProvider extends ServiceProvider
             if ($this->app->resolved(InstalledProjectService::class)) {
                 $this->app->make(InstalledProjectService::class)->clearRuntimeCaches();
             }
+
+            if ($this->app->resolved(SourceCache::class)) {
+                $this->app->make(SourceCache::class)->clearRuntimeCaches();
+            }
         });
 
         // Hooks into the panel's own scheduler (Pelican already depends on

@@ -7,6 +7,8 @@ use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Bus\Dispatcher;
+use Illuminate\Contracts\Cache\Lock as CacheLock;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -300,6 +302,58 @@ class SourceCacheTest extends TestCase
         self::assertSame($data, $sourceCache->swr($spec, CacheProfile::Search));
         self::assertSame($data, $sourceCache->swr($spec, CacheProfile::Search));
         self::assertTrue($sourceCache->peek($spec)['fresh']);
+    }
+
+    public function test_search_lock_timeout_never_starts_a_second_inline_fetch(): void
+    {
+        $lock = Mockery::mock(CacheLock::class);
+        $lock->shouldReceive('block')->once()->andThrow(new LockTimeoutException());
+        $lock->shouldNotReceive('release');
+        $store = new class($lock) extends ArrayStore
+        {
+            public function __construct(private readonly CacheLock $forcedLock)
+            {
+                parent::__construct();
+            }
+
+            public function lock($name, $seconds = 0, $owner = null): CacheLock
+            {
+                return $this->forcedLock;
+            }
+        };
+        $cache = new LaravelCacheRepository($store);
+        $spec = $this->spec();
+        $empty = ['hits' => [], 'total_hits' => 0];
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldNotReceive('fetch');
+        $executor->shouldReceive('emptyResult')->once()->with($spec)->andReturn($empty);
+
+        $result = $this->sourceCache($cache, 'sync', $executor)
+            ->swr($spec, CacheProfile::Search);
+
+        self::assertSame($empty, $result);
+        self::assertIsArray($cache->get($spec->cacheKey().':failure:v1'));
+    }
+
+    public function test_queue_runtime_reset_discards_process_probe_memos(): void
+    {
+        $cache = $this->cache();
+        $spec = $this->spec();
+        $old = ['hits' => [['project_id' => 'old']], 'total_hits' => 1];
+        $new = ['hits' => [['project_id' => 'new']], 'total_hits' => 1];
+        $cache->put($spec->cacheKey(), $this->entry($old, time() + 60), 300);
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldNotReceive('fetch');
+        $sourceCache = $this->sourceCache($cache, 'sync', $executor);
+
+        self::assertSame($old, $sourceCache->peek($spec)['data']);
+        $cache->put($spec->cacheKey(), $this->entry($new, time() + 60), 300);
+
+        // A queue-loop reset represents the boundary between two jobs on the
+        // same singleton worker process.
+        $sourceCache->clearRuntimeCaches();
+
+        self::assertSame($new, $sourceCache->peek($spec)['data']);
     }
 
     public function test_fetch_failure_returns_stale_data_and_writes_failure_marker(): void

@@ -31,6 +31,33 @@ final class ServerModManagerSettingRepository
     }
 
     /**
+     * Prime the request-local memo for a bulk server pass with one query.
+     *
+     * @param iterable<Server> $servers
+     */
+    public function preload(iterable $servers): void
+    {
+        $serverIds = [];
+        foreach ($servers as $server) {
+            $serverIds[] = $this->serverId($server);
+        }
+
+        $serverIds = array_values(array_unique($serverIds));
+        if ($serverIds === []) {
+            return;
+        }
+
+        $settings = ModManagerServerSetting::query()
+            ->whereIn('server_id', $serverIds)
+            ->get()
+            ->keyBy('server_id');
+
+        foreach ($serverIds as $serverId) {
+            $this->memo[$serverId] = $settings->get($serverId);
+        }
+    }
+
+    /**
      * @param array<string, mixed> $attributes
      */
     public function save(Server|int $server, array $attributes): ModManagerServerSetting
