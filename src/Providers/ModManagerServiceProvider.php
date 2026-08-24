@@ -9,6 +9,7 @@ use Illuminate\Support\ServiceProvider;
 use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
+use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
@@ -24,6 +25,7 @@ use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchExecutor;
 use Kazaminosuke\ModManager\Support\WarmRequestThrottle;
+use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 
 class ModManagerServiceProvider extends ServiceProvider
 {
@@ -40,6 +42,8 @@ class ModManagerServiceProvider extends ServiceProvider
             ProjectSourceRegistry::class,
             VersionLookupCoordinator::class,
             InstalledProjectService::class,
+            InstalledArchiveTransaction::class,
+            WingsRemoteFilesystem::class,
             InstalledOperationManager::class,
             ProjectOperationAuthorizer::class,
             ServerModManagerSettingRepository::class,

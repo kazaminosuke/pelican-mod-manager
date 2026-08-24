@@ -15,6 +15,7 @@ final class InstalledProjectUpdateService
 {
     public function __construct(
         private readonly InstalledProjectService $minecraft,
+        private readonly InstalledArchiveTransaction $archives,
         private readonly VersionLookupCoordinator $versions,
         private readonly CacheRepository $cache,
     ) {}
@@ -107,68 +108,17 @@ final class InstalledProjectUpdateService
         array $installedMod,
         array $version,
     ): void {
-        $projectId = $this->requiredString($installedMod, 'project_id');
-        $source = ProjectSourceKey::tryFrom((string) ($installedMod['source'] ?? '')) ?? ProjectSourceKey::Modrinth;
         $primaryFile = $this->primaryFile($version['files'] ?? null);
-        $newFilename = $this->safeFilename($this->requiredString($primaryFile, 'filename'));
-        $oldFilename = $this->safeFilename($this->requiredString($installedMod, 'filename'));
-        $folder = $this->minecraft->getProjectFolder($server, $fileRepository, $type);
 
-        $fileRepository
-            ->setServer($server)
-            ->pull($this->requiredString($primaryFile, 'url'), $folder)
-            ->throw();
-
-        $saved = $this->minecraft->saveModMetadata(
+        $this->archives->installOrUpdate(
             $server,
             $fileRepository,
-            $projectId,
-            $this->requiredString($installedMod, 'project_slug'),
-            $this->requiredString($installedMod, 'project_title'),
-            $this->requiredString($version, 'id'),
-            $this->requiredString($version, 'version_number'),
-            $newFilename,
-            is_string($installedMod['author'] ?? null) ? $installedMod['author'] : null,
             $type,
-            $source,
+            $installedMod,
+            $version,
+            $primaryFile,
+            $installedMod,
         );
-
-        if (!$saved) {
-            $this->deleteFileQuietly($server, $fileRepository, $folder, $newFilename);
-
-            throw new Exception("Failed to persist metadata for [{$projectId}].");
-        }
-
-        if ($oldFilename === $newFilename) {
-            return;
-        }
-
-        try {
-            $fileRepository
-                ->setServer($server)
-                ->deleteFiles($folder, [$oldFilename])
-                ->throw();
-        } catch (Throwable $deleteException) {
-            $this->deleteFileQuietly($server, $fileRepository, $folder, $newFilename);
-
-            if (!$this->minecraft->saveModMetadata(
-                $server,
-                $fileRepository,
-                $projectId,
-                $this->requiredString($installedMod, 'project_slug'),
-                $this->requiredString($installedMod, 'project_title'),
-                $this->requiredString($installedMod, 'version_id'),
-                $this->requiredString($installedMod, 'version_number'),
-                $oldFilename,
-                is_string($installedMod['author'] ?? null) ? $installedMod['author'] : null,
-                $type,
-                $source,
-            )) {
-                report(new Exception("Failed to restore metadata for [{$projectId}]."));
-            }
-
-            throw $deleteException;
-        }
     }
 
     /** @return array<string, mixed> */
@@ -185,42 +135,5 @@ final class InstalledProjectUpdateService
         }
 
         throw new Exception('Latest version has no primary file.');
-    }
-
-    /** @param array<string, mixed> $data */
-    private function requiredString(array $data, string $key): string
-    {
-        $value = $data[$key] ?? null;
-
-        if (!is_string($value) || $value === '') {
-            throw new Exception("Missing required value [{$key}].");
-        }
-
-        return $value;
-    }
-
-    private function safeFilename(string $filename): string
-    {
-        if ($filename === '' || $filename === '.' || str_contains($filename, "\0") || str_contains($filename, '..') || str_contains($filename, '/') || str_contains($filename, '\\')) {
-            throw new Exception('Invalid filename.');
-        }
-
-        return basename($filename);
-    }
-
-    private function deleteFileQuietly(
-        Server $server,
-        DaemonFileRepository $fileRepository,
-        string $folder,
-        string $filename,
-    ): void {
-        try {
-            $fileRepository
-                ->setServer($server)
-                ->deleteFiles($folder, [$filename])
-                ->throw();
-        } catch (Throwable $exception) {
-            report($exception);
-        }
     }
 }

@@ -47,6 +47,7 @@ use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
+use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Support\CacheVersion;
@@ -1725,88 +1726,22 @@ class ModManagerPage extends Page implements HasTable
             $installedMod === null ? ProjectOperation::Install : ProjectOperation::Update,
         );
 
-        $safeNewFilename = $this->validateFilename($primaryFile['filename']);
-        $oldFilename = $installedMod ? $this->validateFilename($installedMod['filename']) : null;
-
         $type = static::detectProjectType($server);
         if (!$type) {
             throw new Exception('Server does not support managed mods or plugins');
         }
 
-        $sourceKey = ProjectSourceKey::tryFrom($record['source'] ?? '') ?? ProjectSourceKey::Modrinth;
+        $safeNewFilename = $this->validateFilename((string) ($primaryFile['filename'] ?? ''));
 
-        $folder = ModManager::getProjectFolder($server, $fileRepository, $type);
-
-        $fileRepository->setServer($server)->pull($primaryFile['url'], $folder);
-
-        $saved = ModManager::saveModMetadata(
+        app(InstalledArchiveTransaction::class)->installOrUpdate(
             $server,
             $fileRepository,
-            $record['project_id'],
-            $record['slug'],
-            $record['title'],
-            $versionData['id'],
-            $versionData['version_number'],
-            $safeNewFilename,
-            $record['author'] ?? null,
             $type,
-            $sourceKey
+            $record,
+            $versionData,
+            $primaryFile,
+            $installedMod,
         );
-
-        if (!$saved) {
-            try {
-                Http::daemon($server->node)
-                    ->post("/api/servers/{$server->uuid}/files/delete", [
-                        'root' => '/',
-                        'files' => [$folder.'/'.$safeNewFilename],
-                    ])
-                    ->throw();
-            } catch (Exception $rollbackException) {
-                report($rollbackException);
-            }
-
-            throw new Exception('Failed to save mod metadata');
-        }
-
-        if ($oldFilename && $oldFilename !== $safeNewFilename) {
-            try {
-                Http::daemon($server->node)
-                    ->post("/api/servers/{$server->uuid}/files/delete", [
-                        'root' => '/',
-                        'files' => [$folder.'/'.$oldFilename],
-                    ])
-                    ->throw();
-            } catch (Exception $deleteException) {
-                try {
-                    Http::daemon($server->node)
-                        ->post("/api/servers/{$server->uuid}/files/delete", [
-                            'root' => '/',
-                            'files' => [$folder.'/'.$safeNewFilename],
-                        ])
-                        ->throw();
-                } catch (Exception $rollbackException) {
-                    report($rollbackException);
-                }
-
-                if ($installedMod && !ModManager::saveModMetadata(
-                    $server,
-                    $fileRepository,
-                    $record['project_id'],
-                    $installedMod['project_slug'],
-                    $installedMod['project_title'],
-                    $installedMod['version_id'],
-                    $installedMod['version_number'],
-                    $oldFilename,
-                    $installedMod['author'] ?? null,
-                    $type,
-                    ProjectSourceKey::tryFrom($installedMod['source'] ?? '') ?? $sourceKey
-                )) {
-                    report(new Exception('Failed to restore old mod metadata during rollback'));
-                }
-
-                throw $deleteException;
-            }
-        }
 
         Cache::forget(ModManager::getHashScanCacheKey($server, $type));
         $this->setInstalledScanResult(null);
