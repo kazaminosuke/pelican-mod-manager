@@ -109,8 +109,8 @@ The same screen has a **Clear cache** action, which behaves differently by scope
 
 ## How it works
 
-- **Local metadata index** (`.pelican-mod-manager.json` on each server, auto-migrated from the
-  older `.modrinth-metadata.json`) tracks which installed file maps to which upstream project.
+- **Local metadata index** (`.pelican-mod-manager.json` on each server) tracks which installed
+  file maps to which upstream project.
 - **Incremental hash scanning** re-hashes a file only when its size/modified-time signature has
   changed, instead of every file on every scan.
 - **Background jobs and status badges** handle scans and bulk updates without blocking the UI:

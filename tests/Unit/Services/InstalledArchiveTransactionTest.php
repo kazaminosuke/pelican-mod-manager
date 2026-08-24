@@ -269,6 +269,7 @@ class InstalledArchiveTransactionTest extends TestCase
 
         if ($installedMods !== []) {
             $document = InstalledMetadataDocument::fromArray([
+                'schema_version' => 2,
                 'installed_mods' => $installedMods,
             ]) ?? InstalledMetadataDocument::empty();
             $status = InstalledMetadataReadStatus::Current;

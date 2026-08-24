@@ -18,7 +18,12 @@ return new class extends Migration
     {
         Schema::create('mod_manager_egg_profiles', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('egg_id')->unique()->constrained('eggs')->cascadeOnDelete();
+            // Pelican's eggs.id is the legacy unsigned INT primary key from
+            // service_options. foreignId() would create an unsigned BIGINT
+            // and MySQL rejects the mismatched foreign key at install time.
+            $table->unsignedInteger('egg_id');
+            $table->foreign('egg_id')->references('id')->on('eggs')->cascadeOnDelete();
+            $table->unique('egg_id');
             // Kept for audit/debugging even though egg_id is the real key -
             // an egg's uuid can itself change on a future re-import (Paper
             // and Forge Minecraft both have historically), so this is a

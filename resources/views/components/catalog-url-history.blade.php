@@ -25,7 +25,11 @@
             };
 
             window.history.pushState = (state, title, url) => {
-                const commit = [...activeCommits].at(-1);
+                // A global history hook cannot identify which commit invoked
+                // pushState. Coalesce only while exactly one target commit is
+                // active; with concurrent commits, preserving both pushes is
+                // safer than assigning one commit's URL state to another.
+                const commit = activeCommits.size === 1 ? [...activeCommits][0] : null;
 
                 if (!commit) {
                     return pushState(state, title, url);
@@ -43,7 +47,7 @@
                 return pushState(state, title, url);
             };
 
-            window.Livewire.hook('commit', ({ component, succeed }) => {
+            window.Livewire.hook('commit', ({ component, succeed, fail, respond }) => {
                 if (!isCatalogComponent(component)) {
                     return;
                 }
@@ -57,6 +61,15 @@
                     // run, so every same-commit push is coalesced.
                     queueMicrotask(() => activeCommits.delete(commit));
                 });
+
+                // Failed and superseded requests do not run success callbacks.
+                // Livewire invokes `respond` before success callbacks and then
+                // schedules success on the next animation frame, so use a
+                // second frame only as a final leak-prevention fallback.
+                fail?.(() => activeCommits.delete(commit));
+                respond?.(() => requestAnimationFrame(() => requestAnimationFrame(
+                    () => activeCommits.delete(commit),
+                )));
             });
 
             window.__mmrCatalogUrlHistory = true;

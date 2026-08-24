@@ -27,7 +27,7 @@ class InstalledMetadataRepositoryTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_valid_empty_current_document_does_not_fall_back_to_legacy(): void
+    public function test_valid_empty_current_document_is_authoritative_and_reads_no_other_filename(): void
     {
         $server = $this->server();
         $files = Mockery::mock(DaemonFileRepository::class);
@@ -35,7 +35,7 @@ class InstalledMetadataRepositoryTest extends TestCase
         $files->shouldReceive('getContent')
             ->once()
             ->with('mods/.pelican-mod-manager.json')
-            ->andReturn('{"installed_mods":[]}');
+            ->andReturn('{"schema_version":2,"installed_mods":[]}');
         $files->shouldNotReceive('getContent')->with('mods/.modrinth-metadata.json');
 
         $result = (new InstalledMetadataRepository())->read($server, $files, 'mods');
@@ -45,38 +45,52 @@ class InstalledMetadataRepositoryTest extends TestCase
         self::assertSame([], $result->document->installedMods());
     }
 
-    public function test_missing_current_document_falls_back_to_legacy_and_defaults_source(): void
+    public function test_missing_current_document_does_not_fall_back_to_legacy_filename(): void
     {
         $server = $this->server();
         $files = Mockery::mock(DaemonFileRepository::class);
-        $files->shouldReceive('setServer')->twice()->with($server)->andReturnSelf();
+        $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
         $files->shouldReceive('getContent')
             ->once()
             ->with('mods/.pelican-mod-manager.json')
             ->andThrow(new FileNotFoundException());
-        $files->shouldReceive('getContent')
-            ->once()
-            ->with('mods/.modrinth-metadata.json')
-            ->andReturn(json_encode(['installed_mods' => [$this->legacyEntry()]], JSON_THROW_ON_ERROR));
-
         $result = (new InstalledMetadataRepository())->read($server, $files, 'mods');
 
-        self::assertSame(InstalledMetadataReadStatus::Legacy, $result->status);
-        self::assertSame('modrinth', $result->document->installedMods()[0]['source']);
+        self::assertSame(InstalledMetadataReadStatus::Missing, $result->status);
+        self::assertFalse($result->isAuthoritative());
+        self::assertSame([], $result->document->installedMods());
     }
 
     public function test_invalid_documents_are_not_authoritative(): void
     {
         $server = $this->server();
         $files = Mockery::mock(DaemonFileRepository::class);
-        $files->shouldReceive('setServer')->twice()->with($server)->andReturnSelf();
+        $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
         $files->shouldReceive('getContent')->once()->andReturn('not-json');
-        $files->shouldReceive('getContent')->once()->andThrow(new FileNotFoundException());
 
         $result = (new InstalledMetadataRepository())->read($server, $files, 'mods');
 
         self::assertSame(InstalledMetadataReadStatus::Invalid, $result->status);
         self::assertFalse($result->isAuthoritative());
+    }
+
+    public function test_only_schema_v2_documents_are_accepted_and_missing_sources_are_not_defaulted(): void
+    {
+        $entry = $this->legacyEntry();
+
+        self::assertNull(InstalledMetadataDocument::fromArray([
+            'schema_version' => 1,
+            'installed_mods' => [$entry],
+        ]));
+
+        unset($entry['source']);
+        $document = InstalledMetadataDocument::fromArray([
+            'schema_version' => 2,
+            'installed_mods' => [$entry],
+        ]);
+
+        self::assertNotNull($document);
+        self::assertSame([], $document->installedMods());
     }
 
     public function test_v2_document_round_trip_preserves_signatures_hashes_and_unresolved_files(): void
@@ -115,6 +129,7 @@ class InstalledMetadataRepositoryTest extends TestCase
         $nonStringAuthor['author'] = ['unexpected'];
 
         $document = InstalledMetadataDocument::fromArray([
+            'schema_version' => 2,
             'installed_mods' => [$valid, $invalidTitle, $invalidSource, $nonStringAuthor],
         ]);
 
@@ -127,7 +142,7 @@ class InstalledMetadataRepositoryTest extends TestCase
     public function test_mutate_skips_wings_write_and_hydration_bump_when_current_document_is_unchanged(): void
     {
         $server = $this->server();
-        $document = InstalledMetadataDocument::fromArray(['installed_mods' => [$this->legacyEntry()]]);
+        $document = InstalledMetadataDocument::fromArray(['schema_version' => 2, 'installed_mods' => [$this->legacyEntry()]]);
         self::assertNotNull($document);
         $files = Mockery::mock(DaemonFileRepository::class);
         $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
@@ -143,22 +158,16 @@ class InstalledMetadataRepositoryTest extends TestCase
         self::assertSame(1, $repository->lockCalls);
     }
 
-    public function test_mutate_still_migrates_an_unchanged_legacy_document(): void
+    public function test_mutate_writes_current_document_when_no_metadata_exists(): void
     {
         $server = $this->server();
-        $legacy = $this->legacyEntry();
-        $document = InstalledMetadataDocument::fromArray(['installed_mods' => [$legacy]]);
-        self::assertNotNull($document);
+        $document = InstalledMetadataDocument::empty();
         $files = Mockery::mock(DaemonFileRepository::class);
-        $files->shouldReceive('setServer')->times(3)->with($server)->andReturnSelf();
+        $files->shouldReceive('setServer')->twice()->with($server)->andReturnSelf();
         $files->shouldReceive('getContent')
             ->once()
             ->with('mods/.pelican-mod-manager.json')
             ->andThrow(new FileNotFoundException());
-        $files->shouldReceive('getContent')
-            ->once()
-            ->with('mods/.modrinth-metadata.json')
-            ->andReturn(json_encode(['installed_mods' => [$legacy]], JSON_THROW_ON_ERROR));
         $response = Mockery::mock(Response::class);
         $response->shouldReceive('failed')->once()->andReturnFalse();
         $files->shouldReceive('putContent')
@@ -190,6 +199,7 @@ class InstalledMetadataRepositoryTest extends TestCase
 
         $repository = new SynchronousInstalledMetadataRepository();
         $document = InstalledMetadataDocument::fromArray([
+            'schema_version' => 2,
             'installed_mods' => [$this->legacyEntry('one.jar'), $this->legacyEntry('two.jar')],
         ]);
 
@@ -240,6 +250,7 @@ class InstalledMetadataRepositoryTest extends TestCase
     protected function legacyEntry(string $filename = 'example.jar'): array
     {
         return [
+            'source' => 'modrinth',
             'project_id' => 'project',
             'project_slug' => 'project',
             'project_title' => 'Project',

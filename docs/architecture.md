@@ -6,12 +6,11 @@ maintaining the plugin or adding a new source.
 
 ## Metadata index
 
-Each server's installed mods/plugins/datapacks are tracked in a JSON document written next to the
-managed folder: `.pelican-mod-manager.json`. Reading it (`InstalledMetadataRepository::read()`)
-falls back to the older `.modrinth-metadata.json` filename only when the current file is missing,
-unreadable, or invalid - a valid current document with an empty `installed_mods` array is
-authoritative and is never overridden by a stale legacy file. Writes always replace the whole
-document under a per-server lock; there is no partial/streaming write path.
+Each server's installed mods/plugins/datapacks are tracked in the schema-version-2 JSON document
+written next to the managed folder: `.pelican-mod-manager.json`. That current filename and schema
+are the sole source of truth; a missing, unreadable, or invalid document is not replaced by an
+older file. Writes always replace the whole document under a per-server lock; there is no
+partial/streaming write path.
 
 Each entry records the installed file's name, the resolved upstream project/version identifiers,
 which source it came from, and a `file_signature` (see below) used to skip re-hashing unchanged

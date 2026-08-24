@@ -17,8 +17,6 @@ class InstalledMetadataRepository
 {
     protected const CURRENT_FILENAME = '.pelican-mod-manager.json';
 
-    protected const LEGACY_FILENAME = '.modrinth-metadata.json';
-
     /**
      * Panel daemon HTTP timeout is 15s. mutate() holds this lock across
      * getContent + putContent, so the TTL must exceed two timeouts. The
@@ -29,13 +27,7 @@ class InstalledMetadataRepository
 
     public const LOCK_WAIT_SECONDS = 20;
 
-    /**
-     * Read the current document, falling back to the legacy document only
-     * when the current file is missing, unavailable, or invalid.
-     *
-     * A valid current document with an empty `installed_mods` array is
-     * authoritative and must never resurrect entries from the legacy file.
-     */
+    /** Read the sole current metadata document. */
     public function read(Server $server, DaemonFileRepository $fileRepository, string $folder): InstalledMetadataReadResult
     {
         $current = $this->readPath(
@@ -45,25 +37,7 @@ class InstalledMetadataRepository
             InstalledMetadataReadStatus::Current,
         );
 
-        if ($current->isAuthoritative()) {
-            return $current;
-        }
-
-        $legacy = $this->readPath(
-            $server,
-            $fileRepository,
-            $this->metadataPath($folder, self::LEGACY_FILENAME),
-            InstalledMetadataReadStatus::Legacy,
-        );
-
-        if ($legacy->isAuthoritative()) {
-            return $legacy;
-        }
-
-        return new InstalledMetadataReadResult(
-            InstalledMetadataDocument::empty(),
-            $this->selectFailureStatus($current->status, $legacy->status),
-        );
+        return $current;
     }
 
     /**
@@ -114,8 +88,7 @@ class InstalledMetadataRepository
 
                 // A cache-miss scan often rebases to the exact current
                 // document. Avoid a no-op Wings PUT and its hydration cache
-                // invalidation, but retain writes for legacy documents so
-                // they are migrated to the current metadata filename.
+                // invalidation.
                 if ($result->status === InstalledMetadataReadStatus::Current
                     && $document->toArray() === $result->document->toArray()) {
                     return true;
@@ -214,18 +187,4 @@ class InstalledMetadataRepository
         return $folder === '' ? $filename : "{$folder}/{$filename}";
     }
 
-    protected function selectFailureStatus(
-        InstalledMetadataReadStatus $current,
-        InstalledMetadataReadStatus $legacy,
-    ): InstalledMetadataReadStatus {
-        if ($current === InstalledMetadataReadStatus::Unavailable || $legacy === InstalledMetadataReadStatus::Unavailable) {
-            return InstalledMetadataReadStatus::Unavailable;
-        }
-
-        if ($current === InstalledMetadataReadStatus::Invalid || $legacy === InstalledMetadataReadStatus::Invalid) {
-            return InstalledMetadataReadStatus::Invalid;
-        }
-
-        return InstalledMetadataReadStatus::Missing;
-    }
 }

@@ -605,31 +605,49 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
      */
     private static function clearAllServers(InstalledProjectService $service, DaemonFileRepository $fileRepository): void
     {
-        $serverCount = CacheVersion::bumpAllHydration();
-        CacheVersion::bumpHangarHash();
+        $clearedServers = [];
+        $failureCount = 0;
 
-        // Metadata deletion needs each server's egg loaded (to resolve its
-        // project type), unlike the cheap id-only query bumpAllHydration()
-        // above does - a second query here is fine given how infrequently
-        // this action runs.
+        // Metadata deletion needs each server's egg loaded to resolve its
+        // project type. This query is intentionally infrequent and lets each
+        // successful delete invalidate only the affected server.
         foreach (Server::query()->with('egg')->get() as $server) {
             try {
                 $type = ProjectType::fromServer($server);
 
                 if ($type) {
                     $service->clearInstalledModsMetadata($server, $fileRepository, $type);
+                    $clearedServers[$server->getKey()] = true;
                 }
 
                 if (ProjectType::supportsDatapacks($server)) {
                     $service->clearInstalledModsMetadata($server, $fileRepository, ProjectType::Datapack);
+                    $clearedServers[$server->getKey()] = true;
                 }
             } catch (Exception $exception) {
                 report($exception);
+                $failureCount++;
             }
         }
 
+        // Each successful delete bumps its server hydration generation. The
+        // shared Hangar generation must only move after at least one delete
+        // succeeded; bumping it before the deletes would hide partial failure.
+        if ($clearedServers !== []) {
+            CacheVersion::bumpHangarHash();
+        }
+
+        if ($failureCount > 0) {
+            Notification::make()
+                ->title(trans('pelican-minecraft-modrinth::strings.notifications.reset_metadata_failed'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
         Notification::make()
-            ->title(trans('pelican-minecraft-modrinth::strings.settings.cache_cleared', ['count' => $serverCount]))
+            ->title(trans('pelican-minecraft-modrinth::strings.settings.cache_cleared', ['count' => count($clearedServers)]))
             ->success()
             ->send();
     }

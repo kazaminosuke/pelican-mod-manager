@@ -3,6 +3,8 @@
 namespace Kazaminosuke\ModManager\Tests\Unit\Services;
 
 use App\Models\Server;
+use App\Repositories\Daemon\DaemonFileRepository;
+use Illuminate\Http\Client\Response;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Repositories\InstalledMetadataRepository;
@@ -34,6 +36,42 @@ class IncrementalInstalledScanTest extends TestCase
             'file_signature' => $signature,
             'hashes' => ['sha512' => 'two', 'sha256' => 'three'],
         ], $signature));
+    }
+
+    public function test_datapack_world_name_must_be_a_single_safe_path_segment(): void
+    {
+        $service = new TestableInstalledProjectService();
+
+        self::assertSame('custom-world', $service->exposeDatapackWorldName('custom-world'));
+
+        foreach (['.', '..', '../outside', '/outside', 'outside/', 'nested/world', '\\outside', "world\0"] as $invalid) {
+            try {
+                $service->exposeDatapackWorldName($invalid);
+                self::fail("Expected invalid world name: {$invalid}");
+            } catch (\Exception $exception) {
+                self::assertSame('Invalid datapack world name.', $exception->getMessage());
+            }
+        }
+    }
+
+    public function test_metadata_delete_failure_is_propagated_before_cache_invalidation(): void
+    {
+        $service = new InstalledProjectService(
+            Mockery::mock(ProjectSourceRegistry::class),
+            Mockery::mock(InstalledMetadataRepository::class),
+        );
+        $server = new Server();
+        $server->forceFill(['id' => 42]);
+        $response = Mockery::mock(Response::class);
+        $response->shouldReceive('failed')->once()->andReturnTrue();
+        $files = Mockery::mock(DaemonFileRepository::class);
+        $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
+        $files->shouldReceive('deleteFiles')->once()->with('mods', ['.pelican-mod-manager.json'])->andReturn($response);
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Failed to delete installed metadata.');
+
+        $service->clearInstalledModsMetadata($server, $files, ProjectType::Mod);
     }
 
     public function test_scan_rebase_preserves_concurrent_updates_additions_and_removals(): void
@@ -198,7 +236,7 @@ class IncrementalInstalledScanTest extends TestCase
     /** @param array<int, array<string, mixed>> $entries */
     private function document(array $entries): InstalledMetadataDocument
     {
-        $document = InstalledMetadataDocument::fromArray(['installed_mods' => $entries]);
+        $document = InstalledMetadataDocument::fromArray(['schema_version' => 2, 'installed_mods' => $entries]);
         self::assertNotNull($document);
 
         return $document;
@@ -222,6 +260,9 @@ class IncrementalInstalledScanTest extends TestCase
 
 class TestableInstalledProjectService extends InstalledProjectService
 {
+    /** @var array<string, string> */
+    private array $testServerProperties = [];
+
     public function __construct(?ProjectSourceRegistry $sourceRegistry = null)
     {
         if ($sourceRegistry !== null) {
@@ -233,6 +274,22 @@ class TestableInstalledProjectService extends InstalledProjectService
     public function exposeReusableHashes(array $entry, ?array $signature): ?array
     {
         return $this->reusableHashes($entry, $signature);
+    }
+
+    public function exposeDatapackWorldName(string $worldName): string
+    {
+        $this->testServerProperties = ['level-name' => $worldName];
+        $this->serverPropertiesCache = [];
+        $server = new Server();
+        $server->forceFill(['id' => 42]);
+
+        return $this->getDatapackWorldName($server, Mockery::mock(DaemonFileRepository::class));
+    }
+
+    /** @return array<string, string> */
+    protected function getServerProperties(Server $server, DaemonFileRepository $fileRepository): ?array
+    {
+        return $this->testServerProperties;
     }
 
     /**

@@ -1686,7 +1686,7 @@ class ModManagerPage extends Page implements HasTable
             ProjectSourceKey::Modrinth->value => "https://modrinth.com/{$projectType}/{$slug}",
             ProjectSourceKey::CurseForge->value => 'https://www.curseforge.com/minecraft/'.match ($projectType) {
                 ProjectType::Plugin->value => 'bukkit-plugins',
-                ProjectType::Datapack->value => 'texture-packs',
+                ProjectType::Datapack->value => 'data-packs',
                 default => 'mc-mods',
             }."/{$slug}",
             ProjectSourceKey::Hangar->value => empty($record['author']) ? null : "https://hangar.papermc.io/{$record['author']}/{$slug}",

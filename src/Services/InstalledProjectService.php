@@ -151,9 +151,7 @@ class InstalledProjectService
     }
 
     /**
-     * Deletes this server's installed-mods metadata file - both the current
-     * (.pelican-mod-manager.json) and legacy (.modrinth-metadata.json)
-     * filenames, since either could be the one actually in use - and clears
+     * Deletes this server's current installed-mods metadata file and clears
      * the caches that would otherwise keep serving stale results
      * afterwards: the hydration display cache and the 10-minute
      * scanAndImportMods() cache. Without clearing the latter, the very next
@@ -171,13 +169,12 @@ class InstalledProjectService
         $type ??= ProjectType::fromServer($server);
         $folder = $this->resolveMetadataFolder($server, $fileRepository, $type);
 
-        try {
-            $fileRepository->setServer($server)->deleteFiles($folder, [
-                '.pelican-mod-manager.json',
-                '.modrinth-metadata.json',
-            ]);
-        } catch (Exception $exception) {
-            report($exception);
+        $response = $fileRepository->setServer($server)->deleteFiles($folder, [
+            '.pelican-mod-manager.json',
+        ]);
+
+        if ($response->failed()) {
+            throw new Exception('Failed to delete installed metadata.');
         }
 
         CacheVersion::bumpHydration($server);
@@ -218,9 +215,28 @@ class InstalledProjectService
 
     public function getDatapackWorldName(Server $server, DaemonFileRepository $fileRepository): string
     {
-        $worldName = trim((string) $this->getServerPropertiesValue($server, $fileRepository, 'level-name'), " \t\n\r\0\x0B/\\");
+        $rawWorldName = (string) $this->getServerPropertiesValue($server, $fileRepository, 'level-name');
 
-        return $worldName !== '' ? $worldName : 'world';
+        // Check control characters before trim(), which would otherwise
+        // discard a NUL at either edge and turn an invalid value into a valid
+        // path segment.
+        if (preg_match('/[\x00-\x1F\x7F]/', $rawWorldName) === 1) {
+            throw new Exception('Invalid datapack world name.');
+        }
+
+        $worldName = trim($rawWorldName);
+
+        if ($worldName === '') {
+            return 'world';
+        }
+
+        if ($worldName === '.'
+            || $worldName === '..'
+            || strpbrk($worldName, '/\\') !== false) {
+            throw new Exception('Invalid datapack world name.');
+        }
+
+        return $worldName;
     }
 
     protected function getServerPropertiesValue(Server $server, DaemonFileRepository $fileRepository, string $key): ?string

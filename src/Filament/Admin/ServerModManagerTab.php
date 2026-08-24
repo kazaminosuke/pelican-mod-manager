@@ -224,6 +224,14 @@ final class ServerModManagerTab
 
     private static function saveFromLivewire(Tab $component): void
     {
+        // The tab is hidden for delegated admins, but Filament can still run
+        // relationship callbacks marked saveRelationshipsWhenHidden().
+        // Visibility is not an authorization boundary, so do not inject the
+        // root-only settings save into a non-root Server edit.
+        if (!self::isRootAdmin()) {
+            return;
+        }
+
         $livewire = $component->getLivewire();
 
         if (!method_exists($livewire, 'getRecord')) {

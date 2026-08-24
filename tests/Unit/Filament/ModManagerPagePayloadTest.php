@@ -522,7 +522,7 @@ class ModManagerPagePayloadTest extends TestCase
         $service = Mockery::mock(InstalledProjectService::class);
         $server = new Server();
         $files = Mockery::mock(DaemonFileRepository::class);
-        $document = InstalledMetadataDocument::fromArray(['installed_mods' => [[
+        $document = InstalledMetadataDocument::fromArray(['schema_version' => 2, 'installed_mods' => [[
             'project_id' => 'project',
             'project_slug' => 'project',
             'project_title' => 'Project',
@@ -912,6 +912,14 @@ class ModManagerPagePayloadTest extends TestCase
 
         self::assertStringContainsString('$this->peekVisibleLatestVersions($hits, $server, $type);', $source);
         self::assertStringNotContainsString('function warmVisibleLatestVersions', $source);
+    }
+
+    public function test_curseforge_datapack_external_links_use_the_data_packs_namespace(): void
+    {
+        $source = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+
+        self::assertStringContainsString("ProjectType::Datapack->value => 'data-packs'", $source);
+        self::assertStringNotContainsString("ProjectType::Datapack->value => 'texture-packs'", $source);
     }
 
     /** @param array<int, ProjectSourceInterface> $sources */

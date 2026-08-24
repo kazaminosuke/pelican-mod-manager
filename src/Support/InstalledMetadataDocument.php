@@ -6,12 +6,8 @@ use Exception;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 
 /**
- * In-memory representation of `.pelican-mod-manager.json`.
- *
- * The `installed_mods` member deliberately remains compatible with the v1
- * file consumed by older plugin releases. V2 adds optional file signatures
- * and hashes to those entries, plus unresolved files whose hashes can be
- * reused on a later source lookup.
+ * In-memory representation of the current `.pelican-mod-manager.json`
+ * schema. The pre-release plugin accepts schema version 2 only.
  */
 class InstalledMetadataDocument
 {
@@ -49,7 +45,9 @@ class InstalledMetadataDocument
      */
     public static function fromArray(array $metadata): ?self
     {
-        if (!isset($metadata['installed_mods']) || !is_array($metadata['installed_mods'])) {
+        if (($metadata['schema_version'] ?? null) !== self::SCHEMA_VERSION
+            || !isset($metadata['installed_mods'])
+            || !is_array($metadata['installed_mods'])) {
             return null;
         }
 
@@ -200,9 +198,9 @@ class InstalledMetadataDocument
             }
         }
 
-        $entry['source'] ??= ProjectSourceKey::Modrinth->value;
-
-        if (!is_string($entry['source']) || ProjectSourceKey::tryFrom($entry['source']) === null) {
+        if (!array_key_exists('source', $entry)
+            || !is_string($entry['source'])
+            || ProjectSourceKey::tryFrom($entry['source']) === null) {
             return null;
         }
 
