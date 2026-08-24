@@ -16,7 +16,7 @@ use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 /**
  * Discovers the (loader, Minecraft version, project type) combinations
  * actually in use across every server and dispatches a WarmCatalogSearch
- * for each one's page 1, across every source that egg has enabled. This is
+ * for each one's page 1, across every source that server has enabled. This is
  * what actually prevents a cold first visit to the catalog tab - the
  * per-visit dispatch in ModManagerPage::mount() only ever helps a later
  * visit, since it can't land before the request that triggered it finishes.

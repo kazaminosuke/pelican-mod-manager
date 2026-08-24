@@ -16,7 +16,7 @@ A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, upd
 | [Hangar](https://hangar.papermc.io) | Not required | ✅ | ✅ (`sha256`) | Plugin |
 | [GitHub Releases](https://github.com) | Optional, recommended | ❌ (tracks one `owner/repo` at a time) | ❌ | Mod, Plugin |
 
-Modrinth is always available. CurseForge is available by default on Mod, Plugin, and Datapack pages once its API key is configured; add `curseforge_disabled` to an egg's features to disable it for that egg. Hangar and GitHub Releases are opt-in per egg - see [Egg configuration](#egg-configuration).
+Each server has its own **Mod Manager usage settings** under Admin → Server → Edit → Mod Manager. Modrinth, CurseForge, and Hangar are enabled by default (CurseForge still requires its API key); GitHub Releases is disabled by default and must be enabled there. The source switches are independent of the egg and apply on top of each provider's supported project types.
 GitHub Releases works without a token, but its unauthenticated rate limit (60 requests/hour) is scarce enough that configuring one is recommended for direct repository tracking. GitHub Releases has no catalog cache-warming path.
 
 ## Requirements
@@ -45,7 +45,7 @@ https://github.com/kazaminosuke/pelican-mod-manager/releases/latest/download/pel
 
 ## Egg configuration
 
-Add one of these **features** to the egg so the plugin knows what to manage:
+Egg `features`/`tags` still participate in **type and loader detection**. For an explicit type, add one of these features:
 
 - `mod_manager` - manages `mods/`
 - `plugin_manager` - manages `plugins/`
@@ -53,21 +53,19 @@ Add one of these **features** to the egg so the plugin knows what to manage:
 
 Also add the `minecraft` **tag**, plus a loader tag so version/loader-specific filtering works: `paper`, `purpur`, `folia`, `spigot`, `bukkit`, `fabric`, `quilt`, `forge`, `neoforge`, `sponge`, `velocity`, `waterfall`, or `bungeecord`.
 
-To enable GitHub Releases tracking, add its feature flag:
+To enable a source, use the server's **Mod Manager usage settings**. Turn on the GitHub Releases source there to show the **Track GitHub Repository** action; GitHub Releases has no browseable catalog, so enter an `owner/repo` in that action to track its latest release. `curseforge_disabled`, `hangar_disabled`, and `github_releases` in egg features/tags do not enable or disable sources.
 
-```json
-{ "features": ["mod_manager", "github_releases"], "tags": ["minecraft", "fabric"] }
-```
-
-`github_releases` enables the **Track GitHub Repository** action: GitHub Releases has no browseable catalog, so enter an `owner/repo` there to track its latest release. Once a CurseForge API key is configured, every catalog type enables CurseForge by default. Hangar is enabled by default on Plugin catalogs. Add `curseforge_disabled` or `hangar_disabled` to an egg's features or tags to hide that source; these opt-outs take precedence over the defaults.
-
-**Automatic egg detection** (see [How it works](#how-it-works)) means most official Minecraft eggs don't need any of the above set manually - explicit `features`/`tags` still always win when present.
+**Automatic egg detection** (see [How it works](#how-it-works)) means most official Minecraft eggs don't need the type or loader fields set manually - explicit `features`/`tags` still win for type/loader detection when present. Source availability is always taken from the server settings above.
 One consequence: datapack management now **defaults to on** for any recognized Java server egg (mod/plugin/hybrid/vanilla/modpack), even without a `datapack_manager` feature. Add `datapack_manager_disabled` to an egg's features to opt back out, or set `MOD_MANAGER_EGG_AUTODETECT=false` to fully restore the pre-autodetect behaviour where `datapack_manager` must be explicit.
 
 ## Settings
 
 The plugin settings screen (panel admin → Plugins) has these fields, each backed by a global `.env`
 key unless noted otherwise:
+
+The per-server Admin → Server → Edit → Mod Manager tab separately controls each project-type page and
+each source. These settings are server-specific; GitHub Releases defaults to off, while Modrinth,
+CurseForge, and Hangar default to on. CurseForge is still hidden until its global API key is configured.
 
 | Field | `.env` key |
 |---|---|
@@ -124,9 +122,10 @@ The same screen has a **Clear cache** action, which behaves differently by scope
 - **Conditional deferred loading** skips the extra loading round trip entirely when a view's data
   is already cached.
 - **Automatic egg detection** recognizes the panel's official Minecraft eggs (and their
-  Pterodactyl-ecosystem equivalents) without manual egg editing - explicit `features`/`tags` always
-  win over it, and an egg it can't fully place shows a short setup prompt instead of nothing. Set
-  `MOD_MANAGER_EGG_AUTODETECT=false` to disable it.
+  Pterodactyl-ecosystem equivalents) without manual egg editing. Explicit `features`/`tags` still win
+  for type and loader detection, while source visibility comes only from the server's Mod Manager
+  usage settings. An egg it can't fully place shows a short setup prompt instead of nothing. Set
+  `MOD_MANAGER_EGG_AUTODETECT=false` to disable automatic detection.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design behind each of these,
 including the detection order and how to configure an egg manually.
@@ -136,8 +135,8 @@ including the detection order and how to configure an egg manually.
 - **"An asynchronous queue worker is required" warning** - see [Requirements](#requirements).
 - **A row shows "Not tracked"** - a file exists in the mod/plugin/datapack folder that isn't (yet)
   recorded in the metadata index. Use the Rescan action.
-- **The CurseForge tab is not shown** - configure a CurseForge API key in [Settings](#settings), and ensure
-  the egg does not include the `curseforge_disabled` feature.
+- **The CurseForge tab is not shown** - configure a CurseForge API key in [Settings](#settings), and
+  enable CurseForge in that server's Admin → Server → Edit → Mod Manager usage settings.
 - **Catalog data looks stale** - use the settings screen's Clear cache action; see above for the
   all-servers/single-server difference.
 

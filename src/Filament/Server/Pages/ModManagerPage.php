@@ -1089,10 +1089,9 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /**
-     * Sources enabled for this egg (via feature flags) that support the
-     * current page's project type. An egg with no opt-in source feature flags
-     * keeps Modrinth as its baseline; Plugin and Datapack pages may also have
-     * their default CurseForge source unless the egg opts out.
+     * Sources enabled in this server's Mod Manager settings that support the
+     * current page's project type. Provider capability and configuration are
+     * still evaluated by ProjectSourceRegistry.
      *
      * @return array<int, ProjectSourceInterface>
      */

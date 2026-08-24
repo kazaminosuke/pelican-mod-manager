@@ -938,7 +938,7 @@ class InstalledProjectService
 
     /**
      * Sources to try, in priority order, when identifying unknown files by hash.
-     * The registry applies the same per-egg source enablement and project-type
+     * The registry applies the same per-server source enablement and project-type
      * rules used by catalog tabs, then this method removes sources without hash
      * lookup support. This avoids querying a disabled CurseForge source or the
      * Plugin-only Hangar source for Mod/Datapack scans.

@@ -11,9 +11,9 @@
 | 項目 | 決定 |
 |---|---|
 | 新名称 | `pelican-mod-manager` / "Minecraft Mod Manager" |
-| plugin id 変更 | 一連の改修の**最後**に実施（方式B: 橋渡しリリース） |
-| リポジトリ名変更 | plugin id 変更と同じタイミング |
-| 着手順 | リング0リネーム → パフォーマンス改善 → README → 最終リネーム |
+| plugin id 変更 | **Stage 1で実施済み**（`pelican-mod-manager`） |
+| リポジトリ名変更 | **Stage 1で実施済み**（`kazaminosuke/pelican-mod-manager`） |
+| 着手順 | 以下の過去ロードマップは履歴。現行コードと本表をsource of truthとする |
 
 ---
 
@@ -1080,11 +1080,15 @@ resources/views/components/table-swr-cache.blade.php（1458行）は
 `Plugin::getReadme()` が `plugin_path($id, 'README.md')` を読み、**パネル管理画面内でレンダリングされる**
 （5分キャッシュ）。GitHub のランディングページではなく運用者向けドキュメントとして構成する。
 
+> この設計書の後半には、実装前の依頼文と過去のロードマップが履歴として残っています。
+> 現行の挙動はコードと `README.md` / `docs/architecture.md` を確認してください。特に source
+> の有効化は egg の feature/tag ではなく、server 単位の Mod Manager 利用設定で管理します。
+
 ## 現状の最大の欠落
 
-> **`ProjectSourceRegistry::availableFor()` は egg の `features` から
-> `curseforge` / `hangar` / `github_releases` を読んでソースを有効化するが、
-> README にその記述が一切ない。ユーザーはマルチソース機能の有効化方法を発見できない。**
+> **現行実装では `ProjectSourceRegistry::availableFor()` は server 単位の Mod Manager 利用設定と
+> 各 source の capability/configuration を組み合わせて source を有効化する。egg の
+> feature/tag は type/loader 判定にのみ使われる。**
 
 ## 構成案
 
@@ -1094,8 +1098,8 @@ resources/views/components/table-swr-cache.blade.php（1458行）は
 4. **要件** — Pelican バージョン、PHP、**非同期キューワーカー必須**（運用ブロッカーなので上位に）
 5. **インストール** — URL / ZIP（現行踏襲）
 6. **Egg 設定** — `mod_manager` / `plugin_manager` / `datapack_manager`、`minecraft` タグ、
-   ローダータグ、**＋ ソース有効化用 feature フラグ**（`curseforge` / `hangar` / `github_releases`、
-   実例つき）
+   ローダータグ（type/loader 判定）。source の有効化は server 単位の Mod Manager 利用設定
+   に記載する
 7. **設定** — プラグイン設定画面の4項目、対応する `.env` キー、
    "Clear cache" の全サーバ / 単一サーバ挙動の違い
 8. **How it works** — 積み重なった改修を可読化する節:
@@ -1124,11 +1128,9 @@ README.md は Pelican Panel の管理画面内でもレンダリングされま�
 （app/Models/Plugin.php の getReadme() が plugin_path($id, 'README.md') を読む）。
 GitHub のランディングページではなく、運用者向けドキュメントとして構成してください。
 
-現在の README は65行で Modrinth 専用の記述のままです。最大の欠落は、
-ProjectSourceRegistry::availableFor() が egg の features から
-'curseforge' / 'hangar' / 'github_releases' を読んでソースを有効化しているにもかかわらず、
-README にその記述が一切ないことです。ユーザーはマルチソース機能の有効化方法を
-発見できません。
+現在の README はマルチソース対応になっており、source の有効化は server 単位の Mod Manager
+利用設定で説明されています。egg の features/tags は type/loader 判定に残るため、README では
+この境界を明示します。
 
 【タスク】README.md を以下の構成に書き換え、詳細を docs/architecture.md に分離してください。
 
@@ -1143,9 +1145,8 @@ README.md（150行以内を目標）:
  5. インストール（URL / ZIP）— 現行内容を踏襲
  6. Egg 設定
     - mod_manager / plugin_manager / datapack_manager の feature
-    - minecraft タグとローダータグ
-    - ★ ソース有効化用 feature フラグ（curseforge / hangar / github_releases）を
-      実例つきで必ず記載してください
+    - minecraft タグとローダータグ（type/loader 判定）
+    - source は server 単位の Mod Manager 利用設定で有効化することを記載
  7. 設定（プラグイン設定画面の4項目、対応する .env キー、
     Clear cache の全サーバ／単一サーバ挙動の違い）
  8. How it works（各1〜3行の簡潔な説明。詳細は docs/architecture.md へリンク）
@@ -1166,7 +1167,7 @@ docs/architecture.md（新規）:
 
 【検証】
 1. README.md が150行以内であること
-2. 記載内容がすべて実コードと一致していること（特に対応ソース表と feature フラグ名）
+2. 記載内容がすべて実コードと一致していること（特に対応ソース表と server source 設定）
 3. 実パネルの管理画面でプラグインの README が正しくレンダリングされること
    （Markdown の記法がパネルのレンダラで崩れないか確認）
 4. リンク切れがないこと
@@ -1192,7 +1193,7 @@ docs/architecture.md（新規）:
 
 - [ ] README 150 行以内、`docs/architecture.md` 分離済み
 - [ ] 対応ソース表が実コードと一致
-- [ ] feature フラグ（`curseforge` / `hangar` / `github_releases`）が実例つきで記載
+- [ ] server 単位の source 設定（GitHub Releasesを含む）が記載
 - [ ] パネル管理画面で README が崩れずレンダリングされる
 
 ---

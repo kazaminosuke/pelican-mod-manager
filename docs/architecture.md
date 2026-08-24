@@ -17,6 +17,20 @@ which source it came from, and a `file_signature` (see below) used to skip re-ha
 files. Files present on disk but not yet in the document surface as "Not tracked" rows until a
 scan resolves them.
 
+## Per-server type and source capabilities
+
+`Support\ServerModManagerSettings` resolves the server-specific usage switches stored in
+`mod_manager_server_settings`. The `mod_enabled`, `plugin_enabled`, and `datapack_enabled` fields
+control page access independently. The `modrinth_enabled`, `curseforge_enabled`,
+`hangar_enabled`, and `github_releases_enabled` fields control source visibility independently;
+GitHub Releases defaults to off because it was previously an explicit opt-in.
+
+`Support\ProjectSourceRegistry::availableFor()` combines those server switches with each provider's
+`ProjectSourceInterface::supportsProjectType()` and `isConfigured()` capabilities. The server
+setting says whether a source may be used on that server, while the source implementation remains
+the authority on which project types and operations it supports. Egg `features` and `tags` are not
+consulted for source enablement; they remain part of the type/loader detection cascade below.
+
 ## Incremental hash scanning
 
 A full re-hash of every installed file on every scan does not scale once a server has hundreds of
@@ -138,9 +152,10 @@ to need manual egg editing before this plugin would do anything with it. `Suppor
 EggProfileResolver` recognizes them (and their Pterodactyl-ecosystem equivalents) automatically,
 falling back through a strictly-ordered cascade, most to least certain:
 
-1. **Explicit** - the egg's own `features`/`tags` (unchanged pre-auto-detection behavior; always
-   checked first by `ProjectType::fromServer()`/`supportsDatapacks()` and `MinecraftLoader::
-   fromServer()` themselves, so an egg already tagged this way never even reaches the resolver).
+1. **Explicit** - the egg's own `features`/`tags` (unchanged pre-auto-detection behavior for
+   type/loader detection; always checked first by `ProjectType::fromServer()`/`supportsDatapacks()`
+   and `MinecraftLoader::fromServer()` themselves, so an egg already tagged this way never even
+   reaches the resolver). These fields do not enable or disable a project source.
 2. **uuid match** against `resources/egg-profiles.json`'s bundled profile database.
 3. **update_url match** (covers a uuid that has since changed - both Paper's and Forge Minecraft's
    have, historically).
@@ -189,7 +204,8 @@ families resolve via the generic names either way, so this is a no-op change for
 
 A resolved Java-server-family profile (mod/plugin/hybrid/vanilla/modpack, but not a proxy) now
 defaults `supportsDatapacks()` to `true` - a Minecraft Java world can always accept a datapack, so
-requiring the separate `datapack_manager` feature mostly added friction. Add
+requiring the separate `datapack_manager` feature mostly added friction. This remains type
+detection; the server's source switches independently control which providers appear. Add
 `datapack_manager_disabled` to an egg's `features` for the old, opt-in-only behavior on that one
 egg; `datapack_manager` still force-enables it explicitly, taking priority over everything.
 
@@ -274,9 +290,8 @@ expire on their own TTL later.
 2. Route every upstream call through `Support\SourceCache` via a `Support\SourceFetchSpec` built
    from a private `spec()`/`buildSearchSpec()`-style helper, so `hasCachedSearch()`/`peekProject()`
    and the real fetch path can never drift onto different cache keys.
-3. Add the new `Enums\ProjectSourceKey` case and register the source in
-   `Support\ProjectSourceRegistry` (constructor wiring + `availableFor()`'s egg-feature gate, if the
-   source should be opt-in per egg like CurseForge/Hangar/GitHub Releases).
+3. Add the new `Enums\ProjectSourceKey` case, its server-setting field, and register the source in
+   `Support\ProjectSourceRegistry` (constructor wiring + `availableFor()` capability filtering).
 4. Add its config keys (API key, rate limit default) to
    `config/pelican-mod-manager.php` and the settings screen if it needs one.
 5. Update the source table in `README.md` (and `README.ja.md`) and this document.

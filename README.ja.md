@@ -16,7 +16,8 @@
 | [Hangar](https://hangar.papermc.io) | 不要 | ✅ | ✅(`sha256`) | Plugin |
 | [GitHub Releases](https://github.com) | 任意(推奨) | ❌(`owner/repo`を1件ずつ追跡) | ❌ | Mod, Plugin |
 
-Modrinthは常に有効です。CurseForgeはAPIキーを設定するとMod/Plugin/Datapackページで既定で利用可能になります。eggのfeaturesに`curseforge_disabled`を追加すると、そのeggだけで明示的に無効化できます。HangarとGitHub Releasesはegg単位のオプトインです([Egg設定](#egg設定)を参照)。GitHub Releasesはトークンなしでも動作しますが、未認証時のレート制限(60リクエスト/時)は乏しいため、直接リポジトリを追跡する場合はトークンの設定を推奨します。GitHub Releasesにはカタログのキャッシュウォーミング経路はありません。
+各サーバーの Admin → Server → Edit → Mod Manager に **Mod Managerの利用設定**があります。Modrinth・CurseForge・Hangarは既定でON(CurseForgeはAPIキーも必要)、GitHub Releasesは既定でOFFで、ここでONにします。sourceの切り替えはeggとは独立しており、各providerが対応するプロジェクトtypeの範囲に対して適用されます。
+GitHub Releasesはトークンなしでも動作しますが、未認証時のレート制限(60リクエスト/時)は乏しいため、直接リポジトリを追跡する場合はトークンの設定を推奨します。GitHub Releasesにはカタログのキャッシュウォーミング経路はありません。
 
 ## 要件
 
@@ -44,7 +45,7 @@ https://github.com/kazaminosuke/pelican-mod-manager/releases/latest/download/pel
 
 ## Egg設定
 
-プラグインが何を管理すべきか判別できるよう、eggの**feature**に以下のいずれかを追加してください。
+eggの`features`/`tags`は、引き続き**typeとローダーの判定**に使用されます。typeを明示する場合は、以下のfeatureを追加してください。
 
 - `mod_manager` - `mods/` を管理
 - `plugin_manager` - `plugins/` を管理
@@ -52,21 +53,19 @@ https://github.com/kazaminosuke/pelican-mod-manager/releases/latest/download/pel
 
 さらに`minecraft`**タグ**と、バージョン/ローダー別のフィルタリングを機能させるためのローダータグ(`paper`、`purpur`、`folia`、`spigot`、`bukkit`、`fabric`、`quilt`、`forge`、`neoforge`、`sponge`、`velocity`、`waterfall`、`bungeecord`のいずれか)を追加してください。
 
-GitHub Releasesを有効にするには、featureフラグを追加します。
+sourceを有効にするには、サーバーの**Mod Managerの利用設定**を使用します。GitHub ReleasesをONにすると**GitHubリポジトリを追跡**アクションが表示されます。GitHub Releasesには一覧検索できるカタログがないため、そこで`owner/repo`を入力して最新リリースを追跡してください。eggのfeatures/tagsにある`curseforge_disabled`、`hangar_disabled`、`github_releases`はsourceの有効化・無効化には使用されません。
 
-```json
-{ "features": ["mod_manager", "github_releases"], "tags": ["minecraft", "fabric"] }
-```
-
-`github_releases`は**GitHubリポジトリを追跡**アクションを有効にします。GitHub Releasesには一覧検索できるカタログがないため、ここで`owner/repo`を入力して最新リリースを追跡してください。CurseForge APIキーを設定すると、すべてのカタログ種別でCurseForgeが既定で有効になります。HangarはPluginカタログで既定で有効です。egg単位で隠すには`curseforge_disabled`または`hangar_disabled`をfeaturesまたはtagsに追加します。この無効化指定は既定の有効化より優先されます。
-
-**eggの自動認識**([内部の仕組み](#内部の仕組み)参照)により、公式のMinecraft eggの大半は上記を手動設定する必要がありません(明示的な`features`/`tags`が設定されていれば常にそちらが優先されます)。
+**eggの自動認識**([内部の仕組み](#内部の仕組み)参照)により、公式のMinecraft eggの大半はtypeやローダーを手動設定する必要がありません(明示的な`features`/`tags`が設定されていればtype/ローダー判定では常にそちらが優先されます)。sourceの利用可否は上記のサーバー設定から決まります。
 これに伴う変更点として、認識されたJava系egg(mod/plugin/hybrid/vanilla/modpack)ではdatapack管理が`datapack_manager` featureなしでも**既定で有効**になります。無効化するにはeggのfeatureに`datapack_manager_disabled`を追加するか、`MOD_MANAGER_EGG_AUTODETECT=false`を設定して自動認識導入前の挙動(`datapack_manager`の明示指定が必須)に完全に戻してください。
 
 ## 設定
 
 プラグイン設定画面(パネル管理者 → Plugins)には以下の項目があり、特記のない限りそれぞれ
 グローバルな`.env`キーに対応しています。
+
+サーバーごとの Admin → Server → Edit → Mod Manager では、各プロジェクトtypeのページと各sourceを
+個別に切り替えられます。GitHub Releasesは既定OFF、Modrinth・CurseForge・Hangarは既定ONです。
+CurseForgeはグローバルAPIキーが設定されるまで表示されません。
 
 | 項目 | `.env`キー |
 |---|---|
@@ -117,9 +116,10 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
 - **条件付きの遅延読み込み**により、表示するデータが既にキャッシュ済みの場合は追加の読み込み
   往復自体を省略します。
 - **eggの自動認識**により、パネル公式のMinecraft egg(およびPterodactylエコシステム側の
-  対応するegg)を、eggを手で編集することなく認識します。明示的な`features`/`tags`は常に
-  自動認識より優先され、自動では判定しきれないeggには(何も表示しない代わりに)簡単な設定案内が
-  表示されます。`MOD_MANAGER_EGG_AUTODETECT=false`でこの機能を無効化できます。
+  対応するegg)を、eggを手で編集することなく認識します。明示的な`features`/`tags`はtypeと
+  ローダー判定で自動認識より優先され、sourceの表示はサーバーのMod Manager利用設定で決まります。
+  自動では判定しきれないeggには簡単な設定案内が表示されます。`MOD_MANAGER_EGG_AUTODETECT=false`
+  で自動認識を無効化できます。
 
 各項目の詳細な設計(検出順序や、eggを手動設定する方法を含む)については
 [`docs/architecture.md`](docs/architecture.md)(英語)を参照してください。
@@ -129,8 +129,8 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
 - **「非同期キューワーカーが必要です」という警告が出る** - [要件](#要件)を参照してください。
 - **行が「未追跡」と表示される** - mod/plugin/datapackフォルダにファイルは存在するものの、
   まだMetadataインデックスに記録されていない状態です。再スキャンアクションを使用してください。
-- **CurseForgeタブが表示されない** - [設定](#設定)でCurseForge APIキーを設定し、eggに
-  `curseforge_disabled` featureが含まれていないことを確認してください。
+- **CurseForgeタブが表示されない** - [設定](#設定)でCurseForge APIキーを設定し、そのサーバーの
+  Admin → Server → Edit → Mod Manager利用設定でCurseForgeをONにしてください。
 - **カタログのデータが古いと感じる** - 設定画面のキャッシュをクリアアクションを使用してください。
   全サーバー/単一サーバーでの挙動の違いは上記の通りです。
 
