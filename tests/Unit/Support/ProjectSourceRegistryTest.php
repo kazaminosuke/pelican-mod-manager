@@ -23,9 +23,11 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Support\EggProfileRegistry;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
+use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -63,6 +65,17 @@ class ProjectSourceRegistryTest extends TestCase
             self::$capsule->setAsGlobal();
             self::$capsule->bootEloquent();
         }
+
+        Capsule::schema()->dropIfExists('mod_manager_server_settings');
+        Capsule::schema()->create('mod_manager_server_settings', function ($table): void {
+            $table->id();
+            $table->unsignedInteger('server_id')->unique();
+            $table->boolean('modrinth_enabled')->default(true);
+            $table->boolean('curseforge_enabled')->default(true);
+            $table->boolean('hangar_enabled')->default(true);
+            $table->boolean('github_releases_enabled')->default(false);
+            $table->timestamps();
+        });
     }
 
     protected function tearDown(): void
@@ -343,9 +356,10 @@ class ProjectSourceRegistryTest extends TestCase
         ];
     }
 
-    public function test_curseforge_disabled_feature_overrides_the_plugin_default(): void
+    public function test_curseforge_server_setting_overrides_the_plugin_default(): void
     {
-        $server = $this->serverWithEgg(features: ['curseforge_disabled']);
+        $server = $this->serverWithEgg();
+        (new ServerModManagerSettingRepository())->save($server, ['curseforge_enabled' => false]);
         $modrinth = Mockery::mock(ModrinthSource::class);
         $hangar = Mockery::mock(HangarSource::class);
         $modrinth->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
@@ -357,9 +371,9 @@ class ProjectSourceRegistryTest extends TestCase
         );
     }
 
-    public function test_hangar_is_available_for_plugins_without_a_positive_hangar_flag(): void
+    public function test_hangar_is_available_for_plugins_by_default(): void
     {
-        $server = $this->serverWithEgg(features: ['plugin_manager']);
+        $server = $this->serverWithEgg();
         $modrinth = Mockery::mock(ModrinthSource::class);
         $curseForge = Mockery::mock(CurseForgeSource::class);
         $hangar = Mockery::mock(HangarSource::class);
@@ -373,9 +387,10 @@ class ProjectSourceRegistryTest extends TestCase
         );
     }
 
-    public function test_hangar_disabled_feature_hides_hangar_for_plugins(): void
+    public function test_hangar_server_setting_hides_hangar_for_plugins(): void
     {
-        $server = $this->serverWithEgg(features: ['hangar_disabled']);
+        $server = $this->serverWithEgg();
+        (new ServerModManagerSettingRepository())->save($server, ['hangar_enabled' => false]);
         $modrinth = Mockery::mock(ModrinthSource::class);
         $curseForge = Mockery::mock(CurseForgeSource::class);
         $hangar = Mockery::mock(HangarSource::class);
@@ -389,18 +404,18 @@ class ProjectSourceRegistryTest extends TestCase
         );
     }
 
-    public function test_hangar_disabled_tag_hides_hangar_for_plugins(): void
+    public function test_egg_source_flags_do_not_change_server_source_availability(): void
     {
-        $server = $this->serverWithEgg(features: [], tags: ['minecraft', 'hangar_disabled']);
+        $server = $this->serverWithEgg(features: ['hangar_disabled', 'curseforge_disabled', 'github_releases']);
         $modrinth = Mockery::mock(ModrinthSource::class);
         $curseForge = Mockery::mock(CurseForgeSource::class);
         $hangar = Mockery::mock(HangarSource::class);
         $modrinth->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
         $curseForge->shouldReceive('isConfigured')->once()->andReturnFalse();
-        $hangar->shouldNotReceive('supportsProjectType');
+        $hangar->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
 
         self::assertSame(
-            [$modrinth],
+            [$modrinth, $hangar],
             $this->registryWith(modrinth: $modrinth, curseForge: $curseForge, hangar: $hangar)->availableFor($server, ProjectType::Plugin),
         );
     }
@@ -421,9 +436,10 @@ class ProjectSourceRegistryTest extends TestCase
         );
     }
 
-    public function test_github_releases_remain_opt_in(): void
+    public function test_github_releases_can_be_enabled_per_server(): void
     {
-        $server = $this->serverWithEgg(features: ['github_releases']);
+        $server = $this->serverWithEgg();
+        (new ServerModManagerSettingRepository())->save($server, ['github_releases_enabled' => true]);
         $modrinth = Mockery::mock(ModrinthSource::class);
         $curseForge = Mockery::mock(CurseForgeSource::class);
         $hangar = Mockery::mock(HangarSource::class);
@@ -445,6 +461,7 @@ class ProjectSourceRegistryTest extends TestCase
         ?HangarSource $hangar = null,
         ?GitHubReleasesSource $github = null,
         bool $supportsAsyncDispatch = false,
+        ?ServerModManagerSettings $settings = null,
     ): ProjectSourceRegistry {
         // InstalledOperationManager is final, so it can't be Mockery-mocked
         // directly - construct a real instance and drive
@@ -464,6 +481,7 @@ class ProjectSourceRegistryTest extends TestCase
             $hangar ?? Mockery::mock(HangarSource::class),
             $github ?? Mockery::mock(GitHubReleasesSource::class),
             $operations,
+            $settings ?? new ServerModManagerSettings(new ServerModManagerSettingRepository()),
         );
     }
 

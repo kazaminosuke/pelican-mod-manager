@@ -26,6 +26,7 @@ class ProjectSourceRegistry
         HangarSource $hangar,
         GitHubReleasesSource $githubReleases,
         protected readonly InstalledOperationManager $operations,
+        protected readonly ServerModManagerSettings $settings,
     ) {
         $this->sources = [
             ProjectSourceKey::Modrinth->value => $modrinth,
@@ -49,14 +50,10 @@ class ProjectSourceRegistry
      * Sources enabled for this server, filtered to those supporting the given
      * project type.
      *
-     * Modrinth is always the baseline source - unchanged from pre-multi-source
-     * behavior, so no existing egg needs to be touched. When configured,
-     * CurseForge is also a baseline for every catalog type. Hangar is the
-     * baseline Plugin catalog (it does not serve mods or datapacks). An
-     * operator can opt out per egg with "curseforge_disabled" or
-     * "hangar_disabled" on features or tags. GitHub Releases remains opt-in
-     * through its ProjectSourceKey value. None of these choices ever silently
-     * removes Modrinth.
+     * Source switches are explicit per-server settings. The source itself
+     * remains responsible for its capability matrix via
+     * supportsProjectType(); this class only combines that capability with the
+     * server's source switch and configuration state.
      *
      * CurseForge additionally requires a configured API key. Do not expose a
      * catalog tab, filter choice, or hash-lookup candidate that cannot be
@@ -66,34 +63,22 @@ class ProjectSourceRegistry
      */
     public function availableFor(Server $server, ProjectType $type): array
     {
-        $server->loadMissing('egg');
-        // ->inherit_features, not ->features: a child egg (config_from set)
-        // with no features of its own falls back to its parent's - the same
-        // fix ProjectType::fromServerExplicit() got in Stage 8. Reading
-        // ->features here missed every source feature flag set on the
-        // parent egg instead of the child, silently collapsing this egg
-        // back to Modrinth-only regardless of what was actually enabled.
-        $flags = $this->eggSourceFlags($server);
-
         $enabled = [];
 
-        // Keep catalog tabs and automatic hash lookup aligned. A configured
-        // CurseForge source is available for Mod, Plugin, and Datapack pages;
-        // the negative flag wins so inherited features give operators an
-        // unambiguous per-egg opt-out.
-        $curseForgeEnabled = !in_array('curseforge_disabled', $flags, true);
-
-        if ($curseForgeEnabled && $this->sources[ProjectSourceKey::CurseForge->value]->isConfigured()) {
+        $curseForge = $this->sources[ProjectSourceKey::CurseForge->value];
+        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::CurseForge) && $curseForge->isConfigured()) {
             $enabled[] = $this->sources[ProjectSourceKey::CurseForge->value];
         }
 
-        $enabled[] = $this->sources[ProjectSourceKey::Modrinth->value];
+        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::Modrinth)) {
+            $enabled[] = $this->sources[ProjectSourceKey::Modrinth->value];
+        }
 
-        if (!in_array('hangar_disabled', $flags, true)) {
+        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::Hangar)) {
             $enabled[] = $this->sources[ProjectSourceKey::Hangar->value];
         }
 
-        if (in_array(ProjectSourceKey::GitHubReleases->value, $flags, true)) {
+        if ($this->settings->isSourceEnabled($server, ProjectSourceKey::GitHubReleases)) {
             $enabled[] = $this->sources[ProjectSourceKey::GitHubReleases->value];
         }
 
@@ -101,24 +86,6 @@ class ProjectSourceRegistry
             $enabled,
             fn (ProjectSourceInterface $source) => $source->supportsProjectType($type)
         ));
-    }
-
-    /**
-     * Source flags are accepted on inherited egg features or tags. A leftover
-     * positive "hangar" flag is ignored; Hangar is on unless hangar_disabled
-     * is present.
-     *
-     * @return array<int, string>
-     */
-    private function eggSourceFlags(Server $server): array
-    {
-        return array_values(array_unique(array_filter(
-            array_merge(
-                $server->egg->inherit_features ?? [],
-                $server->egg->tags ?? [],
-            ),
-            static fn (mixed $flag): bool => is_string($flag) && $flag !== '',
-        )));
     }
 
     /**

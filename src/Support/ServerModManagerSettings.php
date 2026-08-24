@@ -4,6 +4,7 @@ namespace Kazaminosuke\ModManager\Support;
 
 use App\Models\Server;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
+use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Models\ModManagerServerSetting;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
@@ -40,6 +41,33 @@ final class ServerModManagerSettings
         $setting = $this->repository->forServer($server);
 
         return $setting?->{$this->typeEnabledField($type)} ?? true;
+    }
+
+    /**
+     * Resolve the server-level source switch.
+     *
+     * Source capability remains source-owned (ProjectSourceInterface), while
+     * this switch controls whether an administrator exposes that source on a
+     * particular server. A missing row preserves the pre-settings defaults;
+     * GitHub Releases intentionally defaults to false because it was formerly
+     * an explicit opt-in.
+     */
+    public function isSourceEnabled(Server|int $server, ProjectSourceKey $source): bool
+    {
+        return $this->configuredSourceEnabled($server, $source);
+    }
+
+    public function configuredSourceEnabled(Server|int $server, ProjectSourceKey $source): bool
+    {
+        $field = $this->sourceEnabledField($source);
+
+        if ($field === null) {
+            return false;
+        }
+
+        $setting = $this->repository->forServer($server);
+
+        return $setting?->{$field} ?? $this->defaultSourceEnabled($source);
     }
 
     public function hasAnyManagerTypeEnabled(Server|int $server): bool
@@ -129,6 +157,22 @@ final class ServerModManagerSettings
     private function typeEnabledField(ProjectType $type): string
     {
         return $type->value.'_enabled';
+    }
+
+    private function sourceEnabledField(ProjectSourceKey $source): ?string
+    {
+        return match ($source) {
+            ProjectSourceKey::Modrinth => 'modrinth_enabled',
+            ProjectSourceKey::CurseForge => 'curseforge_enabled',
+            ProjectSourceKey::Hangar => 'hangar_enabled',
+            ProjectSourceKey::GitHubReleases => 'github_releases_enabled',
+            ProjectSourceKey::Voxel => null,
+        };
+    }
+
+    private function defaultSourceEnabled(ProjectSourceKey $source): bool
+    {
+        return $source !== ProjectSourceKey::GitHubReleases;
     }
 
     private function navigationSortField(ProjectType $type): string

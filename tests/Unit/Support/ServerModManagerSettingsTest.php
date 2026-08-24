@@ -7,6 +7,7 @@ use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
+use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Models\ModManagerServerSetting;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
@@ -49,6 +50,10 @@ final class ServerModManagerSettingsTest extends TestCase
             $table->boolean('mod_enabled')->default(true);
             $table->boolean('plugin_enabled')->default(true);
             $table->boolean('datapack_enabled')->default(true);
+            $table->boolean('modrinth_enabled')->default(true);
+            $table->boolean('curseforge_enabled')->default(true);
+            $table->boolean('hangar_enabled')->default(true);
+            $table->boolean('github_releases_enabled')->default(false);
             $table->integer('mod_navigation_sort')->nullable();
             $table->integer('plugin_navigation_sort')->nullable();
             $table->integer('datapack_navigation_sort')->nullable();
@@ -75,6 +80,10 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Mod));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Datapack));
+        self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::Modrinth));
+        self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::CurseForge));
+        self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::Hangar));
+        self::assertFalse($settings->isSourceEnabled($server, ProjectSourceKey::GitHubReleases));
         self::assertTrue($settings->allowsEggProfileEdit($server));
         self::assertTrue($settings->allowsProjectOperation($server, ProjectOperation::Install));
         self::assertFalse($settings->allowsProjectOperation($server, ProjectOperation::Update));
@@ -121,16 +130,37 @@ final class ServerModManagerSettingsTest extends TestCase
 
         $saved = $repository->save($server, [
             'mod_enabled' => false,
+            'github_releases_enabled' => true,
             'allow_user_project_update' => true,
         ]);
 
         self::assertFalse($settings->isTypeEnabled($server, ProjectType::Mod));
+        self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::GitHubReleases));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
         self::assertTrue($settings->allowsProjectOperation($server, ProjectOperation::Update));
         self::assertSame($saved, $repository->forServer($server));
 
         $repository->clear();
         self::assertFalse($repository->forServer($server)->mod_enabled);
+    }
+
+    public function test_source_switches_are_independent_per_server(): void
+    {
+        $server = $this->server(1);
+        ModManagerServerSetting::query()->create([
+            'server_id' => 1,
+            'modrinth_enabled' => false,
+            'curseforge_enabled' => true,
+            'hangar_enabled' => false,
+            'github_releases_enabled' => true,
+        ]);
+
+        $settings = $this->settings();
+
+        self::assertFalse($settings->isSourceEnabled($server, ProjectSourceKey::Modrinth));
+        self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::CurseForge));
+        self::assertFalse($settings->isSourceEnabled($server, ProjectSourceKey::Hangar));
+        self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::GitHubReleases));
     }
 
     public function test_type_switches_are_independent_and_navigation_null_inherits_global(): void

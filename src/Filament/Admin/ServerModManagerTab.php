@@ -10,6 +10,7 @@ use Filament\Forms\Components\ToggleButtons;
 use Filament\Schemas\Components\Actions;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs\Tab;
+use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\ModManagerPlugin;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
@@ -32,6 +33,14 @@ final class ServerModManagerTab
         'mod' => 'mod_manager_mod_enabled',
         'plugin' => 'mod_manager_plugin_enabled',
         'datapack' => 'mod_manager_datapack_enabled',
+    ];
+
+    /** @var array<string, string> */
+    private const SOURCE_ENABLED_FIELDS = [
+        'modrinth' => 'mod_manager_modrinth_enabled',
+        'curseforge' => 'mod_manager_curseforge_enabled',
+        'hangar' => 'mod_manager_hangar_enabled',
+        'github_releases' => 'mod_manager_github_releases_enabled',
     ];
 
     /** @var array<string, string> */
@@ -76,6 +85,16 @@ final class ServerModManagerTab
                         self::typeToggle(ProjectType::Mod),
                         self::typeToggle(ProjectType::Plugin),
                         self::typeToggle(ProjectType::Datapack),
+                    ]),
+                Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.sources'))
+                    ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.sources_helper'))
+                    ->columnSpanFull()
+                    ->columns(['default' => 1, 'md' => 2, '2xl' => 4])
+                    ->schema([
+                        self::sourceToggle(ProjectSourceKey::Modrinth),
+                        self::sourceToggle(ProjectSourceKey::CurseForge),
+                        self::sourceToggle(ProjectSourceKey::Hangar),
+                        self::sourceToggle(ProjectSourceKey::GitHubReleases),
                     ]),
                 Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.navigation'))
                     ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.navigation_helper'))
@@ -166,6 +185,12 @@ final class ServerModManagerTab
                 : ($current?->{$type.'_enabled'} ?? true);
         }
 
+        foreach (self::SOURCE_ENABLED_FIELDS as $source => $field) {
+            $attributes[$source.'_enabled'] = array_key_exists($field, $data)
+                ? self::decodeBoolean($data[$field])
+                : ($current?->{$source.'_enabled'} ?? self::defaultSourceEnabled(ProjectSourceKey::from($source)));
+        }
+
         foreach (self::NAVIGATION_SORT_FIELDS as $type => $field) {
             $attributes[$type.'_navigation_sort'] = array_key_exists($field, $data)
                 ? self::decodeNavigationSort($data[$field])
@@ -205,6 +230,17 @@ final class ServerModManagerTab
             ->helperText(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.type_enabled_helper'))
             ->formatStateUsing(fn (Server $record): bool => app(ServerModManagerSettings::class)->configuredTypeEnabled($record, $type))
             ->visible(fn (Server $record): bool => self::isTypeVisible($record, $type))
+            ->dehydrated(false);
+    }
+
+    private static function sourceToggle(ProjectSourceKey $source): Toggle
+    {
+        $field = self::SOURCE_ENABLED_FIELDS[$source->value];
+
+        return Toggle::make($field)
+            ->label(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.source_enabled', ['source' => $source->getLabel()]))
+            ->helperText(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.source_enabled_helper'))
+            ->formatStateUsing(fn (Server $record): bool => app(ServerModManagerSettings::class)->configuredSourceEnabled($record, $source))
             ->dehydrated(false);
     }
 
@@ -289,6 +325,11 @@ final class ServerModManagerTab
             false, 0, '0', 'deny' => false,
             default => null,
         };
+    }
+
+    private static function defaultSourceEnabled(ProjectSourceKey $source): bool
+    {
+        return $source !== ProjectSourceKey::GitHubReleases;
     }
 
     private static function isRootAdmin(): bool
