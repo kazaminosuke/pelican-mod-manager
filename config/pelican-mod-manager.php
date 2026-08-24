@@ -6,6 +6,7 @@ return [
         'mod' => env('MINECRAFT_MODRINTH_MOD_NAV_SORT', 11),
         'plugin' => env('MINECRAFT_MODRINTH_PLUGIN_NAV_SORT', 11),
         'datapack' => env('MINECRAFT_MODRINTH_DATAPACK_NAV_SORT', 12),
+        'resourcepack' => env('MINECRAFT_MODRINTH_RESOURCEPACK_NAV_SORT', 13),
     ],
     'curseforge_api_key' => env('CURSEFORGE_API_KEY'),
     'github_token' => env('GITHUB_TOKEN'),

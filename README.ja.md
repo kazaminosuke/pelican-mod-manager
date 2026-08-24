@@ -2,7 +2,7 @@
 
 *[English](README.md)*
 
-[Pelican Panel](https://pelican.dev) 用のプラグインです。**Modrinth、CurseForge、Hangar、GitHub Releases** のMod・Plugin・Datapackを、サーバーパネル上で検索・インストール・更新・管理できます。
+[Pelican Panel](https://pelican.dev) 用のプラグインです。**Modrinth、CurseForge、Hangar、GitHub Releases** のMod・Plugin・Datapack・Resource Packを、サーバーパネル上で検索・インストール・更新・管理できます。
 
 ![カタログタブ](docs/images/catalog.png)
 ![インストール済みタブ](docs/images/installed.png)
@@ -11,13 +11,18 @@
 
 | ソース | APIキー | 検索 | ハッシュ照合 | 対応プロジェクト種別 |
 |---|---|---|---|---|
-| [Modrinth](https://modrinth.com) | 不要 | ✅ | ✅(`sha512`) | Mod, Plugin, Datapack |
-| [CurseForge](https://www.curseforge.com/minecraft) | **必須** | ✅ | ✅(`murmur2`) | Mod, Plugin, Datapack |
+| [Modrinth](https://modrinth.com) | 不要 | ✅ | ✅(`sha512`) | Mod, Plugin, Datapack, Resource Pack |
+| [CurseForge](https://www.curseforge.com/minecraft) | **必須** | ✅ | ✅(`murmur2`) | Mod, Plugin, Datapack, Resource Pack |
 | [Hangar](https://hangar.papermc.io) | 不要 | ✅ | ✅(`sha256`) | Plugin |
 | [GitHub Releases](https://github.com) | 任意(推奨) | ❌(`owner/repo`を1件ずつ追跡) | ❌ | Mod, Plugin |
 
 各サーバーの Admin → Server → Edit → Mod Manager に **Mod Managerの利用設定**があります。Modrinth・CurseForge・Hangarは既定でON(CurseForgeはAPIキーも必要)、GitHub Releasesは既定でOFFで、ここでONにします。sourceの切り替えはeggとは独立しており、各providerが対応するプロジェクトtypeの範囲に対して適用されます。
 GitHub Releasesはトークンなしでも動作しますが、未認証時のレート制限(60リクエスト/時)は乏しいため、直接リポジトリを追跡する場合はトークンの設定を推奨します。GitHub Releasesにはカタログのキャッシュウォーミング経路はありません。
+
+Resource Packには専用ページがあり、同じサーバー単位の利用設定で有効化します。Modrinthと
+CurseForgeに対応しています。インストール時にアーカイブをサーバーの`resourcepacks/`へ
+ダウンロードするのではなく、providerのdirect URLとSHA-1を`server.properties`の
+`resource-pack`と`resource-pack-sha1`へ設定します。
 
 ## 要件
 
@@ -55,6 +60,9 @@ eggの`features`/`tags`は、引き続き**typeとローダーの判定**に使�
 
 sourceを有効にするには、サーバーの**Mod Managerの利用設定**を使用します。GitHub ReleasesをONにすると**GitHubリポジトリを追跡**アクションが表示されます。GitHub Releasesには一覧検索できるカタログがないため、そこで`owner/repo`を入力して最新リリースを追跡してください。eggのfeatures/tagsにある`curseforge_disabled`、`hangar_disabled`、`github_releases`はsourceの有効化・無効化には使用されません。
 
+Resource Packの利用可否もサーバー単位のtype設定で管理され、eggのfeature/tagからは判定しません。
+eggの自動認識はMod/Pluginのtypeとローダー情報にのみ使用されます。
+
 **eggの自動認識**([内部の仕組み](#内部の仕組み)参照)により、公式のMinecraft eggの大半はtypeやローダーを手動設定する必要がありません(明示的な`features`/`tags`が設定されていればtype/ローダー判定では常にそちらが優先されます)。sourceの利用可否は上記のサーバー設定から決まります。
 これに伴う変更点として、認識されたJava系egg(mod/plugin/hybrid/vanilla/modpack)ではdatapack管理が`datapack_manager` featureなしでも**既定で有効**になります。無効化するにはeggのfeatureに`datapack_manager_disabled`を追加するか、`MOD_MANAGER_EGG_AUTODETECT=false`を設定して自動認識導入前の挙動(`datapack_manager`の明示指定が必須)に完全に戻してください。
 
@@ -73,6 +81,7 @@ CurseForgeはグローバルAPIキーが設定されるまで表示されませ�
 | Modのナビゲーション表示順 | `MINECRAFT_MODRINTH_MOD_NAV_SORT` |
 | Pluginのナビゲーション表示順 | `MINECRAFT_MODRINTH_PLUGIN_NAV_SORT` |
 | Datapackのナビゲーション表示順 | `MINECRAFT_MODRINTH_DATAPACK_NAV_SORT` |
+| Resource Packのナビゲーション表示順 | `MINECRAFT_MODRINTH_RESOURCEPACK_NAV_SORT` |
 | CurseForge APIキー | `CURSEFORGE_API_KEY` |
 | GitHubトークン | `GITHUB_TOKEN` |
 | 一般ユーザーにもegg プロファイルの編集を許可 | `MOD_MANAGER_ALLOW_USER_EGG_PROFILE_EDIT`(既定OFF) |
@@ -104,6 +113,8 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
 
 - **ローカルMetadataインデックス**(各サーバー上の`.pelican-mod-manager.json`)が、インストール済み
   ファイルとアップストリームプロジェクトの対応関係を追跡します。
+- **Resource Packの状態**(`.pelican-mod-manager-resource-pack.json`)は、`server.properties`へ
+  設定するproviderのバージョン、direct URL、SHA-1を既存のMetadataインデックスとは別に保存します。
 - **インクリメンタルなハッシュスキャン**により、サイズ/更新日時のシグネチャに変化があった
   ファイルのみを再ハッシュ化します(毎回全ファイルを再ハッシュ化しません)。
 - **バックグラウンドジョブ・ステータスバッジ**により、スキャンと一括更新がUIをブロックせずに

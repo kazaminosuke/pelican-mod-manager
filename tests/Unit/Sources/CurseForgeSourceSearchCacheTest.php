@@ -89,6 +89,27 @@ class CurseForgeSourceSearchCacheTest extends TestCase
         self::assertSame(['hits' => [], 'total_hits' => 0], $source->search($this->server(), ProjectType::Datapack));
     }
 
+    public function test_resource_pack_search_uses_the_texture_pack_class_without_the_data_pack_category(): void
+    {
+        $this->bindApiKey('test-key');
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function (SourceFetchSpec $spec): bool {
+                self::assertSame(ProjectType::ResourcePack->value, $spec->arguments['project_type']);
+                self::assertSame(12, $spec->arguments['params']['classId']);
+                self::assertArrayNotHasKey('categoryId', $spec->arguments['params']);
+                self::assertArrayNotHasKey('modLoaderType', $spec->arguments['params']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+        $source = new CurseForgeSource($this->sourceCache($this->cache(), $executor));
+
+        self::assertTrue($source->supportsProjectType(ProjectType::ResourcePack));
+        self::assertSame(['hits' => [], 'total_hits' => 0], $source->search($this->server(), ProjectType::ResourcePack));
+    }
+
     public function test_search_clamps_an_unreachable_page_to_curseforges_final_supported_offset(): void
     {
         $this->bindApiKey('test-key');

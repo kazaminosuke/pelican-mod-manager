@@ -11,6 +11,7 @@ enum ProjectType: string implements HasLabel
     case Mod = 'mod';
     case Plugin = 'plugin';
     case Datapack = 'datapack';
+    case ResourcePack = 'resourcepack';
 
     public function getLabel(): string
     {
@@ -18,6 +19,7 @@ enum ProjectType: string implements HasLabel
             self::Mod => trans('pelican-mod-manager::strings.minecraft_mods'),
             self::Plugin => trans('pelican-mod-manager::strings.minecraft_plugins'),
             self::Datapack => trans('pelican-mod-manager::strings.minecraft_datapacks'),
+            self::ResourcePack => trans('pelican-mod-manager::strings.minecraft_resource_packs'),
         };
     }
 
@@ -27,6 +29,7 @@ enum ProjectType: string implements HasLabel
             self::Mod => 'mods',
             self::Plugin => 'plugins',
             self::Datapack => 'world/datapacks',
+            self::ResourcePack => 'resourcepacks',
         };
     }
 
@@ -34,7 +37,7 @@ enum ProjectType: string implements HasLabel
     {
         return match ($this) {
             self::Mod, self::Plugin => '.jar',
-            self::Datapack => '.zip',
+            self::Datapack, self::ResourcePack => '.zip',
         };
     }
 
@@ -42,6 +45,7 @@ enum ProjectType: string implements HasLabel
     {
         return match ($this) {
             self::Datapack => 'datapack',
+            self::ResourcePack => null,
             default => MinecraftLoader::fromServer($server)?->value,
         };
     }

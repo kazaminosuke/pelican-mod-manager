@@ -72,7 +72,7 @@ final class ServerModManagerSettings
 
     public function hasAnyManagerTypeEnabled(Server|int $server): bool
     {
-        foreach ([ProjectType::Mod, ProjectType::Plugin, ProjectType::Datapack] as $type) {
+        foreach ([ProjectType::Mod, ProjectType::Plugin, ProjectType::Datapack, ProjectType::ResourcePack] as $type) {
             if ($this->configuredTypeEnabled($server, $type)) {
                 return true;
             }
@@ -104,7 +104,11 @@ final class ServerModManagerSettings
     public function navigationSort(Server|int $server, ProjectType $type): int
     {
         $override = $this->navigationSortOverride($server, $type);
-        $default = $type === ProjectType::Datapack ? 12 : 11;
+        $default = match ($type) {
+            ProjectType::Datapack => 12,
+            ProjectType::ResourcePack => 13,
+            default => 11,
+        };
 
         return $override
             ?? NavigationSort::nullable(config('pelican-mod-manager.navigation_sort.'.$type->value, $default))
@@ -156,7 +160,9 @@ final class ServerModManagerSettings
 
     private function typeEnabledField(ProjectType $type): string
     {
-        return $type->value.'_enabled';
+        return $type === ProjectType::ResourcePack
+            ? 'resourcepack_enabled'
+            : $type->value.'_enabled';
     }
 
     private function sourceEnabledField(ProjectSourceKey $source): ?string
@@ -177,6 +183,8 @@ final class ServerModManagerSettings
 
     private function navigationSortField(ProjectType $type): string
     {
-        return $type->value.'_navigation_sort';
+        return $type === ProjectType::ResourcePack
+            ? 'resourcepack_navigation_sort'
+            : $type->value.'_navigation_sort';
     }
 }

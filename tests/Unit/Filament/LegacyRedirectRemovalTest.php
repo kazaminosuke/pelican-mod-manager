@@ -12,6 +12,7 @@ final class LegacyRedirectRemovalTest extends TestCase
 
         self::assertFileExists($pages.'/ModManagerPage.php');
         self::assertFileExists($pages.'/MinecraftDatapackPage.php');
+        self::assertFileExists($pages.'/MinecraftResourcePackPage.php');
         self::assertFileDoesNotExist($pages.'/LegacyModrinthSlugRedirectPage.php');
         self::assertFileDoesNotExist($pages.'/MinecraftDatapackLegacyRedirectPage.php');
     }

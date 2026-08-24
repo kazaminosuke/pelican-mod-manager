@@ -33,6 +33,7 @@ final class ServerModManagerTab
         'mod' => 'mod_manager_mod_enabled',
         'plugin' => 'mod_manager_plugin_enabled',
         'datapack' => 'mod_manager_datapack_enabled',
+        'resourcepack' => 'mod_manager_resourcepack_enabled',
     ];
 
     /** @var array<string, string> */
@@ -48,6 +49,7 @@ final class ServerModManagerTab
         'mod' => 'mod_manager_mod_navigation_sort',
         'plugin' => 'mod_manager_plugin_navigation_sort',
         'datapack' => 'mod_manager_datapack_navigation_sort',
+        'resourcepack' => 'mod_manager_resourcepack_navigation_sort',
     ];
 
     /** @var array<string, string> */
@@ -85,6 +87,7 @@ final class ServerModManagerTab
                         self::typeToggle(ProjectType::Mod),
                         self::typeToggle(ProjectType::Plugin),
                         self::typeToggle(ProjectType::Datapack),
+                        self::typeToggle(ProjectType::ResourcePack),
                     ]),
                 Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.sources'))
                     ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.sources_helper'))
@@ -104,6 +107,7 @@ final class ServerModManagerTab
                         self::navigationSortInput(ProjectType::Mod),
                         self::navigationSortInput(ProjectType::Plugin),
                         self::navigationSortInput(ProjectType::Datapack),
+                        self::navigationSortInput(ProjectType::ResourcePack),
                     ]),
                 Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.permissions'))
                     ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.permissions_helper'))
@@ -286,6 +290,10 @@ final class ServerModManagerTab
 
     private static function isTypeVisible(Server $server, ProjectType $type): bool
     {
+        if ($type === ProjectType::ResourcePack) {
+            return true;
+        }
+
         if ($type === ProjectType::Datapack) {
             return ProjectType::supportsDatapacks($server);
         }

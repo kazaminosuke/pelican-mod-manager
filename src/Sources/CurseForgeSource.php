@@ -41,13 +41,17 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     protected const CLASS_ID_PLUGIN = 5;
 
     /**
-     * CurseForge publishes Minecraft datapacks under its Texture Packs class
-     * (classId 12), in the Data Packs category. They are archive downloads
-     * rather than loader-specific jars, so searches and version lookups
-     * deliberately do not apply a mod-loader filter
+     * CurseForge publishes Minecraft datapacks and resource packs under its
+     * Texture Packs class (classId 12). Datapacks are narrowed to the Data
+     * Packs category; resource-pack searches exclude that category. They are
+     * archive downloads rather than loader-specific jars, so searches and
+     * version lookups deliberately do not apply a mod-loader filter
      * (see isCompatibleFileForType()).
      */
     protected const CLASS_ID_DATAPACK = 12;
+
+    /** Resource Packs share CurseForge's Texture Packs classId with datapacks. */
+    protected const CLASS_ID_RESOURCE_PACK = 12;
 
     protected const CATEGORY_ID_DATAPACK = 5193;
 
@@ -255,6 +259,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return $this->normalizeSearchResult([
                 'hits' => collect($payload['data'] ?? [])
                     ->filter(fn ($mod) => is_array($mod))
+                    ->filter(fn (array $mod) => $type !== ProjectType::ResourcePack || $this->isResourcePackProject($mod))
                     ->map(fn (array $mod) => $this->normalizeProject($mod, $type))
                     ->values()
                     ->all(),
@@ -1235,14 +1240,29 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             ProjectType::Mod => self::CLASS_ID_MOD,
             ProjectType::Plugin => self::CLASS_ID_PLUGIN,
             ProjectType::Datapack => self::CLASS_ID_DATAPACK,
+            ProjectType::ResourcePack => self::CLASS_ID_RESOURCE_PACK,
         };
     }
 
     /** @param array<string, mixed> $file */
     protected function isCompatibleFileForType(array $file, ?ProjectType $type): bool
     {
-        return $type !== ProjectType::Datapack
+        return !in_array($type, [ProjectType::Datapack, ProjectType::ResourcePack], true)
             || str_ends_with(strtolower((string) ($file['fileName'] ?? '')), '.zip');
+    }
+
+    /** @param array<string, mixed> $mod */
+    protected function isResourcePackProject(array $mod): bool
+    {
+        foreach ((array) ($mod['categories'] ?? []) as $category) {
+            $categoryId = is_array($category) ? ($category['id'] ?? null) : $category;
+
+            if ((int) $categoryId === self::CATEGORY_ID_DATAPACK) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

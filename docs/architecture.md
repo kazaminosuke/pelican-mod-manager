@@ -17,11 +17,17 @@ which source it came from, and a `file_signature` (see below) used to skip re-ha
 files. Files present on disk but not yet in the document surface as "Not tracked" rows until a
 scan resolves them.
 
+Resource packs deliberately do not enter this archive index or the server-wide hash scan. Their
+single active provider file is recorded in `.pelican-mod-manager-resource-pack.json`; the
+`ResourcePackService` stores the provider's direct URL and SHA-1 and updates `server.properties`
+(`resource-pack` and `resource-pack-sha1`) while preserving unrelated lines. This keeps the
+existing `.pelican-mod-manager.json` schema and its persisted source values unchanged.
+
 ## Per-server type and source capabilities
 
 `Support\ServerModManagerSettings` resolves the server-specific usage switches stored in
-`mod_manager_server_settings`. The `mod_enabled`, `plugin_enabled`, and `datapack_enabled` fields
-control page access independently. The `modrinth_enabled`, `curseforge_enabled`,
+`mod_manager_server_settings`. The `mod_enabled`, `plugin_enabled`, `datapack_enabled`, and
+`resourcepack_enabled` fields control page access independently. The `modrinth_enabled`, `curseforge_enabled`,
 `hangar_enabled`, and `github_releases_enabled` fields control source visibility independently;
 GitHub Releases defaults to off because it was previously an explicit opt-in.
 

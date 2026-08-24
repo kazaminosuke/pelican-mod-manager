@@ -17,6 +17,18 @@
 
 ---
 
+## 現行実装の補足（Stage 4）
+
+- Resource Packはeggのtype自動判定には追加せず、server単位の
+  `mod_manager_server_settings.resourcepack_enabled`で専用ページの利用可否を管理する。
+- Resource PackのproviderはModrinth/CurseForgeとし、利用可否は既存のserver単位source設定と
+  providerの`supportsProjectType()`/設定状態の組み合わせで決める。
+- Resource Packは既存の`.pelican-mod-manager.json`へ混在させない。
+  `.pelican-mod-manager-resource-pack.json`にdirect URL/SHA-1を保存し、`server.properties`の
+  `resource-pack`/`resource-pack-sha1`を更新する。
+
+---
+
 ## 環境の前提（実コードで確認済み）
 
 | 項目 | 値 | 確認元 |

@@ -7,6 +7,7 @@ use Closure;
 use Filament\Facades\Filament;
 use Illuminate\Http\Request;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
+use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Kazaminosuke\ModManager\Support\NavigationRowShifter;
 use Throwable;
@@ -65,7 +66,7 @@ class ShiftCoreNavigationRows
             return;
         }
 
-        $managerPages = [ModManagerPage::class, MinecraftDatapackPage::class];
+        $managerPages = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
 
         // Claim only for pages that will actually register: canAccess()
         // mirrors Filament's own registration gate (enabled switches, egg

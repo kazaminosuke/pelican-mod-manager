@@ -27,6 +27,7 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Admin\ServerModManagerTab;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
+use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Kazaminosuke\ModManager\Http\Middleware\ShiftCoreNavigationRows;
 use Kazaminosuke\ModManager\Models\ModManagerEggProfile;
@@ -81,7 +82,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // renders through the exact same content()/table. Every hook below
         // that targets this page's own table chrome must list every
         // concrete page class it needs to appear on.
-        $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class];
+        $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
         $projectIconPlaceholder = json_encode(
             ProjectIconUrl::placeholderDataUri(),
             JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_THROW_ON_ERROR,
@@ -303,6 +304,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             'mod_nav_sort' => config('pelican-mod-manager.navigation_sort.mod', 11),
             'plugin_nav_sort' => config('pelican-mod-manager.navigation_sort.plugin', 11),
             'datapack_nav_sort' => config('pelican-mod-manager.navigation_sort.datapack', 12),
+            'resourcepack_nav_sort' => config('pelican-mod-manager.navigation_sort.resourcepack', 13),
             'curseforge_api_key' => config('pelican-mod-manager.curseforge_api_key'),
             'github_token' => config('pelican-mod-manager.github_token'),
             'allow_user_egg_profile_edit' => (bool) config('pelican-mod-manager.allow_user_egg_profile_edit', false),
@@ -343,6 +345,14 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 ->minValue(NavigationSort::MIN_VALUE)
                 ->maxValue(NavigationSort::MAX_VALUE)
                 ->default(fn () => config('pelican-mod-manager.navigation_sort.datapack', 12)),
+            TextInput::make('resourcepack_nav_sort')
+                ->label(trans('pelican-mod-manager::strings.settings.resourcepack_nav_sort'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.nav_sort_helper'))
+                ->required()
+                ->integer()
+                ->minValue(NavigationSort::MIN_VALUE)
+                ->maxValue(NavigationSort::MAX_VALUE)
+                ->default(fn () => config('pelican-mod-manager.navigation_sort.resourcepack', 13)),
             TextInput::make('curseforge_api_key')
                 ->label(trans('pelican-mod-manager::strings.settings.curseforge_api_key'))
                 ->helperText(trans('pelican-mod-manager::strings.settings.curseforge_api_key_helper'))
@@ -449,6 +459,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             'MINECRAFT_MODRINTH_MOD_NAV_SORT' => $data['mod_nav_sort'],
             'MINECRAFT_MODRINTH_PLUGIN_NAV_SORT' => $data['plugin_nav_sort'],
             'MINECRAFT_MODRINTH_DATAPACK_NAV_SORT' => $data['datapack_nav_sort'],
+            'MINECRAFT_MODRINTH_RESOURCEPACK_NAV_SORT' => $data['resourcepack_nav_sort'],
             'CURSEFORGE_API_KEY' => $data['curseforge_api_key'] ?? '',
             'GITHUB_TOKEN' => $data['github_token'] ?? '',
             'MOD_MANAGER_ALLOW_USER_EGG_PROFILE_EDIT' => ($data['allow_user_egg_profile_edit'] ?? false) ? 'true' : 'false',

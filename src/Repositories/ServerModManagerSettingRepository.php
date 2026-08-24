@@ -67,7 +67,7 @@ final class ServerModManagerSettingRepository
         $setting = $this->forServer($serverId) ?? new ModManagerServerSetting();
         $setting->server_id = $serverId;
 
-        foreach (['mod_navigation_sort', 'plugin_navigation_sort', 'datapack_navigation_sort'] as $field) {
+        foreach (['mod_navigation_sort', 'plugin_navigation_sort', 'datapack_navigation_sort', 'resourcepack_navigation_sort'] as $field) {
             if (array_key_exists($field, $attributes)) {
                 $attributes[$field] = NavigationSort::nullable($attributes[$field]);
             }

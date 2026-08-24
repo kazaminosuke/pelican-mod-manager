@@ -49,6 +49,7 @@ use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
+use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
@@ -551,9 +552,11 @@ class ModManagerPage extends Page implements HasTable
         $loader = $type->getLoaderSlug($server);
         $mcVersion = ModManager::getMinecraftVersion($server);
 
-        if (!$loader || !$mcVersion) {
+        if ((!$loader && $type !== ProjectType::ResourcePack) || !$mcVersion) {
             return;
         }
+
+        $loader ??= $type->value;
 
         foreach ($this->catalogPagesToWarm($includeOtherSources) as $page) {
             $source = $this->catalogSourceByKey($page['sourceKey']);
@@ -714,6 +717,12 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
+        if ($type === ProjectType::ResourcePack) {
+            $this->getInstalledModsMetadata();
+
+            return;
+        }
+
         $scanCacheKey = ModManager::getHashScanCacheKey($server, $type);
         $this->setInstalledScanResult(InstalledScanResult::fromCache(Cache::get($scanCacheKey)));
     }
@@ -738,6 +747,10 @@ class ModManagerPage extends Page implements HasTable
         /** @var Server $server */
         $server = Filament::getTenant();
         $type = static::detectProjectType($server);
+
+        if ($type === ProjectType::ResourcePack) {
+            return;
+        }
 
         if (!$type) {
             return;
@@ -1346,6 +1359,17 @@ class ModManagerPage extends Page implements HasTable
             $fileRepository = app(DaemonFileRepository::class);
 
             $type = static::detectProjectType($server);
+
+            if ($type === ProjectType::ResourcePack) {
+                $installed = app(ResourcePackService::class)->getInstalled($server, $fileRepository);
+                $this->installedModsMetadata = $installed === null ? [] : [$installed];
+                $this->installedFilesCount = $installed === null ? 0 : 1;
+                $this->installedScanDataReady = true;
+                unset($this->cachedTabs);
+
+                return $this->installedModsMetadata;
+            }
+
             $generation = CacheVersion::hydration($server);
             $typeKey = $type instanceof ProjectType ? $type->value : 'unknown';
             $cacheKey = "installed_metadata_display:v2:{$server->id}:{$typeKey}:{$generation}";
@@ -1426,6 +1450,13 @@ class ModManagerPage extends Page implements HasTable
         string $projectId,
         ProjectSourceKey $sourceKey,
     ): ?array {
+        if ($type === ProjectType::ResourcePack) {
+            // There is only one active resource pack. Return it regardless of
+            // the requested project so replacing a pack is authorized as an
+            // update and does not leave the old URL/hash behind.
+            return app(ResourcePackService::class)->getInstalled($server, $fileRepository);
+        }
+
         $metadataResult = ModManager::getInstalledMetadataReadResult($server, $fileRepository, $type);
 
         // Treat a failed direct read as an error, rather than accidentally
@@ -1687,6 +1718,7 @@ class ModManagerPage extends Page implements HasTable
             ProjectSourceKey::CurseForge->value => 'https://www.curseforge.com/minecraft/'.match ($projectType) {
                 ProjectType::Plugin->value => 'bukkit-plugins',
                 ProjectType::Datapack->value => 'data-packs',
+                ProjectType::ResourcePack->value => 'texture-packs',
                 default => 'mc-mods',
             }."/{$slug}",
             ProjectSourceKey::Hangar->value => empty($record['author']) ? null : "https://hangar.papermc.io/{$record['author']}/{$slug}",
@@ -1768,17 +1800,46 @@ class ModManagerPage extends Page implements HasTable
         array $primaryFile,
         ?array $installedMod = null
     ): void {
-        $this->authorizeProjectOperation(
-            $server,
-            $installedMod === null ? ProjectOperation::Install : ProjectOperation::Update,
-        );
-
         $type = static::detectProjectType($server);
         if (!$type) {
-            throw new Exception('Server does not support managed mods or plugins');
+            throw new Exception('Server does not support managed projects');
         }
 
+        $currentInstalled = $type === ProjectType::ResourcePack
+            ? app(ResourcePackService::class)->getInstalled($server, $fileRepository)
+            : $installedMod;
+
+        $this->authorizeProjectOperation(
+            $server,
+            $currentInstalled === null ? ProjectOperation::Install : ProjectOperation::Update,
+        );
+
         $safeNewFilename = $this->validateFilename((string) ($primaryFile['filename'] ?? ''));
+
+        if ($type === ProjectType::ResourcePack) {
+            $operation = $currentInstalled === null
+                ? InstalledOperationLease::OPERATION_INSTALL
+                : InstalledOperationLease::OPERATION_UPDATE;
+
+            app(InstalledOperationLease::class)->run(
+                (int) $server->getKey(),
+                $type,
+                $operation,
+                fn (): array => app(ResourcePackService::class)->installOrUpdate(
+                    $server,
+                    $fileRepository,
+                    $record,
+                    $versionData,
+                    $primaryFile,
+                ),
+            );
+
+            $this->forgetInstalledModsMetadata();
+            $this->forgetVersionCaches();
+            $this->flushCachedTableRecords();
+
+            return;
+        }
 
         app(InstalledProjectMutationService::class)->installOrUpdate(
             $server,
@@ -1806,6 +1867,18 @@ class ModManagerPage extends Page implements HasTable
         array $record,
         ProjectType $type,
     ): void {
+        if ($type === ProjectType::ResourcePack) {
+            app(ResourcePackService::class)->uninstall($server, $fileRepository);
+            $this->forgetInstalledModsMetadata();
+            $this->forgetVersionCaches();
+            $this->installedFilesCount = 0;
+            $this->installedScanDataReady = true;
+            unset($this->cachedTabs);
+            $this->flushCachedTableRecords();
+
+            return;
+        }
+
         $safeFilename = $this->getUninstallFilename($record);
         $folder = ModManager::getProjectFolder($server, $fileRepository, $type);
 
@@ -2174,6 +2247,56 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /**
+     * Resource packs have one metadata entry and no managed archive scan.
+     * Keep the normal installed-table enrichment path, but never ask Wings to
+     * enumerate the resourcepacks directory or write the mod metadata file.
+     */
+    protected function resourcePackRecords(Server $server, ?string $search, int $page): LengthAwarePaginator
+    {
+        $this->unknownFiles = [];
+        $this->pollInstalledOperations = false;
+
+        $filtered = $this->applyInstalledSearch(
+            $this->getInstalledModsMetadata(),
+            [],
+            $search,
+        );
+        $installedMods = $this->installedModsInSourceOrder($filtered['mods']);
+        $page = $this->synchronizeTablePage($page, count($installedMods));
+        $pagedInstalledMods = array_slice(
+            $installedMods,
+            ($page - 1) * self::TABLE_PAGE_SIZE,
+            self::TABLE_PAGE_SIZE,
+        );
+
+        $enrichmentPending = false;
+        if ($pagedInstalledMods !== []) {
+            $enrichmentPending = $this->peekVisibleLatestVersions($pagedInstalledMods, $server, ProjectType::ResourcePack);
+        }
+
+        $projects = $pagedInstalledMods
+            ? app(ProjectSourceRegistry::class)->peekInstalled($pagedInstalledMods, $server)
+            : [];
+
+        foreach ($projects as $project) {
+            if ($project['enrichment_pending'] ?? false) {
+                $enrichmentPending = true;
+
+                break;
+            }
+        }
+
+        $this->pollEnrichment = $enrichmentPending
+            && app(InstalledOperationManager::class)->supportsAsyncDispatch();
+        $this->installedEnrichmentSignature = $this->enrichmentSignatureFromProjects(
+            $projects,
+            $this->pendingLatestVersionKeys !== [],
+        );
+
+        return new LengthAwarePaginator($projects, count($installedMods), self::TABLE_PAGE_SIZE, $page);
+    }
+
+    /**
      * @throws Exception
      */
     public function table(Table $table): Table
@@ -2187,6 +2310,10 @@ class ModManagerPage extends Page implements HasTable
                 $type = static::detectProjectType($server);
 
                 if ($this->activeTab === 'installed') {
+                    if ($type === ProjectType::ResourcePack) {
+                        return $this->resourcePackRecords($server, $search, $page);
+                    }
+
                     $perPage = self::TABLE_PAGE_SIZE;
                     $scanCacheKey = ModManager::getHashScanCacheKey($server, $type);
                     $operations = app(InstalledOperationManager::class);
@@ -2566,7 +2693,7 @@ class ModManagerPage extends Page implements HasTable
 
                                             $type = static::detectProjectType($server);
                                             if (!$type) {
-                                                throw new Exception('Server does not support managed mods or plugins');
+                                                throw new Exception('Server does not support managed projects');
                                             }
 
                                             $installedMod = $this->getCurrentInstalledModForOperation(
@@ -2877,7 +3004,7 @@ class ModManagerPage extends Page implements HasTable
 
                             $type = static::detectProjectType($server);
                             if (!$type) {
-                                throw new Exception('Server does not support managed mods or plugins');
+                                throw new Exception('Server does not support managed projects');
                             }
 
                             app(InstalledOperationLease::class)->run(
@@ -2931,6 +3058,10 @@ class ModManagerPage extends Page implements HasTable
 
         $this->catalogCategoryOptionsKey = $memoKey;
 
+        if (static::detectProjectType($server) === ProjectType::ResourcePack) {
+            return $this->catalogCategoryOptions = [];
+        }
+
         if ($this->getCurrentSource()?->getKey() === ProjectSourceKey::CurseForge
             && static::detectProjectType($server) === ProjectType::Datapack) {
             return $this->catalogCategoryOptions = [];
@@ -2968,7 +3099,8 @@ class ModManagerPage extends Page implements HasTable
                 ->label(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->tooltip(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->icon('tabler-folder-open')
-                ->url(fn () => ListFiles::getUrl(['path' => $folder]), true),
+                ->url(fn () => ListFiles::getUrl(['path' => $folder]), true)
+                ->visible(fn () => $type !== ProjectType::ResourcePack),
             Action::make('track_github_repo')
                 ->label(trans('pelican-mod-manager::strings.actions.track_github_repo'))
                 ->icon('tabler-brand-github')
@@ -3066,6 +3198,7 @@ class ModManagerPage extends Page implements HasTable
                 })
                 ->visible(fn () => static::detectProjectType($server) !== null
                     && $this->activeTab === 'installed'
+                    && static::detectProjectType($server) !== ProjectType::ResourcePack
                     && $this->canManageProjectOperation($server, ProjectOperation::Update)),
             Action::make('scan_mods')
                 ->label(fn () => $this->getRescanActionLabel($type))
@@ -3084,6 +3217,7 @@ class ModManagerPage extends Page implements HasTable
                     $this->notifyInstalledOperationDispatched($dispatch);
                 })
                 ->visible(fn () => static::detectProjectType($server) !== null
+                    && static::detectProjectType($server) !== ProjectType::ResourcePack
                     && $this->canScanInstalledProjects()),
         ];
     }
@@ -3103,7 +3237,11 @@ class ModManagerPage extends Page implements HasTable
 
         return $schema
             ->components([
-                Grid::make($type === ProjectType::Datapack ? 4 : 3)
+                Grid::make(match ($type) {
+                    ProjectType::Datapack => 4,
+                    ProjectType::ResourcePack => 2,
+                    default => 3,
+                })
                     ->extraAttributes(['class' => 'mmr-page-header'])
                     ->schema([
                         TextEntry::make('minecraft_version')
@@ -3140,7 +3278,8 @@ class ModManagerPage extends Page implements HasTable
                             ->tooltip(fn () => trans('pelican-mod-manager::strings.page.resolved_by', ['source' => $this->eggResolutionSourceLabel($server)]))
                             ->badge()
                             ->size(TextSize::Large)
-                            ->extraAttributes(['class' => 'mcloader-badge']),
+                            ->extraAttributes(['class' => 'mcloader-badge'])
+                            ->visible(fn () => $type !== ProjectType::ResourcePack),
                         TextEntry::make('installed')
                             // $type is non-null for the rest of this method
                             // (see the early return above), so unlike

@@ -320,6 +320,7 @@ class ProjectSourceRegistryTest extends TestCase
             'mod' => [ProjectType::Mod],
             'plugin' => [ProjectType::Plugin],
             'datapack' => [ProjectType::Datapack],
+            'resource pack' => [ProjectType::ResourcePack],
         ];
     }
 
@@ -353,6 +354,7 @@ class ProjectSourceRegistryTest extends TestCase
             'mod default' => [ProjectType::Mod, []],
             'plugin default' => [ProjectType::Plugin, []],
             'datapack default' => [ProjectType::Datapack, []],
+            'resource pack default' => [ProjectType::ResourcePack, []],
         ];
     }
 

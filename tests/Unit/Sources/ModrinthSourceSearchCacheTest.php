@@ -111,6 +111,30 @@ class ModrinthSourceSearchCacheTest extends TestCase
         self::assertTrue($source->hasFreshCachedSearch($this->server(), ProjectType::Datapack, 1, null, []));
     }
 
+    public function test_resource_pack_search_uses_archive_project_type_without_a_loader_facet(): void
+    {
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                $facets = json_decode($spec->arguments['query']['facets'], true, 512, JSON_THROW_ON_ERROR);
+
+                self::assertSame([
+                    ['versions:1.21.1'],
+                    ['project_type:resourcepack'],
+                ], $facets);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+        $source = new ModrinthSource($this->sourceCache($this->cache(), $executor));
+
+        self::assertSame(
+            ['hits' => [], 'total_hits' => 0],
+            $source->search($this->server(), ProjectType::ResourcePack),
+        );
+    }
+
     public function test_a_different_page_is_a_distinct_cache_entry(): void
     {
         $cache = $this->cache();

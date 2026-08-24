@@ -7,7 +7,8 @@ use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 
 /**
- * Contract implemented by every mod/plugin/datapack source (Modrinth, CurseForge, Hangar, ...).
+ * Contract implemented by every mod/plugin/datapack/resource-pack source
+ * (Modrinth, CurseForge, Hangar, ...).
  *
  * Methods that depend on an optional capability (search, hash lookup, direct-identifier
  * resolution) must be guarded by the matching `supports*()` / `requiresApiKey()` /

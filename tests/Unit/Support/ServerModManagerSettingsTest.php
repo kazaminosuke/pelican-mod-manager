@@ -50,6 +50,7 @@ final class ServerModManagerSettingsTest extends TestCase
             $table->boolean('mod_enabled')->default(true);
             $table->boolean('plugin_enabled')->default(true);
             $table->boolean('datapack_enabled')->default(true);
+            $table->boolean('resourcepack_enabled')->default(true);
             $table->boolean('modrinth_enabled')->default(true);
             $table->boolean('curseforge_enabled')->default(true);
             $table->boolean('hangar_enabled')->default(true);
@@ -57,6 +58,7 @@ final class ServerModManagerSettingsTest extends TestCase
             $table->integer('mod_navigation_sort')->nullable();
             $table->integer('plugin_navigation_sort')->nullable();
             $table->integer('datapack_navigation_sort')->nullable();
+            $table->integer('resourcepack_navigation_sort')->nullable();
             $table->boolean('allow_user_egg_profile_edit')->nullable();
             $table->boolean('allow_user_project_install')->nullable();
             $table->boolean('allow_user_project_update')->nullable();
@@ -80,6 +82,7 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Mod));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Datapack));
+        self::assertTrue($settings->isTypeEnabled($server, ProjectType::ResourcePack));
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::Modrinth));
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::CurseForge));
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::Hangar));
@@ -171,9 +174,11 @@ final class ServerModManagerSettingsTest extends TestCase
             'mod_enabled' => false,
             'plugin_enabled' => true,
             'datapack_enabled' => true,
+            'resourcepack_enabled' => false,
             'mod_navigation_sort' => null,
             'plugin_navigation_sort' => 4,
             'datapack_navigation_sort' => 0,
+            'resourcepack_navigation_sort' => 5,
         ]);
 
         Container::getInstance()->make('config')->set('pelican-mod-manager.navigation_sort', [
@@ -187,9 +192,11 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertFalse($settings->isTypeEnabled($server, ProjectType::Mod));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Datapack));
+        self::assertFalse($settings->isTypeEnabled($server, ProjectType::ResourcePack));
         self::assertSame(10, $settings->navigationSort($server, ProjectType::Mod));
         self::assertSame(4, $settings->navigationSort($server, ProjectType::Plugin));
         self::assertSame(12, $settings->navigationSort($server, ProjectType::Datapack));
+        self::assertSame(5, $settings->navigationSort($server, ProjectType::ResourcePack));
         self::assertNull($settings->navigationSortOverride($server, ProjectType::Datapack));
     }
 

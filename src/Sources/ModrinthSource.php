@@ -174,7 +174,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $projectType = $type->value;
         $minecraftVersion = MinecraftVersionResolver::resolve($server);
 
-        if ($type === ProjectType::Datapack) {
+        if (in_array($type, [ProjectType::Datapack, ProjectType::ResourcePack], true)) {
             $facetGroups = [["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
         } else {
             if (!$minecraftLoader) {
@@ -235,17 +235,21 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
     {
         $minecraftLoader = $type->getLoaderSlug($server);
 
-        if (!$minecraftLoader) {
+        if (!$minecraftLoader && $type !== ProjectType::ResourcePack) {
             return [];
         }
 
         $minecraftVersion = MinecraftVersionResolver::resolve($server);
+        $arguments = [
+            'project_id' => $projectId,
+            'game_version' => $minecraftVersion,
+        ];
+        if ($minecraftLoader !== null) {
+            $arguments['loader'] = $minecraftLoader;
+        }
+
         $versions = $this->sourceCache->swr(
-            $this->spec(self::OPERATION_VERSIONS, [
-                'project_id' => $projectId,
-                'game_version' => $minecraftVersion,
-                'loader' => $minecraftLoader,
-            ]),
+            $this->spec(self::OPERATION_VERSIONS, $arguments),
             CacheProfile::InstalledLatest,
         );
 
@@ -272,7 +276,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         }
 
         $minecraftLoader = $type->getLoaderSlug($server);
-        if (!$minecraftLoader) {
+        if (!$minecraftLoader && $type !== ProjectType::ResourcePack) {
             return LatestVersionLookupResult::failed($validRequests, 'No compatible Modrinth loader is configured.');
         }
 
@@ -285,7 +289,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             $spec = $this->spec(self::OPERATION_LATEST, [
                 'hashes_by_key' => $hashesByKey,
                 'game_version' => $minecraftVersion,
-                'loader' => $minecraftLoader,
+                ...($minecraftLoader !== null ? ['loader' => $minecraftLoader] : []),
             ]);
             $cachedResult = $this->sourceCache->swr($spec, CacheProfile::InstalledLatest);
             $result = $cachedResult instanceof LatestVersionLookupResult
@@ -332,7 +336,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         }
 
         $minecraftLoader = $type->getLoaderSlug($server);
-        if (!$minecraftLoader) {
+        if (!$minecraftLoader && $type !== ProjectType::ResourcePack) {
             return LatestVersionLookupResult::failed($validRequests, 'No compatible Modrinth loader is configured.');
         }
 
@@ -346,7 +350,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $spec = $this->spec(self::OPERATION_LATEST, [
             'hashes_by_key' => $hashesByKey,
             'game_version' => $minecraftVersion,
-            'loader' => $minecraftLoader,
+            ...($minecraftLoader !== null ? ['loader' => $minecraftLoader] : []),
         ]);
         $peeked = $this->sourceCache->swrDeferred($spec, CacheProfile::InstalledLatest);
 
@@ -664,14 +668,19 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
     {
         $projectId = $this->stringArgument($spec, 'project_id');
         $minecraftVersion = $this->stringArgument($spec, 'game_version');
-        $minecraftLoader = $this->stringArgument($spec, 'loader');
+        $minecraftLoader = isset($spec->arguments['loader']) && is_string($spec->arguments['loader'])
+            ? $spec->arguments['loader']
+            : null;
+        $query = [
+            'game_versions' => json_encode([$minecraftVersion], JSON_THROW_ON_ERROR),
+            'include_changelog' => 'false',
+        ];
+        if ($minecraftLoader !== null && $minecraftLoader !== '') {
+            $query['loaders'] = json_encode([$minecraftLoader], JSON_THROW_ON_ERROR);
+        }
         $versions = $this->http($timeoutSeconds)
             ->throw()
-            ->get(self::BASE_URL."/project/$projectId/version", [
-                'game_versions' => json_encode([$minecraftVersion], JSON_THROW_ON_ERROR),
-                'loaders' => json_encode([$minecraftLoader], JSON_THROW_ON_ERROR),
-                'include_changelog' => 'false',
-            ])
+            ->get(self::BASE_URL."/project/$projectId/version", $query)
             ->json();
 
         if (!is_array($versions)) {
@@ -778,7 +787,9 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
     {
         $hashesByKey = $this->stringMapArgument($spec, 'hashes_by_key');
         $minecraftVersion = $this->stringArgument($spec, 'game_version');
-        $minecraftLoader = $this->stringArgument($spec, 'loader');
+        $minecraftLoader = isset($spec->arguments['loader']) && is_string($spec->arguments['loader'])
+            ? $spec->arguments['loader']
+            : null;
         $requestsByHash = [];
 
         foreach ($hashesByKey as $key => $hash) {
@@ -788,16 +799,19 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $debugTiming = (bool) config('pelican-mod-manager.debug_timing', false);
         $startedAt = microtime(true);
         $returnedHashCount = 0;
+        $request = [
+            'hashes' => array_keys($requestsByHash),
+            'algorithm' => 'sha512',
+            'game_versions' => [$minecraftVersion],
+        ];
+        if ($minecraftLoader !== null && $minecraftLoader !== '') {
+            $request['loaders'] = [$minecraftLoader];
+        }
 
         try {
             $payload = $this->http($timeoutSeconds)
                 ->throw()
-                ->post(self::BASE_URL.'/version_files/update', [
-                    'hashes' => array_keys($requestsByHash),
-                    'algorithm' => 'sha512',
-                    'loaders' => [$minecraftLoader],
-                    'game_versions' => [$minecraftVersion],
-                ])
+                ->post(self::BASE_URL.'/version_files/update', $request)
                 ->json();
 
             if (!is_array($payload)) {

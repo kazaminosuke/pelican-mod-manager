@@ -2,7 +2,7 @@
 
 *[日本語](README.ja.md)*
 
-A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, update, and manage Minecraft mods, plugins, and datapacks from **Modrinth, CurseForge, Hangar, and GitHub Releases** directly in the server panel.
+A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, update, and manage Minecraft mods, plugins, datapacks, and resource packs from **Modrinth, CurseForge, Hangar, and GitHub Releases** directly in the server panel.
 
 ![Catalog tab](docs/images/catalog.png)
 ![Installed tab](docs/images/installed.png)
@@ -11,13 +11,18 @@ A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, upd
 
 | Source | API key | Search | Hash matching | Project types |
 |---|---|---|---|---|
-| [Modrinth](https://modrinth.com) | Not required | ✅ | ✅ (`sha512`) | Mod, Plugin, Datapack |
-| [CurseForge](https://www.curseforge.com/minecraft) | **Required** | ✅ | ✅ (`murmur2`) | Mod, Plugin, Datapack |
+| [Modrinth](https://modrinth.com) | Not required | ✅ | ✅ (`sha512`) | Mod, Plugin, Datapack, Resource Pack |
+| [CurseForge](https://www.curseforge.com/minecraft) | **Required** | ✅ | ✅ (`murmur2`) | Mod, Plugin, Datapack, Resource Pack |
 | [Hangar](https://hangar.papermc.io) | Not required | ✅ | ✅ (`sha256`) | Plugin |
 | [GitHub Releases](https://github.com) | Optional, recommended | ❌ (tracks one `owner/repo` at a time) | ❌ | Mod, Plugin |
 
 Each server has its own **Mod Manager usage settings** under Admin → Server → Edit → Mod Manager. Modrinth, CurseForge, and Hangar are enabled by default (CurseForge still requires its API key); GitHub Releases is disabled by default and must be enabled there. The source switches are independent of the egg and apply on top of each provider's supported project types.
 GitHub Releases works without a token, but its unauthenticated rate limit (60 requests/hour) is scarce enough that configuring one is recommended for direct repository tracking. GitHub Releases has no catalog cache-warming path.
+
+Resource Packs have their own page and are enabled per server in the same usage settings. They are
+available from Modrinth and CurseForge. Installing one does not download an archive into the
+server's `resourcepacks/` directory: the provider's direct URL and SHA-1 are written to
+`server.properties` as `resource-pack` and `resource-pack-sha1`.
 
 ## Requirements
 
@@ -55,6 +60,9 @@ Also add the `minecraft` **tag**, plus a loader tag so version/loader-specific f
 
 To enable a source, use the server's **Mod Manager usage settings**. Turn on the GitHub Releases source there to show the **Track GitHub Repository** action; GitHub Releases has no browseable catalog, so enter an `owner/repo` in that action to track its latest release. `curseforge_disabled`, `hangar_disabled`, and `github_releases` in egg features/tags do not enable or disable sources.
 
+Resource Pack availability is controlled by its own per-server type switch; it is not inferred from
+egg features or tags. Egg detection continues to determine only Mod/Plugin type and loader data.
+
 **Automatic egg detection** (see [How it works](#how-it-works)) means most official Minecraft eggs don't need the type or loader fields set manually - explicit `features`/`tags` still win for type/loader detection when present. Source availability is always taken from the server settings above.
 One consequence: datapack management now **defaults to on** for any recognized Java server egg (mod/plugin/hybrid/vanilla/modpack), even without a `datapack_manager` feature. Add `datapack_manager_disabled` to an egg's features to opt back out, or set `MOD_MANAGER_EGG_AUTODETECT=false` to fully restore the pre-autodetect behaviour where `datapack_manager` must be explicit.
 
@@ -73,6 +81,7 @@ CurseForge, and Hangar default to on. CurseForge is still hidden until its globa
 | Mod navigation sort order | `MINECRAFT_MODRINTH_MOD_NAV_SORT` |
 | Plugin navigation sort order | `MINECRAFT_MODRINTH_PLUGIN_NAV_SORT` |
 | Datapack navigation sort order | `MINECRAFT_MODRINTH_DATAPACK_NAV_SORT` |
+| Resource Pack navigation sort order | `MINECRAFT_MODRINTH_RESOURCEPACK_NAV_SORT` |
 | CurseForge API key | `CURSEFORGE_API_KEY` |
 | GitHub token | `GITHUB_TOKEN` |
 | Allow non-admins to edit egg profiles | `MOD_MANAGER_ALLOW_USER_EGG_PROFILE_EDIT` (default off) |
@@ -111,6 +120,9 @@ The same screen has a **Clear cache** action, which behaves differently by scope
 
 - **Local metadata index** (`.pelican-mod-manager.json` on each server) tracks which installed
   file maps to which upstream project.
+- **Resource Pack state** (`.pelican-mod-manager-resource-pack.json`) stores the active provider
+  version, direct URL, and SHA-1 used by `server.properties`; it is separate from the existing
+  Mod/Plugin/Datapack metadata index.
 - **Incremental hash scanning** re-hashes a file only when its size/modified-time signature has
   changed, instead of every file on every scan.
 - **Background jobs and status badges** handle scans and bulk updates without blocking the UI:

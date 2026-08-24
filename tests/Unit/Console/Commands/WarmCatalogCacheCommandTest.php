@@ -79,6 +79,7 @@ class WarmCatalogCacheCommandTest extends TestCase
             $table->boolean('mod_enabled')->default(true);
             $table->boolean('plugin_enabled')->default(true);
             $table->boolean('datapack_enabled')->default(true);
+            $table->boolean('resourcepack_enabled')->default(true);
             $table->integer('mod_navigation_sort')->nullable();
             $table->integer('plugin_navigation_sort')->nullable();
             $table->integer('datapack_navigation_sort')->nullable();
