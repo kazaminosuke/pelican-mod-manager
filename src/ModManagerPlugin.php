@@ -674,7 +674,12 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 $scanState = $operations->state($server, $type, InstalledOperationManager::OPERATION_SCAN);
                 if (!$scanState?->isActive()) {
                     $service->clearInstalledModsMetadata($server, $fileRepository, $type);
-                    $dispatch = $operations->dispatchScan($server, $type, force: true);
+                    $dispatch = $operations->dispatchScan(
+                        $server,
+                        $type,
+                        force: true,
+                        actorUserId: is_numeric(user()?->getKey()) ? (int) user()->getKey() : null,
+                    );
                     if (!$dispatch['dispatched'] && $dispatch['reason'] !== 'already_active') {
                         throw new Exception('Failed to dispatch installed scan.');
                     }
@@ -685,7 +690,12 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 $datapackState = $operations->state($server, ProjectType::Datapack, InstalledOperationManager::OPERATION_SCAN);
                 if (!$datapackState?->isActive()) {
                     $service->clearInstalledModsMetadata($server, $fileRepository, ProjectType::Datapack);
-                    $dispatch = $operations->dispatchScan($server, ProjectType::Datapack, force: true);
+                    $dispatch = $operations->dispatchScan(
+                        $server,
+                        ProjectType::Datapack,
+                        force: true,
+                        actorUserId: is_numeric(user()?->getKey()) ? (int) user()->getKey() : null,
+                    );
                     if (!$dispatch['dispatched'] && $dispatch['reason'] !== 'already_active') {
                         throw new Exception('Failed to dispatch datapack scan.');
                     }

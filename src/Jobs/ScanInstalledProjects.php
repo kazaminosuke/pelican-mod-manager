@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Jobs;
 
 use App\Models\Server;
+use App\Models\User;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
@@ -10,9 +11,11 @@ use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
+use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
+use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Throwable;
 
 final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
@@ -32,6 +35,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
         public readonly int $serverId,
         public readonly string $projectType,
         public readonly bool $force = false,
+        public readonly ?int $actorUserId = null,
     ) {}
 
     /** @return array<int, int> */
@@ -50,6 +54,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
         InstalledProjectService $service,
         InstalledOperationManager $operations,
         CacheRepository $cache,
+        ProjectOperationAuthorizer $authorizer,
     ): void {
         $type = ProjectType::tryFrom($this->projectType);
 
@@ -66,6 +71,21 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                 $type,
                 InstalledOperationManager::OPERATION_SCAN,
                 'server_not_found',
+            );
+
+            return;
+        }
+
+        $actor = $this->actorUserId !== null && $this->actorUserId > 0
+            ? User::query()->find($this->actorUserId)
+            : null;
+
+        if (!$authorizer->allows($actor, $server, ProjectOperation::Scan)) {
+            $operations->fail(
+                $server,
+                $type,
+                InstalledOperationManager::OPERATION_SCAN,
+                'scan_unauthorized',
             );
 
             return;

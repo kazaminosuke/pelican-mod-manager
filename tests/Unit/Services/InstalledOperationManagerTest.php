@@ -56,10 +56,24 @@ class InstalledOperationManagerTest extends TestCase
         $config = Mockery::mock(ConfigRepository::class);
         $config->shouldReceive('get')->once()->with('queue.default', 'sync')->andReturn('sync');
         $result = (new InstalledOperationManager($cache, $config))
-            ->dispatchScan(42, ProjectType::Mod);
+            ->dispatchScan(42, ProjectType::Mod, actorUserId: 7);
 
         self::assertFalse($result['dispatched']);
         self::assertSame('sync_queue', $result['reason']);
+        self::assertNull($result['state']);
+    }
+
+    public function test_missing_scan_actor_is_reported_without_dispatching(): void
+    {
+        $cache = Mockery::mock(CacheRepository::class);
+        $cache->shouldReceive('get')->twice()->andReturnNull();
+        $config = Mockery::mock(ConfigRepository::class);
+        $config->shouldNotReceive('get');
+        $result = (new InstalledOperationManager($cache, $config))
+            ->dispatchScan(42, ProjectType::Mod);
+
+        self::assertFalse($result['dispatched']);
+        self::assertSame('missing_actor', $result['reason']);
         self::assertNull($result['state']);
     }
 
@@ -71,7 +85,8 @@ class InstalledOperationManagerTest extends TestCase
             ->once()
             ->withArgs(fn (string $key, array $payload): bool => $key === 'mod_manager_operation:v1:42:mod:scan'
                 && $payload['status'] === InstalledOperationState::STATUS_QUEUED
-                && $payload['result']['force'] === true);
+                && $payload['result']['force'] === true
+                && $payload['result']['actor_user_id'] === 7);
         $config = Mockery::mock(ConfigRepository::class);
         $config->shouldReceive('get')->once()->with('queue.default', 'sync')->andReturn('database');
         $dispatcher = $this->bindDispatcher($cache);
@@ -80,11 +95,12 @@ class InstalledOperationManagerTest extends TestCase
             ->once()
             ->withArgs(fn (ScanInstalledProjects $job): bool => $job->serverId === 42
                 && $job->projectType === ProjectType::Mod->value
-                && $job->force)
+                && $job->force
+                && $job->actorUserId === 7)
             ->andReturn(1);
 
         $result = (new InstalledOperationManager($cache, $config))
-            ->dispatchScan(42, ProjectType::Mod, force: true);
+            ->dispatchScan(42, ProjectType::Mod, force: true, actorUserId: 7);
 
         self::assertTrue($result['dispatched']);
         self::assertNull($result['reason']);

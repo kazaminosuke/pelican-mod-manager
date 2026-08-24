@@ -54,15 +54,24 @@ final class InstalledOperationManager
      * The manager never falls back to synchronous execution. Callers can use
      * the reason to show an operator-facing queue configuration warning.
      *
-     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed', state: ?InstalledOperationState}
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'missing_actor', state: ?InstalledOperationState}
      */
     public function dispatchScan(
         Server|int $server,
         ProjectType $projectType,
         bool $force = false,
+        ?int $actorUserId = null,
     ): array {
         $serverId = $this->serverId($server);
         $current = $this->operationStateOrActive($serverId, $projectType, self::OPERATION_SCAN);
+
+        if ($actorUserId === null || $actorUserId <= 0) {
+            return [
+                'dispatched' => false,
+                'reason' => 'missing_actor',
+                'state' => $current,
+            ];
+        }
 
         if ($current?->isActive()) {
             return [
@@ -82,6 +91,7 @@ final class InstalledOperationManager
 
         $state = $this->queue($serverId, $projectType, self::OPERATION_SCAN, [
             'force' => $force,
+            'actor_user_id' => $actorUserId,
         ]);
 
         try {
@@ -92,6 +102,7 @@ final class InstalledOperationManager
                 serverId: $serverId,
                 projectType: $projectType->value,
                 force: $force,
+                actorUserId: $actorUserId,
             );
         } catch (Throwable $exception) {
             report($exception);

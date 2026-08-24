@@ -63,6 +63,7 @@ use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\Url;
 use Livewire\WithoutUrlPagination;
+use Throwable;
 
 class ModManagerPage extends Page implements HasTable
 {
@@ -487,6 +488,7 @@ class ModManagerPage extends Page implements HasTable
         // the whole component request (including after a browser reload).
         $this->loadDefaultActiveTab();
         $this->restoreCatalogStateFromUrl();
+        $this->rejectUnauthorizedInstalledTab();
         $this->paginators[self::TABLE_PAGINATOR_NAME] = max(1, $this->catalogPage);
         $this->refreshInstalledOperationState();
 
@@ -736,7 +738,7 @@ class ModManagerPage extends Page implements HasTable
      */
     protected function dispatchInstalledScanIfMissing(): void
     {
-        if ($this->installedScanDataReady) {
+        if ($this->installedScanDataReady || !$this->canScanInstalledProjects()) {
             return;
         }
 
@@ -748,7 +750,17 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
-        $dispatch = app(InstalledOperationManager::class)->dispatchScan($server, $type);
+        $actorUserId = $this->actorUserIdForScan();
+
+        if ($actorUserId === null) {
+            return;
+        }
+
+        $dispatch = app(InstalledOperationManager::class)->dispatchScan(
+            $server,
+            $type,
+            actorUserId: $actorUserId,
+        );
         $state = $dispatch['state'];
 
         if ($state !== null) {
@@ -823,6 +835,11 @@ class ModManagerPage extends Page implements HasTable
 
     public function updatedActiveTab(?string $activeTab): void
     {
+        if ($activeTab === 'installed' && !$this->canScanInstalledProjects()) {
+            $this->activeTab = $this->getDefaultActiveTab();
+            $activeTab = is_string($this->activeTab) ? $this->activeTab : null;
+        }
+
         $catalogPageBeforeTabChange = $this->catalogPage;
         $preserveCatalogPage = $this->shouldPreserveCatalogPageOnTabChange($activeTab);
 
@@ -1180,6 +1197,16 @@ class ModManagerPage extends Page implements HasTable
         $this->activeTab = $tab;
     }
 
+    protected function rejectUnauthorizedInstalledTab(): void
+    {
+        if ($this->activeTab !== 'installed' || $this->canScanInstalledProjects()) {
+            return;
+        }
+
+        $this->activeTab = $this->getDefaultActiveTab();
+        $this->source = $this->sourceForTab($this->activeTab);
+    }
+
     protected function catalogTabForSource(?string $source): ?string
     {
         if ($source === null || $source === '') {
@@ -1265,7 +1292,9 @@ class ModManagerPage extends Page implements HasTable
             $installedTab = $installedTab->badge($this->installedFilesCount);
         }
 
-        $tabs['installed'] = $installedTab;
+        if ($this->canScanInstalledProjects()) {
+            $tabs['installed'] = $installedTab;
+        }
 
         return $tabs;
     }
@@ -1302,6 +1331,10 @@ class ModManagerPage extends Page implements HasTable
     /** @return array<int, array{source: string, project_id: string, project_slug: string, project_title: string, version_id: string, version_number: string, filename: string, installed_at: string}> */
     protected function getInstalledModsMetadata(): array
     {
+        if (!$this->canScanInstalledProjects()) {
+            return [];
+        }
+
         if ($this->installedModsMetadata === null) {
             $startedAt = $this->isModManagerTimingEnabled() ? microtime(true) : 0.0;
 
@@ -1700,6 +1733,25 @@ class ModManagerPage extends Page implements HasTable
         return $this->canManageInstallOrUpdate($server);
     }
 
+    protected function canScanInstalledProjects(): bool
+    {
+        try {
+            $server = Filament::getTenant();
+
+            return $server instanceof Server
+                && $this->canManageProjectOperation($server, ProjectOperation::Scan);
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    protected function actorUserIdForScan(): ?int
+    {
+        $id = user()?->getKey();
+
+        return is_numeric($id) && (int) $id > 0 ? (int) $id : null;
+    }
+
     protected function authorizeProjectOperation(Server $server, ProjectOperation $operation): void
     {
         abort_unless($this->canManageProjectOperation($server, $operation), 403);
@@ -2093,8 +2145,12 @@ class ModManagerPage extends Page implements HasTable
 
                     $scanState = $snapshot['scan'];
 
-                    if ($scanResult === null && $scanState === null) {
-                        $dispatch = $operations->dispatchScan($server, $type);
+                    if ($scanResult === null && $scanState === null && $this->canScanInstalledProjects()) {
+                        $dispatch = $operations->dispatchScan(
+                            $server,
+                            $type,
+                            actorUserId: $this->actorUserIdForScan(),
+                        );
                         $scanState = $dispatch['state'];
 
                         if ($dispatch['reason'] === 'sync_queue' && !$this->operationQueueWarningShown) {
@@ -2992,11 +3048,20 @@ class ModManagerPage extends Page implements HasTable
                 ->label(fn () => $this->getRescanActionLabel($type))
                 ->tooltip(fn () => $this->getRescanActionLabel($type))
                 ->icon('tabler-search')
+                ->authorize(fn (): bool => $this->canScanInstalledProjects())
                 ->action(function () use ($server, $type) {
-                    $dispatch = app(InstalledOperationManager::class)->dispatchScan($server, $type, force: true);
+                    $this->authorizeProjectOperation($server, ProjectOperation::Scan);
+
+                    $dispatch = app(InstalledOperationManager::class)->dispatchScan(
+                        $server,
+                        $type,
+                        force: true,
+                        actorUserId: $this->actorUserIdForScan(),
+                    );
                     $this->notifyInstalledOperationDispatched($dispatch);
                 })
-                ->visible(fn () => static::detectProjectType($server) !== null),
+                ->visible(fn () => static::detectProjectType($server) !== null
+                    && $this->canScanInstalledProjects()),
         ];
     }
 

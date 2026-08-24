@@ -21,7 +21,15 @@ final class ProjectOperationAuthorizer
         // Do not use User::isAdmin(): Pelican reports true for any user with
         // any admin-role permission, which would bypass this operation-level
         // role control. Root Admin is the platform's unconditional admin.
-        if ($user->isRootAdmin() || $user->can($operation->roleAbility())) {
+        if ($user->isRootAdmin()) {
+            return true;
+        }
+
+        if ($operation === ProjectOperation::Scan) {
+            return $this->allowsScan($user, $server);
+        }
+
+        if ($user->can($operation->roleAbility())) {
             return true;
         }
 
@@ -30,6 +38,28 @@ final class ProjectOperationAuthorizer
         }
 
         foreach ($operation->requiredFilePermissions() as $permission) {
+            if (!$user->can($permission, $server)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Scan is not gated by allow_user_project_* toggles. Those flags control
+     * install/update/delete. Listing, hashing, and metadata writes follow
+     * Panel file permissions, or any minecraftModManager role ability.
+     */
+    private function allowsScan(User $user, Server $server): bool
+    {
+        foreach ([ProjectOperation::Install, ProjectOperation::Update, ProjectOperation::Delete] as $operation) {
+            if ($user->can($operation->roleAbility())) {
+                return true;
+            }
+        }
+
+        foreach (ProjectOperation::Scan->requiredFilePermissions() as $permission) {
             if (!$user->can($permission, $server)) {
                 return false;
             }

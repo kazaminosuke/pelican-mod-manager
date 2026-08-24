@@ -101,6 +101,27 @@ class ProjectOperationAuthorizerTest extends TestCase
         ]));
     }
 
+    public function test_scan_requires_file_read_content_and_create_without_operation_toggles(): void
+    {
+        $complete = $this->user(permissions: [
+            SubuserPermission::FileRead->value => true,
+            SubuserPermission::FileReadContent->value => true,
+            SubuserPermission::FileCreate->value => true,
+        ]);
+        self::assertTrue($this->allows($complete, ProjectOperation::Scan));
+
+        $missingRead = $this->user(permissions: [
+            SubuserPermission::FileReadContent->value => true,
+            SubuserPermission::FileCreate->value => true,
+        ]);
+        self::assertFalse($this->allows($missingRead, ProjectOperation::Scan));
+
+        $roleUser = $this->user(permissions: [
+            'create minecraftModManager' => true,
+        ]);
+        self::assertTrue($this->allows($roleUser, ProjectOperation::Scan));
+    }
+
     public function test_general_user_file_permissions_do_not_bypass_a_disabled_operation(): void
     {
         $user = $this->user(permissions: [
