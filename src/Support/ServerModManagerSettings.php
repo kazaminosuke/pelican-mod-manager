@@ -76,13 +76,18 @@ final class ServerModManagerSettings
     public function navigationSort(Server|int $server, ProjectType $type): int
     {
         $override = $this->navigationSortOverride($server, $type);
+        $default = $type === ProjectType::Datapack ? 12 : 11;
 
-        return $override ?? (int) config('pelican-minecraft-modrinth.navigation_sort.'.$type->value, 11);
+        return $override
+            ?? NavigationSort::nullable(config('pelican-minecraft-modrinth.navigation_sort.'.$type->value, $default))
+            ?? $default;
     }
 
     public function navigationSortOverride(Server|int $server, ProjectType $type): ?int
     {
-        return $this->repository->forServer($server)?->{$this->navigationSortField($type)};
+        return NavigationSort::nullable(
+            $this->repository->forServer($server)?->{$this->navigationSortField($type)},
+        );
     }
 
     /**

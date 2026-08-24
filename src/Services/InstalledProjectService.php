@@ -759,23 +759,34 @@ class InstalledProjectService
     ): InstalledMetadataDocument {
         $originalInstalled = $this->indexInstalledEntries($original->installedMods());
         $latestInstalled = $this->indexInstalledEntries($latest->installedMods());
+        $removedInstalledIdentities = [];
+        $changedInstalledEntries = [];
 
         foreach ($originalInstalled as $identity => $entry) {
             if (!isset($latestInstalled[$identity])) {
-                $scannedInstalled = array_values(array_filter(
-                    $scannedInstalled,
-                    fn (array $candidate): bool => $this->installedEntryIdentity($candidate) !== $identity,
-                ));
+                $removedInstalledIdentities[$identity] = true;
             } elseif ($latestInstalled[$identity] != $entry) {
-                $scannedInstalled = $this->upsertInstalledEntry($scannedInstalled, $latestInstalled[$identity]);
+                $changedInstalledEntries[] = $latestInstalled[$identity];
             }
         }
 
         foreach ($latestInstalled as $identity => $entry) {
             if (!isset($originalInstalled[$identity])) {
-                $scannedInstalled = $this->upsertInstalledEntry($scannedInstalled, $entry);
+                $changedInstalledEntries[] = $entry;
             }
         }
+
+        if ($removedInstalledIdentities !== []) {
+            $scannedInstalled = array_values(array_filter(
+                $scannedInstalled,
+                fn (array $candidate): bool => !isset($removedInstalledIdentities[$this->installedEntryIdentity($candidate)]),
+            ));
+        }
+
+        // Apply every concurrent add/update in one linear pass. Repeated
+        // upsertInstalledEntry() calls rebuilt the complete scan array for
+        // each changed entry, turning the rebase into O(K x N).
+        $scannedInstalled = $this->upsertInstalledEntries($scannedInstalled, $changedInstalledEntries);
 
         $originalUnresolved = $this->indexEntriesByFilename($original->unresolvedFiles());
         $latestUnresolved = $this->indexEntriesByFilename($latest->unresolvedFiles());

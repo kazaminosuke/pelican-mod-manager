@@ -14,6 +14,7 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\ModManagerPlugin;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
+use Kazaminosuke\ModManager\Support\NavigationSort;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 
 /**
@@ -216,7 +217,9 @@ final class ServerModManagerTab
             ->helperText(fn (): string => trans('pelican-minecraft-modrinth::strings.server_mod_manager.navigation_sort_helper'))
             ->placeholder(fn (Server $record): string => (string) app(ServerModManagerSettings::class)->navigationSort($record, $type))
             ->formatStateUsing(fn (Server $record): ?int => app(ServerModManagerSettings::class)->navigationSortOverride($record, $type))
-            ->numeric()
+            ->integer()
+            ->minValue(NavigationSort::MIN_VALUE)
+            ->maxValue(NavigationSort::MAX_VALUE)
             ->nullable()
             ->visible(fn (Server $record): bool => self::isTypeVisible($record, $type))
             ->dehydrated(false);
@@ -276,11 +279,7 @@ final class ServerModManagerTab
 
     private static function decodeNavigationSort(mixed $value): ?int
     {
-        if ($value === null || $value === '' || !is_numeric($value)) {
-            return null;
-        }
-
-        return (int) $value;
+        return NavigationSort::nullable($value);
     }
 
     private static function decodeOverride(mixed $value): ?bool

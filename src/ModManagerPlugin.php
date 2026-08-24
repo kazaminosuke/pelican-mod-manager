@@ -34,6 +34,7 @@ use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
+use Kazaminosuke\ModManager\Support\NavigationSort;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 
 class ModManagerPlugin implements HasPluginSettings, Plugin
@@ -321,17 +322,26 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             TextInput::make('mod_nav_sort')
                 ->label(trans('pelican-minecraft-modrinth::strings.settings.mod_nav_sort'))
                 ->helperText(trans('pelican-minecraft-modrinth::strings.settings.nav_sort_helper'))
-                ->numeric()
+                ->required()
+                ->integer()
+                ->minValue(NavigationSort::MIN_VALUE)
+                ->maxValue(NavigationSort::MAX_VALUE)
                 ->default(fn () => config('pelican-minecraft-modrinth.navigation_sort.mod', 11)),
             TextInput::make('plugin_nav_sort')
                 ->label(trans('pelican-minecraft-modrinth::strings.settings.plugin_nav_sort'))
                 ->helperText(trans('pelican-minecraft-modrinth::strings.settings.nav_sort_helper'))
-                ->numeric()
+                ->required()
+                ->integer()
+                ->minValue(NavigationSort::MIN_VALUE)
+                ->maxValue(NavigationSort::MAX_VALUE)
                 ->default(fn () => config('pelican-minecraft-modrinth.navigation_sort.plugin', 11)),
             TextInput::make('datapack_nav_sort')
                 ->label(trans('pelican-minecraft-modrinth::strings.settings.datapack_nav_sort'))
                 ->helperText(trans('pelican-minecraft-modrinth::strings.settings.nav_sort_helper'))
-                ->numeric()
+                ->required()
+                ->integer()
+                ->minValue(NavigationSort::MIN_VALUE)
+                ->maxValue(NavigationSort::MAX_VALUE)
                 ->default(fn () => config('pelican-minecraft-modrinth.navigation_sort.datapack', 12)),
             TextInput::make('curseforge_api_key')
                 ->label(trans('pelican-minecraft-modrinth::strings.settings.curseforge_api_key'))
@@ -600,8 +610,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
      * synchronously from this one request - doing that for every server,
      * each potentially hundreds of mods, in a single web request risks a
      * real timeout. Re-scanning instead happens lazily, the normal way, the
-     * next time an applicable Mod/Plugin/Datapack manager page is opened
-     * (on either a catalog or Installed tab).
+     * next time an applicable Mod/Plugin/Datapack Installed tab is opened.
      */
     private static function clearAllServers(InstalledProjectService $service, DaemonFileRepository $fileRepository): void
     {

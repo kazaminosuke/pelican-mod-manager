@@ -4,6 +4,7 @@ namespace Kazaminosuke\ModManager\Repositories;
 
 use App\Models\Server;
 use Kazaminosuke\ModManager\Models\ModManagerServerSetting;
+use Kazaminosuke\ModManager\Support\NavigationSort;
 
 /**
  * Request-local access to the optional per-server settings row.
@@ -65,6 +66,13 @@ final class ServerModManagerSettingRepository
         $serverId = $this->serverId($server);
         $setting = $this->forServer($serverId) ?? new ModManagerServerSetting();
         $setting->server_id = $serverId;
+
+        foreach (['mod_navigation_sort', 'plugin_navigation_sort', 'datapack_navigation_sort'] as $field) {
+            if (array_key_exists($field, $attributes)) {
+                $attributes[$field] = NavigationSort::nullable($attributes[$field]);
+            }
+        }
+
         $setting->fill($attributes);
         $setting->save();
 

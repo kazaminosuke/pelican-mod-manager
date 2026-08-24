@@ -86,6 +86,12 @@ class ModManagerPage extends Page implements HasTable
     /** Keep every catalog source and the table paginator on the same page size. */
     private const TABLE_PAGE_SIZE = 20;
 
+    /** Bound direct URL input before it can become an upstream API offset. */
+    private const MAX_CATALOG_PAGE = 10_000;
+
+    /** CurseForge rejects index + page size values above 10,000. */
+    private const MAX_CURSEFORGE_CATALOG_PAGE = 500;
+
     /** The catalog table has no Filament query-string identifier. */
     private const TABLE_PAGINATOR_NAME = 'page';
 
@@ -489,7 +495,8 @@ class ModManagerPage extends Page implements HasTable
         if ($this->activeTab === 'installed') {
             $this->dispatchInstalledScanIfMissing();
         }
-        $this->paginators[self::TABLE_PAGINATOR_NAME] = max(1, $this->catalogPage);
+        $this->catalogPage = $this->normalizeCatalogPage($this->catalogPage, $this->source);
+        $this->paginators[self::TABLE_PAGINATOR_NAME] = $this->catalogPage;
         $this->refreshInstalledOperationState();
 
         $this->catalogWarmPending = true;
@@ -548,9 +555,7 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
-        $plan = $this->catalogWarmPlan($includeOtherSources);
-
-        foreach ([...$plan['immediate'], ...$plan['queued']] as $page) {
+        foreach ($this->catalogPagesToWarm($includeOtherSources) as $page) {
             $source = $this->catalogSourceByKey($page['sourceKey']);
             if ($source !== null && $source->hasFreshCachedSearch(
                 $server,
@@ -615,7 +620,21 @@ class ModManagerPage extends Page implements HasTable
             }
         }
 
-        return [...$otherSourcePages, ...$activeSourcePages];
+        $pages = [...$otherSourcePages, ...$activeSourcePages];
+
+        // Hangar search is the slowest catalog request. Preserve its former
+        // dispatch priority without exposing a misleading immediate/queued
+        // split: every target below is still the same queued job.
+        return [
+            ...array_values(array_filter(
+                $pages,
+                static fn (array $page): bool => $page['sourceKey'] === ProjectSourceKey::Hangar->value,
+            )),
+            ...array_values(array_filter(
+                $pages,
+                static fn (array $page): bool => $page['sourceKey'] !== ProjectSourceKey::Hangar->value,
+            )),
+        ];
     }
 
     protected function shouldWarmAdjacentCatalogPages(): bool
@@ -634,7 +653,10 @@ class ModManagerPage extends Page implements HasTable
 
     protected function currentCatalogPageForWarm(): int
     {
-        return max(1, (int) $this->getTablePage());
+        return $this->normalizeCatalogPage(
+            $this->getTablePage(),
+            $this->getCurrentSource()?->getKey()->value,
+        );
     }
 
     /**
@@ -661,33 +683,6 @@ class ModManagerPage extends Page implements HasTable
         }
 
         return $pages;
-    }
-
-    /**
-     * Hangar's search is slow enough that lining it up behind Modrinth on
-     * the same queue worker makes the Hangar tab miss the warm window. Its
-     * pages are dispatched first. Other sources follow so this request
-     * never blocks on their APIs.
-     *
-     * @return array{queued: array<int, array{sourceKey: string, page: int}>, immediate: array<int, array{sourceKey: string, page: int}>}
-     */
-    protected function catalogWarmPlan(bool $includeOtherSources = true): array
-    {
-        $queued = [];
-        $immediate = [];
-
-        foreach ($this->catalogPagesToWarm($includeOtherSources) as $page) {
-            if ($page['sourceKey'] === ProjectSourceKey::Hangar->value) {
-                $immediate[] = $page;
-            } else {
-                $queued[] = $page;
-            }
-        }
-
-        return [
-            'queued' => $queued,
-            'immediate' => $immediate,
-        ];
     }
 
     protected function catalogSourceByKey(string $sourceKey): ?ProjectSourceInterface
@@ -956,7 +951,7 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
-        $this->catalogPage = max(1, (int) $page);
+        $this->catalogPage = $this->normalizeCatalogPage($page, $this->source);
         $this->isTableLoaded = false;
         $this->queueHeaderScroll();
         $this->dispatchCatalogWarm(includeOtherSources: false);
@@ -964,7 +959,7 @@ class ModManagerPage extends Page implements HasTable
 
     public function updatedCatalogPage($page): void
     {
-        $page = max(1, (int) $page);
+        $page = $this->normalizeCatalogPage($page, $this->source);
         $this->catalogPage = $page;
         $this->paginators[self::TABLE_PAGINATOR_NAME] = $page;
     }
@@ -980,6 +975,16 @@ class ModManagerPage extends Page implements HasTable
     public function queryStringHandlesPagination(): array
     {
         return [];
+    }
+
+    protected function normalizeCatalogPage(mixed $page, ?string $sourceKey = null): int
+    {
+        $page = is_numeric($page) ? (int) $page : 1;
+        $maximum = $sourceKey === ProjectSourceKey::CurseForge->value
+            ? self::MAX_CURSEFORGE_CATALOG_PAGE
+            : self::MAX_CATALOG_PAGE;
+
+        return min($maximum, max(1, $page));
     }
 
     /**
@@ -1219,7 +1224,7 @@ class ModManagerPage extends Page implements HasTable
             return in_array($source, ['all', $onlySource], true) ? 'all' : null;
         }
 
-        return array_key_exists($source, $this->getTabs()) && $source !== 'installed'
+        return array_key_exists($source, $this->getCachedTabs()) && $source !== 'installed'
             ? $source
             : null;
     }
@@ -2304,6 +2309,13 @@ class ModManagerPage extends Page implements HasTable
                     return new LengthAwarePaginator([], 0, self::TABLE_PAGE_SIZE, $this->synchronizeTablePage($page, 0));
                 }
 
+                // Treat the URL/paginator as untrusted input. This second
+                // boundary also protects direct Livewire calls that bypassed
+                // mount()/updatedCatalogPage().
+                $page = $this->normalizeCatalogPage($page, $currentSource->getKey()->value);
+                $this->paginators[self::TABLE_PAGINATOR_NAME] = $page;
+                $this->catalogPage = $page;
+
                 $filterState = $this->tableFilters ?? [];
                 $category = $filterState['catalog_category']['value'] ?? null;
                 $environment = $filterState['catalog_environment']['value'] ?? null;
@@ -3100,12 +3112,13 @@ class ModManagerPage extends Page implements HasTable
                             ->state(fn () => ModManager::getMinecraftVersion($server) ?? trans('pelican-minecraft-modrinth::strings.page.unknown'))
                             ->badge()
                             ->size(TextSize::Large),
-                        TextEntry::make('world')
-                            ->label(trans('pelican-minecraft-modrinth::strings.page.world'))
-                            ->state(fn (DaemonFileRepository $fileRepository) => $this->getCachedDatapackWorldName($server, $fileRepository))
-                            ->badge()
-                            ->size(TextSize::Large)
-                            ->visible(fn () => $type === ProjectType::Datapack),
+                        ...($type === ProjectType::Datapack ? [
+                            TextEntry::make('world')
+                                ->label(trans('pelican-minecraft-modrinth::strings.page.world'))
+                                ->state(fn (DaemonFileRepository $fileRepository) => $this->getCachedDatapackWorldName($server, $fileRepository))
+                                ->badge()
+                                ->size(TextSize::Large),
+                        ] : []),
                         TextEntry::make('loader')
                             ->label(trans('pelican-minecraft-modrinth::strings.page.loader'))
                             ->state(fn () => MinecraftLoader::fromServer($server)?->getLabel() ?? trans('pelican-minecraft-modrinth::strings.page.unknown'))
@@ -3210,21 +3223,25 @@ class ModManagerPage extends Page implements HasTable
                     // per update is what previously coupled the layout to
                     // render timing. A ResizeObserver covers the cases that
                     // do change it.
-                ], $this->pollInstalledOperations
-                    // Keep observing scan/bulk-update state even though scan
-                    // status no longer renders a page-body component.
-                    ? ['wire:poll.2s' => 'pollInstalledOperation']
-                    : [], $this->pollEnrichment
-                    // Independent of pollInstalledOperations: this fires only
-                    // while a background icon/downloads/date_modified or
-                    // update-badge fetch is still outstanding (see
-                    // peekVisibleLatestVersions()/ProjectSourceRegistry::
-                    // peekInstalled()), including catalog rows that overlap
-                    // installed projects, and stops on its own once records()
-                    // finds nothing left pending.
-                    ? ['wire:poll.5s' => 'pollEnrichment']
-                    : [])),
+                ], $this->tablePollingAttributes())),
             ]);
+    }
+
+    /** @return array<string, string> */
+    protected function tablePollingAttributes(): array
+    {
+        if ($this->pollInstalledOperations) {
+            // Operation progress wins while both activities are pending. Its
+            // terminal render flushes table records, after which the existing
+            // enrichment poll resumes if background fills are still pending.
+            return ['wire:poll.2s' => 'pollInstalledOperation'];
+        }
+
+        if ($this->pollEnrichment) {
+            return ['wire:poll.5s' => 'pollEnrichment'];
+        }
+
+        return [];
     }
 
     /**

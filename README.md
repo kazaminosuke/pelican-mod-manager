@@ -23,6 +23,8 @@ GitHub Releases works without a token, but its unauthenticated rate limit (60 re
 
 - Pelican Panel (`main`, Filament 5.6+)
 - PHP 8.3 - 8.5
+- A request-isolated HTTP runtime such as PHP-FPM. Laravel Octane and other
+  long-lived HTTP workers are not currently supported.
 - **An asynchronous queue worker.** Installed-file scans, bulk updates, and cache warming all run as queued jobs so Livewire requests stay responsive. Configure a real driver (for example `QUEUE_CONNECTION=database`) and keep a worker running:
 
   ```sh
@@ -102,8 +104,8 @@ version, and datapack support on eggs that automatic detection couldn't resolve.
 The same screen has a **Clear cache** action, which behaves differently by scope:
 
 - **All servers** - clears every server's tracked-file metadata and the shared caches, but does
-  **not** force an immediate re-scan; each server re-scans lazily the next time an applicable
-  Mod/Plugin/Datapack manager page is opened (on either a catalog or Installed tab).
+  **not** force an immediate re-scan; each server re-scans lazily the next time its applicable
+  Mod/Plugin/Datapack **Installed** tab is opened.
 - **A single server** - clears that server's metadata and immediately queues a forced re-scan
   (needs a working queue - see [Requirements](#requirements)).
 

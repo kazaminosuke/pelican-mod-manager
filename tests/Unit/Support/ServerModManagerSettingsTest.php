@@ -159,7 +159,24 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertTrue($settings->isTypeEnabled($server, ProjectType::Datapack));
         self::assertSame(10, $settings->navigationSort($server, ProjectType::Mod));
         self::assertSame(4, $settings->navigationSort($server, ProjectType::Plugin));
-        self::assertSame(0, $settings->navigationSort($server, ProjectType::Datapack));
+        self::assertSame(12, $settings->navigationSort($server, ProjectType::Datapack));
+        self::assertNull($settings->navigationSortOverride($server, ProjectType::Datapack));
+    }
+
+    public function test_repository_normalizes_navigation_sort_values_before_database_write(): void
+    {
+        $server = $this->server(1);
+        $repository = new ServerModManagerSettingRepository();
+
+        $saved = $repository->save($server, [
+            'mod_navigation_sort' => '999999999999999999999999',
+            'plugin_navigation_sort' => '42',
+            'datapack_navigation_sort' => '1.5',
+        ]);
+
+        self::assertNull($saved->mod_navigation_sort);
+        self::assertSame(42, $saved->plugin_navigation_sort);
+        self::assertNull($saved->datapack_navigation_sort);
     }
 
     private function settings(): ServerModManagerSettings

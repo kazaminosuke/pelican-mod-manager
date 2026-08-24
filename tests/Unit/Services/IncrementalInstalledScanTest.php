@@ -96,6 +96,25 @@ class IncrementalInstalledScanTest extends TestCase
         self::assertSame('1', $byProject['c']['version_id']);
     }
 
+    public function test_scan_rebase_applies_concurrent_filename_winners_in_one_batch(): void
+    {
+        $service = new TestableInstalledProjectService();
+        $originalA = $this->entry('a', 'a.jar', '1');
+        $originalB = $this->entry('b', 'b.jar', '1');
+        $updatedB = $this->entry('b', 'shared.jar', '2');
+        $newC = $this->entry('c', 'SHARED.JAR', '1');
+
+        $rebased = $service->exposeRebase(
+            $this->document([$originalA, $originalB]),
+            $this->document([$originalA, $updatedB, $newC]),
+            [$originalA, $originalB],
+            [],
+        );
+
+        self::assertSame(['a', 'c'], array_column($rebased->installedMods(), 'project_id'));
+        self::assertSame(['a.jar', 'SHARED.JAR'], array_column($rebased->installedMods(), 'filename'));
+    }
+
     public function test_hash_lookup_sources_follow_the_registry_project_type_and_enablement_rules(): void
     {
         $server = new Server();

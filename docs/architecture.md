@@ -214,6 +214,14 @@ private/community egg this plugin doesn't ship a profile for.
 > verified manually today - there is no unit/feature test exercising them. Verify by hand after any
 > change near this method, and see [Known issues](#known-issues) below.
 
+### HTTP runtime boundary
+
+The plugin currently supports request-isolated HTTP runtimes such as PHP-FPM.
+It does not support Laravel Octane or another long-lived HTTP worker: navigation
+row placement mutates Filament's static page/resource sort state once per
+request. Queue workers are supported separately and explicitly clear their
+request-local resolver/settings caches between jobs.
+
 ## Project write authorization
 
 `Support\ProjectOperationAuthorizer` is the single decision point for installing, updating

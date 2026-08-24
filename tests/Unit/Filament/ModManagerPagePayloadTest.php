@@ -144,12 +144,15 @@ final class TestableModManagerPage extends ModManagerPage
         return $this->catalogPagesToWarm($includeOtherSources);
     }
 
-    /**
-     * @return array{queued: array<int, array{sourceKey: string, page: int}>, immediate: array<int, array{sourceKey: string, page: int}>}
-     */
-    public function catalogWarmPlanForTest(bool $includeOtherSources = true): array
+    public function normalizeCatalogPageForTest(mixed $page, ?string $sourceKey = null): int
     {
-        return $this->catalogWarmPlan($includeOtherSources);
+        return $this->normalizeCatalogPage($page, $sourceKey);
+    }
+
+    /** @return array<string, string> */
+    public function tablePollingAttributesForTest(): array
+    {
+        return $this->tablePollingAttributes();
     }
 
     public function shouldPublishPerformanceProfilerForTest(): bool
@@ -248,6 +251,16 @@ class ModManagerPagePayloadTest extends TestCase
             'keep' => false,
             'except' => 1,
         ], $attribute->getArguments());
+    }
+
+    public function test_catalog_page_normalization_bounds_direct_url_values_before_search(): void
+    {
+        $page = new TestableModManagerPage();
+
+        self::assertSame(1, $page->normalizeCatalogPageForTest(-10, ProjectSourceKey::Modrinth->value));
+        self::assertSame(10_000, $page->normalizeCatalogPageForTest(PHP_INT_MAX, ProjectSourceKey::Modrinth->value));
+        self::assertSame(500, $page->normalizeCatalogPageForTest(501, ProjectSourceKey::CurseForge->value));
+        self::assertSame(1, $page->normalizeCatalogPageForTest('not-a-page', ProjectSourceKey::Hangar->value));
     }
 
     public function test_unknown_files_are_not_part_of_the_livewire_snapshot(): void
@@ -780,6 +793,27 @@ class ModManagerPagePayloadTest extends TestCase
         self::assertSame(0, $page->flushCachedTableRecordsCallsForTest);
     }
 
+    public function test_operation_poll_is_the_only_timer_when_operation_and_enrichment_are_pending(): void
+    {
+        $page = new TestableModManagerPage();
+        $page->pollInstalledOperations = true;
+        $page->pollEnrichment = true;
+
+        self::assertSame(
+            ['wire:poll.2s' => 'pollInstalledOperation'],
+            $page->tablePollingAttributesForTest(),
+        );
+
+        $page->pollInstalledOperations = false;
+        self::assertSame(
+            ['wire:poll.5s' => 'pollEnrichment'],
+            $page->tablePollingAttributesForTest(),
+        );
+
+        $page->pollEnrichment = false;
+        self::assertSame([], $page->tablePollingAttributesForTest());
+    }
+
     public function test_catalog_warm_skips_the_active_source_landing_page(): void
     {
         $page = $this->pageWithSources([
@@ -790,19 +824,10 @@ class ModManagerPagePayloadTest extends TestCase
         $page->activeTab = ProjectSourceKey::CurseForge->value;
 
         self::assertSame([
-            ['sourceKey' => 'modrinth', 'page' => 1],
             ['sourceKey' => 'hangar', 'page' => 1],
+            ['sourceKey' => 'modrinth', 'page' => 1],
             ['sourceKey' => 'curseforge', 'page' => 2],
         ], $page->catalogPagesToWarmForTest());
-        self::assertSame([
-            'queued' => [
-                ['sourceKey' => 'modrinth', 'page' => 1],
-                ['sourceKey' => 'curseforge', 'page' => 2],
-            ],
-            'immediate' => [
-                ['sourceKey' => 'hangar', 'page' => 1],
-            ],
-        ], $page->catalogWarmPlanForTest());
     }
 
     public function test_catalog_warm_skips_unconfigured_sources(): void

@@ -76,7 +76,7 @@ class InstalledMetadataRepositoryTest extends TestCase
 
     public function test_only_schema_v2_documents_are_accepted_and_missing_sources_are_not_defaulted(): void
     {
-        $entry = $this->legacyEntry();
+        $entry = $this->currentEntry();
 
         self::assertNull(InstalledMetadataDocument::fromArray([
             'schema_version' => 1,
@@ -95,7 +95,7 @@ class InstalledMetadataRepositoryTest extends TestCase
 
     public function test_v2_document_round_trip_preserves_signatures_hashes_and_unresolved_files(): void
     {
-        $entry = $this->legacyEntry();
+        $entry = $this->currentEntry();
         $entry['file_signature'] = ['size' => 1234, 'modified_at' => '2026-07-30T00:00:00Z'];
         $entry['hashes'] = ['murmur2' => '42', 'sha512' => 'sha512', 'sha256' => 'sha256'];
 
@@ -120,12 +120,12 @@ class InstalledMetadataRepositoryTest extends TestCase
 
     public function test_malformed_installed_entries_are_filtered_before_ui_consumers_read_them(): void
     {
-        $valid = $this->legacyEntry();
-        $invalidTitle = $this->legacyEntry('invalid-title.jar');
+        $valid = $this->currentEntry();
+        $invalidTitle = $this->currentEntry('invalid-title.jar');
         $invalidTitle['project_title'] = [];
-        $invalidSource = $this->legacyEntry('invalid-source.jar');
+        $invalidSource = $this->currentEntry('invalid-source.jar');
         $invalidSource['source'] = [];
-        $nonStringAuthor = $this->legacyEntry('author.jar');
+        $nonStringAuthor = $this->currentEntry('author.jar');
         $nonStringAuthor['author'] = ['unexpected'];
 
         $document = InstalledMetadataDocument::fromArray([
@@ -142,7 +142,7 @@ class InstalledMetadataRepositoryTest extends TestCase
     public function test_mutate_skips_wings_write_and_hydration_bump_when_current_document_is_unchanged(): void
     {
         $server = $this->server();
-        $document = InstalledMetadataDocument::fromArray(['schema_version' => 2, 'installed_mods' => [$this->legacyEntry()]]);
+        $document = InstalledMetadataDocument::fromArray(['schema_version' => 2, 'installed_mods' => [$this->currentEntry()]]);
         self::assertNotNull($document);
         $files = Mockery::mock(DaemonFileRepository::class);
         $files->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
@@ -200,7 +200,7 @@ class InstalledMetadataRepositoryTest extends TestCase
         $repository = new SynchronousInstalledMetadataRepository();
         $document = InstalledMetadataDocument::fromArray([
             'schema_version' => 2,
-            'installed_mods' => [$this->legacyEntry('one.jar'), $this->legacyEntry('two.jar')],
+            'installed_mods' => [$this->currentEntry('one.jar'), $this->currentEntry('two.jar')],
         ]);
 
         self::assertNotNull($document);
@@ -247,7 +247,7 @@ class InstalledMetadataRepositoryTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    protected function legacyEntry(string $filename = 'example.jar'): array
+    protected function currentEntry(string $filename = 'example.jar'): array
     {
         return [
             'source' => 'modrinth',
