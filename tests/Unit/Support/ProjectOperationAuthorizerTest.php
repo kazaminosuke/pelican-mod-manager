@@ -33,7 +33,6 @@ class ProjectOperationAuthorizerTest extends TestCase
         Capsule::schema()->create('mod_manager_server_settings', function ($table): void {
             $table->id();
             $table->unsignedInteger('server_id')->unique();
-            $table->boolean('enabled')->default(true);
             $table->boolean('allow_user_egg_profile_edit')->nullable();
             $table->boolean('allow_user_project_install')->nullable();
             $table->boolean('allow_user_project_update')->nullable();
@@ -141,7 +140,6 @@ class ProjectOperationAuthorizerTest extends TestCase
         ]);
         ModManagerServerSetting::query()->create([
             'server_id' => 1,
-            'enabled' => true,
             'allow_user_project_update' => false,
         ]);
 
@@ -156,7 +154,6 @@ class ProjectOperationAuthorizerTest extends TestCase
         ]);
         ModManagerServerSetting::query()->create([
             'server_id' => 1,
-            'enabled' => true,
             'allow_user_project_update' => false,
         ]);
 
@@ -172,7 +169,6 @@ class ProjectOperationAuthorizerTest extends TestCase
         ]);
         ModManagerServerSetting::query()->create([
             'server_id' => 1,
-            'enabled' => true,
             'allow_user_project_install' => true,
         ]);
 

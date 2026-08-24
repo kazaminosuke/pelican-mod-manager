@@ -130,8 +130,6 @@ plugin id・ディレクトリ構造・インストールパス・ユーザー�
 |---|---|
 | `Sources/ModrinthSource.php`、クラス名 `ModrinthSource` | Modrinth ソースの実装そのもの |
 | `ProjectSourceKey::Modrinth`（enum ケースと値 `'modrinth'`） | **メタデータファイルに永続化されている値**。変更するとインストール済み情報が壊れる |
-| `MinecraftModrinthLegacyRedirectPage` の **slug `'modrinth'`** | 旧 URL 互換のための存在理由そのもの |
-| `.modrinth-metadata.json`（`InstalledMetadataRepository::LEGACY_FILENAME`） | 旧形式の読み取り互換 |
 | キャッシュキー文字列 `modrinth_search:`、`modrinth_versions:`、`modrinth_latest:` 等 | S3 でプロファイル化する際にまとめて扱う。S1 では触らない |
 | `https://modrinth.com/...` / `https://api.modrinth.com/v2` | 外部 URL |
 
@@ -157,8 +155,6 @@ plugin id・ディレクトリ構造・インストールパス・ユーザー�
 | `Services/MinecraftModrinthService.php` / `MinecraftModrinthService` | `Services/InstalledProjectService.php` / `InstalledProjectService` | |
 | `Facades/MinecraftModrinth.php` / `MinecraftModrinth` | `Facades/ModManager.php` / `ModManager` | facade accessor も追随 |
 | `Filament/Server/Pages/MinecraftModrinthProjectPage.php` / `MinecraftModrinthProjectPage` | `Filament/Server/Pages/ModManagerPage.php` / `ModManagerPage` | **slug `'mod-manager'` は不変** |
-| `Filament/Server/Pages/MinecraftModrinthLegacyRedirectPage.php` / 同クラス | `Filament/Server/Pages/LegacyModrinthSlugRedirectPage.php` / 同クラス | **slug `'modrinth'` は不変** |
-| `Filament/Server/Pages/MinecraftDatapackLegacyRedirectPage.php` | 変更不要（`Modrinth` を含まない） | 中の参照だけ追随 |
 
 ### 1-C. 未使用の委譲メソッド削除
 
@@ -206,12 +202,11 @@ plugin id・ディレクトリ構造・インストールパス・ユーザー�
 2. ProjectSourceKey の enum ケース Modrinth と値 'modrinth'
    （インストール済みメタデータに永続化されているため）
 3. ModrinthSource クラスとファイル名（Modrinth ソースの実装そのもの）
-4. MinecraftModrinthLegacyRedirectPage の slug 'modrinth'
-5. MinecraftModrinthProjectPage の slug 'mod-manager'
-6. .modrinth-metadata.json / .pelican-mod-manager.json のファイル名定数
-7. キャッシュキー文字列（modrinth_search:, modrinth_versions:, modrinth_latest: 等）
-8. https://modrinth.com / https://api.modrinth.com/v2 の URL
-9. ProjectType enum の値 'mod' / 'plugin' / 'datapack'
+4. MinecraftModrinthProjectPage の slug 'mod-manager'
+5. .pelican-mod-manager.json の現行ファイル名
+6. キャッシュキー文字列（modrinth_search:, modrinth_versions:, modrinth_latest: 等）
+7. https://modrinth.com / https://api.modrinth.com/v2 の URL
+8. ProjectType enum の値 'mod' / 'plugin' / 'datapack'
 
 【変更内容】
 A. namespace: Boy132\MinecraftModrinth → Kazaminosuke\ModManager
@@ -230,8 +225,6 @@ B. クラス／ファイルのリネーム（中の参照もすべて追随）
        → src/Facades/ModManager.php / ModManager（getFacadeAccessor も追随）
    - src/Filament/Server/Pages/MinecraftModrinthProjectPage.php / 同クラス
        → ModManagerPage.php / ModManagerPage
-   - src/Filament/Server/Pages/MinecraftModrinthLegacyRedirectPage.php / 同クラス
-       → LegacyModrinthSlugRedirectPage.php / 同クラス
 
 C. 未使用の委譲メソッド削除（InstalledProjectService から）
    getModrinthProjects / getModrinthVersions / getInstalledModsFromModrinth /
@@ -287,7 +280,7 @@ E. 内部例外メッセージ・コメントの Modrinth 前提表現を実態�
 - [ ] `pelican-minecraft-modrinth` のヒット数が変更前と一致（＝ id 系に一切触れていない）
 - [ ] 残存する `Modrinth` が許可リストに完全に収まっていることをレビュー済み
 - [ ] 実パネルに配置して mod-manager ページが開き、カタログ／Installed 両タブが従来通り動作すること（手動確認）
-- [ ] 旧 URL `/modrinth` が `/mod-manager` へリダイレクトすること（手動確認）
+- [ ] 旧 URL redirectを登録せず、現行slugだけが登録されること（手動確認）
 
 ---
 
@@ -1318,15 +1311,10 @@ A. 一括置換（文字列リテラル pelican-minecraft-modrinth → pelican-m
    ※ plugin.json の update_url は Stage 8-B で専用リポジトリに移してあるので変更しません
 
 B. .env キーの名前空間化
-   現在 LATEST_MINECRAFT_VERSION / CURSEFORGE_API_KEY / GITHUB_TOKEN は名前空間が無く
-   他プラグインと衝突しうるため、この機会に名前空間付きキーを導入してください:
-     MOD_MANAGER_LATEST_MINECRAFT_VERSION
-     MOD_MANAGER_NAV_SORT（既存の MINECRAFT_MODRINTH_NAV_SORT から）
-     MOD_MANAGER_CURSEFORGE_API_KEY
-     MOD_MANAGER_GITHUB_TOKEN
-   1リリースだけ旧キーへのフォールバック読みを残してください:
-     env('MOD_MANAGER_CURSEFORGE_API_KEY', env('CURSEFORGE_API_KEY'))
-   saveSettings() は新キーのみ書き込むようにしてください。
+   ナビゲーション順は、現行の専用キー
+   MINECRAFT_MODRINTH_MOD_NAV_SORT / MINECRAFT_MODRINTH_PLUGIN_NAV_SORT /
+   MINECRAFT_MODRINTH_DATAPACK_NAV_SORT のみを使用してください。
+   旧sharedキーへのフォールバックはpre-releaseのため追加しません。
 
 C. キャッシュキーの接頭辞バージョンを一斉に上げる
    （id が変わってもキャッシュストアは共有されるため、混線を避ける）
@@ -1338,17 +1326,17 @@ D. ディレクトリ名の変更手順を README または RELEASING.md に文�
 【検証】
 1. Pint / PHPStan / PHPUnit green（CI のパスも新 id に更新済みであること）
 2. grep で "pelican-minecraft-modrinth" のヒットが 0 件であること
-   （旧 .env キーのフォールバック読みと、移行告知の文言を除く）
+   （移行告知の文言を除く）
 3. クリーンな Pelican に新 ZIP をインストールし、以下を確認:
    - plugins/pelican-mod-manager に展開されること
    - PluginIdMismatchException が出ないこと
    - mod-manager ページが開き、カタログ / Installed 両タブが動作すること
    - 翻訳が正しく表示されること（de / en / ja すべて）
-   - 旧 URL /modrinth が /mod-manager にリダイレクトすること
+   - 旧URL向けの互換redirectは提供せず、現行slugだけが登録されること
 4. 旧 id が入った既存環境で、新 id を追加インストールし:
    - サーバ上の .pelican-mod-manager.json が引き継がれ、Installed タブに
      従来通りの内容が表示されること
-   - 旧 .env キーからの設定引き継ぎが効いていること
+   - ナビゲーション順は専用の3つの.envキーだけで設定できること
    - 旧プラグインを uninstall しても新プラグインが正常動作すること
 
 【決め打ちせず確認すべき点】
@@ -1356,12 +1344,12 @@ D. ディレクトリ名の変更手順を README または RELEASING.md に文�
   実際にどう見えるかを確認し、報告してください。
   ナビゲーションに2項目出る / スラッグが衝突する 等の具体的な症状を記録し、
   移行手順書に反映してください。
-- 旧 .env キーのフォールバックをいつ削除するか（何リリース後か）提案してください。
+- 旧 .env キーのフォールバックは実装しない（pre-releaseのため）。
 - 旧 id 側の最終リリースを出すべきか判断してください。
   （新 id への移行を促す告知のみを含むバージョン）
 - ProjectSourceKey::Modrinth の値 'modrinth' は絶対に変更しないでください
   （メタデータに永続化されています）。念のため確認してください。
-- LegacyModrinthSlugRedirectPage の slug 'modrinth' も変更しないでください。
+- 旧slugのredirect pageは作成しないでください（pre-releaseのため）。
 
 【実施しないこと】
 - commit / push は指示があるまで行わないでください。

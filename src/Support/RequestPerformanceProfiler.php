@@ -62,15 +62,6 @@ final class RequestPerformanceProfiler
         ];
     }
 
-    public static function enabled(): bool
-    {
-        try {
-            return (bool) config('pelican-minecraft-modrinth.debug_timing', false);
-        } catch (Throwable) {
-            return false;
-        }
-    }
-
     public static function isCapturing(): bool
     {
         $state = self::state();

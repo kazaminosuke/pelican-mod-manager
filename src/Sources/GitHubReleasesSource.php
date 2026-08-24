@@ -713,8 +713,7 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
         $totalDownloads = collect($release['assets'] ?? [])->sum(fn ($asset) => is_array($asset) ? ($asset['download_count'] ?? 0) : 0);
 
         return [
-            // The release tag is used as the update-detection identifier, per the
-            // same string-comparison contract isUpdateAvailable() already uses.
+            // The release tag is the update-detection identifier.
             'id' => (string) ($release['tag_name'] ?? $release['id'] ?? ''),
             'version_number' => $release['tag_name'] ?? ($release['name'] ?? ''),
             'version_type' => ($release['prerelease'] ?? false) ? 'beta' : 'release',

@@ -46,7 +46,6 @@ final class ServerModManagerSettingsTest extends TestCase
         Capsule::schema()->create('mod_manager_server_settings', function ($table): void {
             $table->id();
             $table->unsignedInteger('server_id')->unique();
-            $table->boolean('enabled')->default(true);
             $table->boolean('mod_enabled')->default(true);
             $table->boolean('plugin_enabled')->default(true);
             $table->boolean('datapack_enabled')->default(true);
@@ -68,7 +67,7 @@ final class ServerModManagerSettingsTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_missing_row_is_fully_backward_compatible(): void
+    public function test_missing_row_defaults_to_enabled_types_and_global_permissions(): void
     {
         $settings = $this->settings();
         $server = $this->server(1);
@@ -86,7 +85,6 @@ final class ServerModManagerSettingsTest extends TestCase
         $server = $this->server(1);
         ModManagerServerSetting::query()->create([
             'server_id' => 1,
-            'enabled' => true,
             'allow_user_project_install' => null,
             'allow_user_project_update' => false,
         ]);
@@ -106,7 +104,6 @@ final class ServerModManagerSettingsTest extends TestCase
         $settings = new ServerModManagerSettings($repository);
 
         $saved = $repository->save($server, [
-            'enabled' => false,
             'mod_enabled' => false,
             'allow_user_project_update' => true,
         ]);
@@ -117,7 +114,7 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertSame($saved, $repository->forServer($server));
 
         $repository->clear();
-        self::assertFalse($repository->forServer($server)->enabled);
+        self::assertFalse($repository->forServer($server)->mod_enabled);
     }
 
     public function test_type_switches_are_independent_and_navigation_null_inherits_global(): void
@@ -125,7 +122,6 @@ final class ServerModManagerSettingsTest extends TestCase
         $server = $this->server(1);
         ModManagerServerSetting::query()->create([
             'server_id' => 1,
-            'enabled' => true,
             'mod_enabled' => false,
             'plugin_enabled' => true,
             'datapack_enabled' => true,
@@ -148,45 +144,6 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertSame(10, $settings->navigationSort($server, ProjectType::Mod));
         self::assertSame(4, $settings->navigationSort($server, ProjectType::Plugin));
         self::assertSame(0, $settings->navigationSort($server, ProjectType::Datapack));
-    }
-
-    public function test_legacy_master_column_is_ignored_when_type_columns_are_enabled(): void
-    {
-        $server = $this->server(1);
-        ModManagerServerSetting::query()->create([
-            'server_id' => 1,
-            'enabled' => false,
-            'mod_enabled' => true,
-            'plugin_enabled' => true,
-            'datapack_enabled' => true,
-        ]);
-
-        $settings = $this->settings();
-
-        self::assertTrue($settings->isTypeEnabled($server, ProjectType::Mod));
-        self::assertTrue($settings->isTypeEnabled($server, ProjectType::Plugin));
-        self::assertTrue($settings->isTypeEnabled($server, ProjectType::Datapack));
-        self::assertTrue($settings->configuredTypeEnabled($server, ProjectType::Mod));
-        self::assertTrue($settings->configuredTypeEnabled($server, ProjectType::Plugin));
-        self::assertTrue($settings->configuredTypeEnabled($server, ProjectType::Datapack));
-    }
-
-    public function test_migration_copied_legacy_disable_is_respected_by_type_columns(): void
-    {
-        $server = $this->server(1);
-        ModManagerServerSetting::query()->create([
-            'server_id' => 1,
-            'enabled' => false,
-            'mod_enabled' => false,
-            'plugin_enabled' => false,
-            'datapack_enabled' => false,
-        ]);
-
-        $settings = $this->settings();
-
-        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Mod));
-        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Plugin));
-        self::assertFalse($settings->isTypeEnabled($server, ProjectType::Datapack));
     }
 
     private function settings(): ServerModManagerSettings

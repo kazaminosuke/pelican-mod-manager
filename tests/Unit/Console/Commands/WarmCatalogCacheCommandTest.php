@@ -76,7 +76,6 @@ class WarmCatalogCacheCommandTest extends TestCase
         Capsule::schema()->create('mod_manager_server_settings', function ($table): void {
             $table->id();
             $table->unsignedInteger('server_id')->unique();
-            $table->boolean('enabled')->default(true);
             $table->boolean('mod_enabled')->default(true);
             $table->boolean('plugin_enabled')->default(true);
             $table->boolean('datapack_enabled')->default(true);
@@ -240,7 +239,6 @@ class WarmCatalogCacheCommandTest extends TestCase
         Capsule::table('servers')->insert(['id' => 1, 'egg_id' => 1]);
         Capsule::table('mod_manager_server_settings')->insert([
             'server_id' => 1,
-            'enabled' => false,
             'mod_enabled' => false,
             'plugin_enabled' => false,
             'datapack_enabled' => false,
@@ -265,7 +263,6 @@ class WarmCatalogCacheCommandTest extends TestCase
         Capsule::table('servers')->insert(['id' => 1, 'egg_id' => 1]);
         Capsule::table('mod_manager_server_settings')->insert([
             'server_id' => 1,
-            'enabled' => true,
             'plugin_enabled' => false,
         ]);
 

@@ -26,12 +26,6 @@ final class EggProfileRegistry
     /** @var array<string, true>|null Signature keys (imploded, sorted, uppercased) that appear in more than one profile. */
     private static ?array $collidingSignatureKeys = null;
 
-    /** @return array<int, EggProfile> */
-    public static function all(): array
-    {
-        return self::load();
-    }
-
     public static function findByUuid(?string $uuid): ?EggProfile
     {
         if ($uuid === null || $uuid === '') {

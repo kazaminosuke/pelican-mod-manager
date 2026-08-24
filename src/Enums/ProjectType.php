@@ -21,7 +21,7 @@ enum ProjectType: string implements HasLabel
         };
     }
 
-    public function getFolder(?Server $server = null): string
+    public function getFolder(): string
     {
         return match ($this) {
             self::Mod => 'mods',

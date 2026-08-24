@@ -35,12 +35,6 @@ class ProjectSourceRegistry
         ];
     }
 
-    /** @return array<int, ProjectSourceInterface> */
-    public function all(): array
-    {
-        return array_values($this->sources);
-    }
-
     public function get(ProjectSourceKey $key): ?ProjectSourceInterface
     {
         return $this->sources[$key->value] ?? null;

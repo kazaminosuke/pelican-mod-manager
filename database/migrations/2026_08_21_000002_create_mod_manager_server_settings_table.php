@@ -14,7 +14,12 @@ return new class extends Migration
             // create the wrong unsigned bigint type here.
             $table->unsignedInteger('server_id')->unique();
             $table->foreign('server_id')->references('id')->on('servers')->cascadeOnDelete();
-            $table->boolean('enabled')->default(true);
+            $table->boolean('mod_enabled')->default(true);
+            $table->boolean('plugin_enabled')->default(true);
+            $table->boolean('datapack_enabled')->default(true);
+            $table->integer('mod_navigation_sort')->nullable();
+            $table->integer('plugin_navigation_sort')->nullable();
+            $table->integer('datapack_navigation_sort')->nullable();
             $table->boolean('allow_user_egg_profile_edit')->nullable();
             $table->boolean('allow_user_project_install')->nullable();
             $table->boolean('allow_user_project_update')->nullable();

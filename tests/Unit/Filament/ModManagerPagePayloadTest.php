@@ -21,6 +21,7 @@ use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
+use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\Url;
 use Mockery;
@@ -55,9 +56,9 @@ final class TestableModManagerPage extends ModManagerPage
         return $this->clampTablePage($page, $total);
     }
 
-    public static function navigationSortForTest(ProjectType $type): int
+    public static function navigationSortForTest(ProjectType $type, Server $server): int
     {
-        return self::navigationSortFor($type);
+        return self::navigationSortFor($type, $server);
     }
 
     public function catalogTabForSourceTest(?string $source): ?string
@@ -667,13 +668,18 @@ class ModManagerPagePayloadTest extends TestCase
             ],
         ]);
         $container->instance('config', $config);
+        $settings = Mockery::mock(new ServerModManagerSettings(new \Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository()));
+        $settings->shouldReceive('navigationSort')
+            ->andReturnUsing(static fn (Server $server, ProjectType $type): int => (int) $config->get('pelican-minecraft-modrinth.navigation_sort.'.$type->value));
+        $container->instance(ServerModManagerSettings::class, $settings);
         Container::setInstance($container);
         Facade::setFacadeApplication($container);
 
         try {
-            self::assertSame(10, TestableModManagerPage::navigationSortForTest(ProjectType::Mod));
-            self::assertSame(20, TestableModManagerPage::navigationSortForTest(ProjectType::Plugin));
-            self::assertSame(30, TestableModManagerPage::navigationSortForTest(ProjectType::Datapack));
+            $server = new Server();
+            self::assertSame(10, TestableModManagerPage::navigationSortForTest(ProjectType::Mod, $server));
+            self::assertSame(20, TestableModManagerPage::navigationSortForTest(ProjectType::Plugin, $server));
+            self::assertSame(30, TestableModManagerPage::navigationSortForTest(ProjectType::Datapack, $server));
         } finally {
             Container::setInstance($previousContainer);
             Facade::setFacadeApplication($previousFacadeApplication);

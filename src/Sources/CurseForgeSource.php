@@ -498,42 +498,6 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         return is_array($versions) ? $versions : [];
     }
 
-    /**
-     * Warm a latest-only per-project cache for update detection.
-     *
-     * CurseForge's bulk mods endpoint contains latestFiles plus
-     * latestFilesIndexes. When those indexes can be resolved to full files for
-     * the active Minecraft version and loader, one request replaces all
-     * per-project lookups. Any project whose bulk data is incomplete falls
-     * back to its existing files endpoint so update detection remains exact.
-     * This cache is intentionally separate from the complete version history
-     * consumed by getVersions() and the versions modal.
-     *
-     * @param array<int, string> $projectIds
-     * @return array<string, array<int, mixed>>
-     */
-    public function warmVersions(array $projectIds, Server $server, ProjectType $type): array
-    {
-        $requests = array_map(
-            fn (string $projectId): LatestVersionLookupRequest => new LatestVersionLookupRequest(
-                source: $this->getKey()->value,
-                projectId: $projectId,
-            ),
-            array_values(array_unique(array_map('strval', $projectIds))),
-        );
-        $result = $this->lookupLatestVersions($requests, $server, $type);
-        $versionsByProjectId = [];
-
-        foreach ($requests as $request) {
-            $version = $result->version($request->key());
-            if (is_array($version)) {
-                $versionsByProjectId[$request->projectId] = [$version];
-            }
-        }
-
-        return $versionsByProjectId;
-    }
-
     protected function fetchWarmVersions(
         array $projectIds,
         array $params,

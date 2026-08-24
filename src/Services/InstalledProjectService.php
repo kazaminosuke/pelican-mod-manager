@@ -207,7 +207,7 @@ class InstalledProjectService
         $resolvedType = $type ?? ProjectType::fromServer($server);
 
         if ($resolvedType !== ProjectType::Datapack) {
-            return $resolvedType?->getFolder($server) ?? 'mods';
+            return $resolvedType?->getFolder() ?? 'mods';
         }
 
         return $this->getDatapackWorldName($server, $fileRepository).'/datapacks';
@@ -1031,12 +1031,6 @@ class InstalledProjectService
         return $this->metadataRepository->read($server, $fileRepository, $folder);
     }
 
-    /** @return array<int, array<string, mixed>> */
-    public function getInstalledModsMetadata(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): array
-    {
-        return $this->getInstalledMetadataReadResult($server, $fileRepository, $type)->document->installedMods();
-    }
-
     public function saveModMetadata(
         Server $server,
         DaemonFileRepository $fileRepository,
@@ -1081,25 +1075,6 @@ class InstalledProjectService
         );
     }
 
-    /** @param array<int, array<string, mixed>> $installedMods */
-    protected function saveInstalledModsMetadata(Server $server, DaemonFileRepository $fileRepository, array $installedMods, ?ProjectType $type = null): bool
-    {
-        try {
-            $folder = $this->resolveMetadataFolder($server, $fileRepository, $type);
-        } catch (Exception $exception) {
-            report($exception);
-
-            return false;
-        }
-
-        return $this->metadataRepository->mutate(
-            $server,
-            $fileRepository,
-            $folder,
-            fn (InstalledMetadataDocument $document): InstalledMetadataDocument => $document->withInstalledMods(array_values($installedMods)),
-        );
-    }
-
     public function saveInstalledMetadataDocument(Server $server, DaemonFileRepository $fileRepository, InstalledMetadataDocument $document, ?ProjectType $type = null): bool
     {
         try {
@@ -1138,45 +1113,4 @@ class InstalledProjectService
         );
     }
 
-    /** @return array{source: string, project_id: string, project_slug: string, project_title: string, version_id: string, version_number: string, filename: string, installed_at: string, author?: string}|null */
-    public function getInstalledMod(Server $server, DaemonFileRepository $fileRepository, string $projectId, ?ProjectType $type = null, ProjectSourceKey $source = ProjectSourceKey::Modrinth): ?array
-    {
-        $installedMods = $this->getInstalledModsMetadata($server, $fileRepository, $type);
-
-        foreach ($installedMods as $mod) {
-            if ($mod['project_id'] === $projectId && $mod['source'] === $source->value) {
-                return $mod;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @param array{version_id: string, version_number: string} $installedMod
-     * @param array<int, array{id: string, version_number: string}> $availableVersions
-     */
-    public function isUpdateAvailable(array $installedMod, array $availableVersions): bool
-    {
-        if (empty($availableVersions)) {
-            return false;
-        }
-
-        $latestVersion = $availableVersions[0];
-
-        return $installedMod['version_id'] !== $latestVersion['id'];
-    }
-
-    /**
-     * @return array<string>
-     */
-    public function getInstalledMods(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): array
-    {
-        $metadata = $this->getInstalledModsMetadata($server, $fileRepository, $type);
-
-        return collect($metadata)
-            ->pluck('filename')
-            ->map(fn ($name) => strtolower($name))
-            ->toArray();
-    }
 }

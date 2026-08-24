@@ -2,13 +2,10 @@
 
 return [
     'latest_minecraft_version' => env('LATEST_MINECRAFT_VERSION', '26.1.2'),
-    // Keep the former shared setting as an upgrade fallback. Existing
-    // installations therefore retain their current base-page/datapack order
-    // until the three dedicated values are first saved in plugin settings.
     'navigation_sort' => [
-        'mod' => env('MINECRAFT_MODRINTH_MOD_NAV_SORT', env('MINECRAFT_MODRINTH_NAV_SORT', 11)),
-        'plugin' => env('MINECRAFT_MODRINTH_PLUGIN_NAV_SORT', env('MINECRAFT_MODRINTH_NAV_SORT', 11)),
-        'datapack' => env('MINECRAFT_MODRINTH_DATAPACK_NAV_SORT', (int) env('MINECRAFT_MODRINTH_NAV_SORT', 11) + 1),
+        'mod' => env('MINECRAFT_MODRINTH_MOD_NAV_SORT', 11),
+        'plugin' => env('MINECRAFT_MODRINTH_PLUGIN_NAV_SORT', 11),
+        'datapack' => env('MINECRAFT_MODRINTH_DATAPACK_NAV_SORT', 12),
     ],
     'curseforge_api_key' => env('CURSEFORGE_API_KEY'),
     'github_token' => env('GITHUB_TOKEN'),

@@ -265,13 +265,9 @@ class ModManagerPage extends Page implements HasTable
      * pages whose canAccess() passes, so a hidden manager page never
      * displaces a core row.
      */
-    protected static function navigationSortFor(ProjectType $type, ?Server $server = null): int
+    protected static function navigationSortFor(ProjectType $type, Server $server): int
     {
-        if ($server !== null) {
-            return app(ServerModManagerSettings::class)->navigationSort($server, $type);
-        }
-
-        return (int) config("pelican-minecraft-modrinth.navigation_sort.{$type->value}", 11);
+        return app(ServerModManagerSettings::class)->navigationSort($server, $type);
     }
 
     /** @return array<int, ProjectType> */

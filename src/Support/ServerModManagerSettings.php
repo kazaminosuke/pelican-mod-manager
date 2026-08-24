@@ -24,11 +24,8 @@ final class ServerModManagerSettings
     /**
      * Resolve the independent page switch for one project type.
      *
-     * The old server-wide `enabled` column is intentionally not consulted.
-     * Migration 000003 copied an existing explicit false value into all three
-     * type columns before this resolver became type-only. Missing rows and
-     * newly added type columns therefore remain enabled, while an operator
-     * can later enable or disable each type independently.
+     * Missing rows remain enabled, while an operator can enable or disable
+     * each type independently.
      */
     public function isTypeEnabled(Server|int $server, ProjectType $type): bool
     {
@@ -36,9 +33,7 @@ final class ServerModManagerSettings
     }
 
     /**
-     * Return the stored type switch for the admin form without applying any
-     * server-wide switch. The old `enabled` column is retained only for
-     * migration compatibility and is never a source of truth.
+     * Return the stored type switch for the admin form.
      */
     public function configuredTypeEnabled(Server|int $server, ProjectType $type): bool
     {
