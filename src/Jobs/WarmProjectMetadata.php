@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Contracts\AuthoritativeBatchProjectSourceInterface;
+use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Throwable;
 
@@ -80,6 +81,23 @@ final class WarmProjectMetadata implements ShouldBeUnique, ShouldQueue
         // were removed, so retain the previous positive-only no-op behavior.
         if (!$source->isConfigured()) {
             return;
+        }
+
+        // Overlapping exact-set jobs can share some ids without sharing a
+        // ShouldBeUnique key. Re-peek after leaving the queue so a preceding
+        // job's completed entries (and retry-delayed failures) are removed
+        // before any upstream call. Fully concurrent starts may still overlap,
+        // but no already-visible result is fetched again later in the queue.
+        if ($source instanceof ProjectMetadataPeekManyInterface) {
+            $peeked = $source->peekProjects($projectIds);
+            $projectIds = array_values(array_filter(
+                $projectIds,
+                static fn (string $projectId): bool => ($peeked[$projectId]['pending'] ?? false) === true,
+            ));
+
+            if ($projectIds === []) {
+                return;
+            }
         }
 
         try {

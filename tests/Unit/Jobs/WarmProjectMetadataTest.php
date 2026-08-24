@@ -51,6 +51,10 @@ class WarmProjectMetadataTest extends TestCase
     {
         $modrinth = Mockery::mock(ModrinthSource::class);
         $modrinth->shouldReceive('isConfigured')->once()->andReturnTrue();
+        $modrinth->shouldReceive('peekProjects')->once()->with(['a', 'gone'])->andReturn([
+            'a' => ['data' => null, 'pending' => true],
+            'gone' => ['data' => null, 'pending' => true],
+        ]);
         $modrinth->shouldReceive('getProjectsByIdsForMetadataWarm')
             ->once()
             ->with(['a', 'gone'])
@@ -93,6 +97,10 @@ class WarmProjectMetadataTest extends TestCase
 
         $modrinth = Mockery::mock(ModrinthSource::class);
         $modrinth->shouldReceive('isConfigured')->once()->andReturnTrue();
+        $modrinth->shouldReceive('peekProjects')->once()->with(['a', 'b'])->andReturn([
+            'a' => ['data' => null, 'pending' => true],
+            'b' => ['data' => null, 'pending' => true],
+        ]);
         $modrinth->shouldReceive('getProjectsByIdsForMetadataWarm')
             ->once()
             ->with(['a', 'b'])
@@ -112,6 +120,31 @@ class WarmProjectMetadataTest extends TestCase
         (new WarmProjectMetadata('modrinth', ['a', 'b']))->handle($registry);
 
         self::assertSame(['a', 'b'], $deferredIds);
+    }
+
+    public function test_handle_refetches_only_ids_still_pending_when_an_overlapping_job_already_filled_cache(): void
+    {
+        $modrinth = Mockery::mock(ModrinthSource::class);
+        $modrinth->shouldReceive('isConfigured')->once()->andReturnTrue();
+        $modrinth->shouldReceive('peekProjects')->once()->with(['a', 'b', 'cooldown'])->andReturn([
+            'a' => ['data' => ['title' => 'A'], 'pending' => false],
+            'b' => ['data' => null, 'pending' => true],
+            'cooldown' => ['data' => null, 'pending' => false, 'retry_delayed' => true],
+        ]);
+        $modrinth->shouldReceive('getProjectsByIdsForMetadataWarm')
+            ->once()
+            ->with(['b'])
+            ->andReturn(['b' => ['title' => 'B']]);
+        $modrinth->shouldReceive('primeProjects')
+            ->once()
+            ->with(['b' => ['title' => 'B']]);
+
+        $registry = Mockery::mock(ProjectSourceRegistry::class);
+        $registry->shouldReceive('getByValue')->once()->with('modrinth')->andReturn($modrinth);
+
+        (new WarmProjectMetadata('modrinth', ['a', 'b', 'cooldown']))->handle($registry);
+
+        self::assertTrue(true);
     }
 
     public function test_handle_does_nothing_for_an_empty_id_list(): void
