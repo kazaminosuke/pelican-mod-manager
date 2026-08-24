@@ -11,6 +11,7 @@ use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Support\Facades\Facade;
 use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
+use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -80,9 +81,14 @@ class WarmCatalogCacheCommandTest extends TestCase
             $table->boolean('plugin_enabled')->default(true);
             $table->boolean('datapack_enabled')->default(true);
             $table->boolean('resourcepack_enabled')->default(true);
+            $table->boolean('modrinth_enabled')->default(true);
+            $table->boolean('curseforge_enabled')->default(true);
+            $table->boolean('hangar_enabled')->default(true);
+            $table->boolean('github_releases_enabled')->default(false);
             $table->integer('mod_navigation_sort')->nullable();
             $table->integer('plugin_navigation_sort')->nullable();
             $table->integer('datapack_navigation_sort')->nullable();
+            $table->integer('resourcepack_navigation_sort')->nullable();
             $table->boolean('allow_user_egg_profile_edit')->nullable();
             $table->boolean('allow_user_project_install')->nullable();
             $table->boolean('allow_user_project_update')->nullable();
@@ -139,6 +145,11 @@ class WarmCatalogCacheCommandTest extends TestCase
             'tags' => json_encode(['minecraft']),
         ]);
         Capsule::table('servers')->insert(['id' => 1, 'egg_id' => 1]);
+        Capsule::table('mod_manager_server_settings')->insert([
+            'server_id' => 1,
+            'datapack_enabled' => false,
+            'resourcepack_enabled' => false,
+        ]);
         Capsule::table('egg_variables')->insert([
             ['id' => 1, 'egg_id' => 1, 'env_variable' => 'DL_PATH'],
             ['id' => 2, 'egg_id' => 1, 'env_variable' => 'DL_VERSION'],
@@ -174,7 +185,7 @@ class WarmCatalogCacheCommandTest extends TestCase
                     && $filters === ['sort' => 'downloads'];
             })
             ->andReturnTrue();
-        $source->shouldNotReceive('getKey');
+        $source->shouldReceive('getKey')->once()->andReturn(ProjectSourceKey::Modrinth);
 
         $registry = Mockery::mock(ProjectSourceRegistry::class);
         $registry->shouldReceive('availableFor')->once()->andReturn([$source]);
@@ -219,13 +230,29 @@ class WarmCatalogCacheCommandTest extends TestCase
             new ServerModManagerSettings(new ServerModManagerSettingRepository()),
         );
 
-        self::assertSame([[
-            'loader' => 'spigot',
-            'mc_version' => '1.20.4',
-            'project_type' => 'plugin',
-            'server_id' => 1,
-            'server_count' => 1,
-        ]], $combos);
+        self::assertSame([
+            [
+                'loader' => 'spigot',
+                'mc_version' => '1.20.4',
+                'project_type' => 'plugin',
+                'server_id' => 1,
+                'server_count' => 1,
+            ],
+            [
+                'loader' => 'datapack',
+                'mc_version' => '1.20.4',
+                'project_type' => 'datapack',
+                'server_id' => 1,
+                'server_count' => 1,
+            ],
+            [
+                'loader' => 'resourcepack',
+                'mc_version' => '1.20.4',
+                'project_type' => 'resourcepack',
+                'server_id' => 1,
+                'server_count' => 1,
+            ],
+        ], $combos);
     }
 
     public function test_does_not_discover_servers_with_all_types_disabled(): void
@@ -243,6 +270,7 @@ class WarmCatalogCacheCommandTest extends TestCase
             'mod_enabled' => false,
             'plugin_enabled' => false,
             'datapack_enabled' => false,
+            'resourcepack_enabled' => false,
         ]);
 
         $method = new \ReflectionMethod(WarmCatalogCacheCommand::class, 'discoverCombos');
@@ -265,6 +293,8 @@ class WarmCatalogCacheCommandTest extends TestCase
         Capsule::table('mod_manager_server_settings')->insert([
             'server_id' => 1,
             'plugin_enabled' => false,
+            'datapack_enabled' => false,
+            'resourcepack_enabled' => false,
         ]);
 
         $method = new \ReflectionMethod(WarmCatalogCacheCommand::class, 'discoverCombos');
@@ -273,5 +303,57 @@ class WarmCatalogCacheCommandTest extends TestCase
             new WarmCatalogCacheCommand(),
             new ServerModManagerSettings(new ServerModManagerSettingRepository()),
         ));
+    }
+
+    public function test_keeps_a_representative_for_each_source_switch_in_the_same_combo(): void
+    {
+        Capsule::table('eggs')->insert([
+            'id' => 1,
+            'uuid' => 'spigot-uuid',
+            'name' => 'Spigot',
+            'features' => json_encode([]),
+            'tags' => json_encode(['minecraft']),
+        ]);
+        Capsule::table('servers')->insert([
+            ['id' => 1, 'egg_id' => 1],
+            ['id' => 2, 'egg_id' => 1],
+        ]);
+        Capsule::table('mod_manager_server_settings')->insert([
+            [
+                'server_id' => 1,
+                'datapack_enabled' => false,
+                'resourcepack_enabled' => false,
+                'modrinth_enabled' => false,
+                'curseforge_enabled' => true,
+                'hangar_enabled' => false,
+                'github_releases_enabled' => false,
+            ],
+            [
+                'server_id' => 2,
+                'datapack_enabled' => false,
+                'resourcepack_enabled' => false,
+                'modrinth_enabled' => true,
+                'curseforge_enabled' => false,
+                'hangar_enabled' => false,
+                'github_releases_enabled' => false,
+            ],
+        ]);
+
+        $command = new WarmCatalogCacheCommand();
+        $method = new \ReflectionMethod(WarmCatalogCacheCommand::class, 'discoverCombos');
+        $combos = $method->invoke(
+            $command,
+            new ServerModManagerSettings(new ServerModManagerSettingRepository()),
+        );
+
+        self::assertSame(2, $combos[0]['server_count']);
+
+        $property = new \ReflectionProperty(WarmCatalogCacheCommand::class, 'sourceRepresentatives');
+        $representatives = $property->getValue($command)['spigot:26.1.2:plugin'];
+
+        self::assertSame(1, (int) $representatives['curseforge']->getKey());
+        self::assertSame(2, (int) $representatives['modrinth']->getKey());
+        self::assertArrayNotHasKey('hangar', $representatives);
+        self::assertArrayNotHasKey('github_releases', $representatives);
     }
 }

@@ -8,7 +8,9 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
+use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Kazaminosuke\ModManager\Support\WarmRequestThrottle;
 use Throwable;
 
@@ -60,7 +62,11 @@ final class WarmCatalogSearch implements ShouldBeUnique, ShouldQueue
         return "warm_catalog:{$this->sourceKey}:{$this->projectType}:{$this->loader}:{$this->mcVersion}:{$this->sort}:{$this->page}";
     }
 
-    public function handle(ProjectSourceRegistry $registry, WarmRequestThrottle $throttle): void
+    public function handle(
+        ProjectSourceRegistry $registry,
+        WarmRequestThrottle $throttle,
+        ?ServerModManagerSettings $settings = null,
+    ): void
     {
         if (!$throttle->tryAcquire($this->sourceKey)) {
             // Skip rather than retry: nobody is waiting on this result, and
@@ -82,9 +88,41 @@ final class WarmCatalogSearch implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $source = $registry->getByValue($this->sourceKey);
+        $settings ??= app(ServerModManagerSettings::class);
+        $typeIsCurrent = match ($type) {
+            ProjectType::Mod, ProjectType::Plugin => ProjectType::fromServer($server) === $type,
+            ProjectType::Datapack => ProjectType::supportsDatapacks($server),
+            ProjectType::ResourcePack => true,
+        };
 
-        if (!$source || !$source->isConfigured() || !$source->supportsSearch()) {
+        if (!$typeIsCurrent || !$settings->isTypeEnabled($server, $type)) {
+            return;
+        }
+
+        $currentLoader = $type->getLoaderSlug($server);
+        if ($currentLoader === null && $type === ProjectType::ResourcePack) {
+            $currentLoader = $type->value;
+        }
+        $currentVersion = MinecraftVersionResolver::resolve($server);
+
+        // The unique key describes the snapshot selected by the scheduler.
+        // If the representative server changed while this job waited, do not
+        // warm a different cache entry under the stale unique lock; the next
+        // scheduled/per-visit pass will enqueue the current combination.
+        if ($currentLoader !== $this->loader || $currentVersion !== $this->mcVersion) {
+            return;
+        }
+
+        $source = null;
+        foreach ($registry->availableFor($server, $type) as $candidate) {
+            if ($candidate->getKey()->value === $this->sourceKey) {
+                $source = $candidate;
+
+                break;
+            }
+        }
+
+        if (!$source || !$source->supportsSearch()) {
             return;
         }
 

@@ -6,6 +6,7 @@ use App\Models\Server;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -28,6 +29,11 @@ use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
  */
 final class WarmCatalogCacheCommand extends Command
 {
+    private const SERVER_CHUNK_SIZE = 250;
+
+    /** @var array<string, array<string, Server>> */
+    private array $sourceRepresentatives = [];
+
     protected $signature = 'mod-manager:warm-catalog';
 
     protected $description = 'Warm the mod-manager catalog cache for every (loader, Minecraft version, project type) combination actually in use.';
@@ -71,16 +77,26 @@ final class WarmCatalogCacheCommand extends Command
         $dispatched = 0;
 
         foreach ($selected as $combo) {
-            /** @var Server|null $server */
-            $server = Server::query()->find($combo['server_id']);
+            $type = ProjectType::from($combo['project_type']);
+            $comboKey = $this->comboKey($combo['loader'], $combo['mc_version'], $type);
+            $representatives = $this->sourceRepresentatives[$comboKey] ?? [];
+            $servers = [];
 
-            if (!$server) {
-                continue;
+            foreach ($representatives as $server) {
+                $servers[(int) $server->getKey()] = $server;
             }
 
-            $type = ProjectType::from($combo['project_type']);
+            $available = [];
+            foreach ($servers as $server) {
+                foreach ($registry->availableFor($server, $type) as $source) {
+                    $sourceKey = $source->getKey()->value;
+                    if (isset($representatives[$sourceKey])) {
+                        $available[$sourceKey] ??= [$source, $server];
+                    }
+                }
+            }
 
-            foreach ($registry->availableFor($server, $type) as $source) {
+            foreach ($available as [$source, $server]) {
                 if (!$source->isConfigured() || !$source->supportsSearch()) {
                     continue;
                 }
@@ -129,33 +145,106 @@ final class WarmCatalogCacheCommand extends Command
      * servers at once - Server::with('variables') would silently scope
      * every row to one server's id instead of each row's own.
      *
-     * Four total queries (servers+eggs, egg variable names, server settings,
-     * then direct server-variable values) rather than one query per server.
+     * Work is chunked so Server/Egg models and settings memoization remain
+     * bounded on large Panels. Each chunk performs eager-load, settings, and
+     * direct server-variable queries; selected representative Server objects
+     * are retained in memory so handle() never re-queries them.
      *
      * @return array<int, array{loader: string, mc_version: string, project_type: string, server_id: int, server_count: int}>
      */
     protected function discoverCombos(?ServerModManagerSettings $settings = null): array
     {
         $settings ??= app(ServerModManagerSettings::class);
+        $this->sourceRepresentatives = [];
+        $combos = [];
 
-        $servers = Server::query()
+        Server::query()
             ->with([
                 'egg:id,uuid,name,update_url,features,tags',
                 'egg.variables:id,egg_id,env_variable',
             ])
-            ->get(['id', 'egg_id']);
+            ->select(['id', 'egg_id'])
+            ->chunkById(self::SERVER_CHUNK_SIZE, function (Collection $servers) use ($settings, &$combos): void {
+                $settings->preload($servers);
 
-        if ($servers->isEmpty()) {
-            return [];
-        }
+                try {
+                    $mcVersionsByServerId = $this->minecraftVersionsFor($servers);
+                    $defaultMcVersion = config('pelican-mod-manager.latest_minecraft_version');
 
-        // The resolver checks settings several times per server. Prime its
-        // request-local repository once so scheduled warming avoids a query
-        // per server/type combination.
-        $settings->preload($servers);
+                    foreach ($servers as $server) {
+                        if (!$settings->hasAnyManagerTypeEnabled($server)) {
+                            continue;
+                        }
 
-        /** @var Collection<int, object{server_id: int, env_variable: string, variable_value: string|null}> $serverVariableRows */
-        $serverVariableRows = DB::table('server_variables')
+                        $profile = EggProfileResolver::resolve($server);
+                        $mcVersion = $this->minecraftVersionFor(
+                            $server,
+                            $profile->minecraftVersionOverride,
+                            $profile->minecraftVersionVariables,
+                            $mcVersionsByServerId,
+                            $defaultMcVersion,
+                        );
+
+                        if ($mcVersion === null) {
+                            continue;
+                        }
+
+                        $types = [];
+                        $primaryType = ProjectType::fromServer($server);
+                        if ($primaryType !== null && $settings->isTypeEnabled($server, $primaryType)) {
+                            $types[$primaryType->value] = $primaryType;
+                        }
+                        if ($settings->isTypeEnabled($server, ProjectType::Datapack)
+                            && ProjectType::supportsDatapacks($server)) {
+                            $types[ProjectType::Datapack->value] = ProjectType::Datapack;
+                        }
+                        if ($settings->isTypeEnabled($server, ProjectType::ResourcePack)) {
+                            $types[ProjectType::ResourcePack->value] = ProjectType::ResourcePack;
+                        }
+
+                        foreach ($types as $type) {
+                            $loader = $type->getLoaderSlug($server);
+                            if ($loader === null && $type === ProjectType::ResourcePack) {
+                                $loader = $type->value;
+                            }
+                            if ($loader === null) {
+                                continue;
+                            }
+
+                            $key = $this->comboKey($loader, $mcVersion, $type);
+                            $combos[$key] ??= [
+                                'loader' => $loader,
+                                'mc_version' => $mcVersion,
+                                'project_type' => $type->value,
+                                'server_id' => (int) $server->getKey(),
+                                'server_count' => 0,
+                            ];
+                            $combos[$key]['server_count']++;
+
+                            foreach (ProjectSourceKey::cases() as $sourceKey) {
+                                if ($settings->isSourceEnabled($server, $sourceKey)) {
+                                    $this->sourceRepresentatives[$key][$sourceKey->value] ??= $server;
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    $settings->clearRuntimeCache();
+                    EggProfileResolver::clear();
+                }
+            }, 'servers.id', 'id');
+
+        return array_values($combos);
+    }
+
+    /**
+     * @param Collection<int, Server> $servers
+     * @return array<int, array<string, string|null>>
+     */
+    private function minecraftVersionsFor(Collection $servers): array
+    {
+        /** @var Collection<int, object{server_id: int, env_variable: string, variable_value: string|null}> $rows */
+        $rows = DB::table('server_variables')
             ->join('egg_variables', 'egg_variables.id', '=', 'server_variables.variable_id')
             ->whereIn('egg_variables.env_variable', ['MINECRAFT_VERSION', 'MC_VERSION', 'DL_VERSION', 'VANILLA_VERSION'])
             ->whereIn('server_variables.server_id', $servers->pluck('id'))
@@ -165,74 +254,52 @@ final class WarmCatalogCacheCommand extends Command
                 'server_variables.variable_value',
             ]);
 
-        /** @var array<int, array<string, string|null>> $mcVersionsByServerId */
-        $mcVersionsByServerId = [];
-        foreach ($serverVariableRows as $row) {
-            $mcVersionsByServerId[(int) $row->server_id][$row->env_variable] = $row->variable_value;
+        $versions = [];
+        foreach ($rows as $row) {
+            $versions[(int) $row->server_id][$row->env_variable] = $row->variable_value;
         }
 
-        $defaultMcVersion = config('pelican-mod-manager.latest_minecraft_version');
-        $combos = [];
+        return $versions;
+    }
 
-        foreach ($servers as $server) {
-            // Do the cheap server/type gate before resolving an egg. A
-            // completely disabled server must not spend time in Stage 8
-            // detection just to discover that no page could be warmed.
-            if (!$settings->hasAnyManagerTypeEnabled($server)) {
-                continue;
-            }
+    /**
+     * @param array<int, string> $profileVariables
+     * @param array<int, array<string, string|null>> $valuesByServer
+     */
+    private function minecraftVersionFor(
+        Server $server,
+        ?string $profileOverride,
+        array $profileVariables,
+        array $valuesByServer,
+        mixed $defaultVersion,
+    ): ?string {
+        $version = $profileOverride;
 
-            $type = ProjectType::fromServer($server);
+        if (!is_string($version) || $version === '') {
+            $names = array_values(array_unique(array_merge(
+                $profileVariables,
+                ['MINECRAFT_VERSION', 'MC_VERSION'],
+            )));
 
-            if ($type === null || !$settings->isTypeEnabled($server, $type)) {
-                continue;
-            }
+            foreach ($names as $name) {
+                $candidate = $valuesByServer[(int) $server->getKey()][$name] ?? null;
+                if (is_string($candidate) && $candidate !== '' && $candidate !== 'latest') {
+                    $version = $candidate;
 
-            $loader = $type->getLoaderSlug($server);
-
-            if ($loader === null) {
-                continue;
-            }
-
-            $profile = EggProfileResolver::resolve($server);
-            $mcVersion = $profile->minecraftVersionOverride;
-
-            if (!is_string($mcVersion) || $mcVersion === '') {
-                $versionNames = array_values(array_unique(array_merge(
-                    $profile->minecraftVersionVariables,
-                    ['MINECRAFT_VERSION', 'MC_VERSION'],
-                )));
-
-                foreach ($versionNames as $name) {
-                    $candidate = $mcVersionsByServerId[$server->id][$name] ?? null;
-                    if (is_string($candidate) && $candidate !== '' && $candidate !== 'latest') {
-                        $mcVersion = $candidate;
-
-                        break;
-                    }
+                    break;
                 }
             }
-
-            if (!is_string($mcVersion) || $mcVersion === '' || $mcVersion === 'latest') {
-                $mcVersion = $defaultMcVersion;
-            }
-
-            if (!is_string($mcVersion) || $mcVersion === '') {
-                continue;
-            }
-
-            $key = "$loader:$mcVersion:{$type->value}";
-
-            $combos[$key] ??= [
-                'loader' => $loader,
-                'mc_version' => $mcVersion,
-                'project_type' => $type->value,
-                'server_id' => $server->id,
-                'server_count' => 0,
-            ];
-            $combos[$key]['server_count']++;
         }
 
-        return array_values($combos);
+        if (!is_string($version) || $version === '' || $version === 'latest') {
+            $version = $defaultVersion;
+        }
+
+        return is_string($version) && $version !== '' ? $version : null;
+    }
+
+    private function comboKey(string $loader, string $minecraftVersion, ProjectType $type): string
+    {
+        return "{$loader}:{$minecraftVersion}:{$type->value}";
     }
 }

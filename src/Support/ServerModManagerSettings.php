@@ -87,6 +87,14 @@ final class ServerModManagerSettings
         $this->repository->preload($servers);
     }
 
+    /**
+     * Release request-local rows between chunks in long-running commands.
+     */
+    public function clearRuntimeCache(): void
+    {
+        $this->repository->clear();
+    }
+
     public function allowsEggProfileEdit(Server|int $server): bool
     {
         return $this->resolve($server, 'allow_user_egg_profile_edit');
