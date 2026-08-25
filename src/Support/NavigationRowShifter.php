@@ -87,29 +87,4 @@ final class NavigationRowShifter
 
         return array_values($finalRows);
     }
-
-    /**
-     * Return only item-indexed assignments that actually changed.
-     *
-     * This is useful to callers that need to avoid touching unaffected core
-     * entries. The index is intentional: an original sort value is not a
-     * unique identity when Settings and Webhooks share a row.
-     *
-     * @param  list<int> $claims
-     * @param  list<int> $current
-     * @return array<int, int>
-     */
-    public static function shiftsFor(array $claims, array $current): array
-    {
-        $finalRows = self::finalRowsFor($claims, $current);
-        $shifts = [];
-
-        foreach ($current as $index => $value) {
-            if ((int) $value !== $finalRows[$index]) {
-                $shifts[$index] = $finalRows[$index];
-            }
-        }
-
-        return $shifts;
-    }
 }

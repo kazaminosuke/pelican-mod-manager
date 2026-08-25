@@ -10,7 +10,6 @@ final class NavigationRowShifterTest extends TestCase
     public function test_no_claims_leave_core_rows_unchanged(): void
     {
         self::assertSame([1, 10, 11], NavigationRowShifter::finalRowsFor([], [1, 10, 11]));
-        self::assertSame([], NavigationRowShifter::shiftsFor([], [1, 10, 11]));
     }
 
     public function test_non_positive_claims_are_ignored(): void
@@ -72,11 +71,6 @@ final class NavigationRowShifterTest extends TestCase
         self::assertSame(
             [11, 12, 13],
             NavigationRowShifter::finalRowsFor([10], [10, 11, 11]),
-        );
-
-        self::assertSame(
-            [0 => 11, 1 => 12, 2 => 13],
-            NavigationRowShifter::shiftsFor([10], [10, 11, 11]),
         );
     }
 
