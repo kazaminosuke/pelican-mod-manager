@@ -23,7 +23,11 @@ final class CatalogRowActionMarkup
         $wireClick = $action['wireClick'] ?? null;
         $wireKey = $action['wireKey'] ?? null;
 
-        $classes = 'fi-icon-btn fi-ac-icon-btn-action fi-size-md mx-0.5 mmr-row-action';
+        // Match the pre-compact table record action: Filament defaults those
+        // buttons to Size::Small. Tabler SVGs use class fi-size-xl; on this
+        // Panel that class computes to 1.75rem even though the SVG attributes
+        // are width/height 24.
+        $classes = 'fi-icon-btn fi-ac-icon-btn-action fi-size-sm mmr-row-action';
         if ($disabled) {
             $classes .= ' fi-disabled';
         }
@@ -52,6 +56,6 @@ final class CatalogRowActionMarkup
             $html .= ' '.$attribute.'="'.e($value).'"';
         }
 
-        return $html.'><span class="mmr-row-action-icon" aria-hidden="true"></span></button>';
+        return $html.'><span class="fi-icon fi-size-xl mmr-row-action-icon" aria-hidden="true"></span></button>';
     }
 }

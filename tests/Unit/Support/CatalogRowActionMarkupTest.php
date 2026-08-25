@@ -24,7 +24,9 @@ class CatalogRowActionMarkupTest extends TestCase
         self::assertStringContainsString('data-mmr-swr-row-action="install_latest"', $html);
         self::assertStringContainsString('title="Install latest"', $html);
         self::assertStringContainsString('aria-label="Install latest"', $html);
-        self::assertStringContainsString('mmr-row-action-icon', $html);
+        self::assertStringContainsString('class="fi-icon-btn fi-ac-icon-btn-action fi-size-sm mmr-row-action"', $html);
+        self::assertStringContainsString('class="fi-icon fi-size-xl mmr-row-action-icon"', $html);
+        self::assertStringNotContainsString('fi-size-md', $html);
         self::assertStringContainsString('wire:click=', $html);
     }
 

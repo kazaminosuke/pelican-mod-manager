@@ -428,7 +428,7 @@
         const createProjectedRowAction = (descriptor) => {
             const action = document.createElement('button');
             action.type = 'button';
-            action.className = 'fi-icon-btn fi-ac-icon-btn-action fi-size-md mx-0.5 mmr-row-action'
+            action.className = 'fi-icon-btn fi-ac-icon-btn-action fi-size-sm mmr-row-action'
                 +(descriptor.disabled ? ' fi-disabled' : '');
             action.dataset.mmrSwrRowAction = descriptor.type;
             action.dataset.mmrSwrRowActionColor = descriptor.color;
@@ -440,7 +440,7 @@
             }
 
             const icon = document.createElement('span');
-            icon.className = 'mmr-row-action-icon';
+            icon.className = 'fi-icon fi-size-xl mmr-row-action-icon';
             icon.setAttribute('aria-hidden', 'true');
             action.append(icon);
 

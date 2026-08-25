@@ -54,6 +54,24 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('cancelAnimationFrame(headerScrollFrame)', $runtime);
     }
 
+    public function test_row_action_mask_matches_old_zip_xl_icon_size(): void
+    {
+        $css = $this->asset('mod-manager.css');
+
+        self::assertDoesNotMatchRegularExpression(
+            '/\.mmr-row-action\{[^}]*width:2\.25rem;height:2\.25rem;padding:0/',
+            $css,
+        );
+        self::assertStringContainsString('.mmr-row-action{flex-shrink:0;}', $css);
+        self::assertStringContainsString('.mmr-row-action-icon{display:block;width:1.75rem;height:1.75rem;flex:0 0 1.75rem;', $css);
+        self::assertStringNotContainsString('width:1.25rem;height:1.25rem;flex:0 0 1.25rem;background:currentColor;-webkit-mask:var(--mmr-row-action-mask)', $css);
+        self::assertStringContainsString('-webkit-mask:var(--mmr-row-action-mask)', $css);
+        self::assertStringContainsString('mask:var(--mmr-row-action-mask)', $css);
+        foreach (['versions', 'install_latest', 'update', 'installed', 'uninstall'] as $action) {
+            self::assertStringContainsString('data-mmr-swr-row-action="'.$action.'"', $css);
+        }
+    }
+
     public function test_all_manager_assets_have_a_deterministic_compressed_size_budget(): void
     {
         $assets = [
