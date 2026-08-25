@@ -52,6 +52,56 @@ class CachedProjectMetadataTest extends TestCase
         self::assertSame($fresh, $cache->get($spec->cacheKey())['data'] ?? null);
     }
 
+    public function test_get_many_fetches_only_pending_ids_in_one_batch(): void
+    {
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $first = new SourceFetchSpec('hangar', 'project', ['project_id' => 'one']);
+        $second = new SourceFetchSpec('hangar', 'project', ['project_id' => 'two']);
+        $cached = ['title' => 'Cached'];
+        $cache->put($first->cacheKey(), $this->entry($cached, time() + 60), 300);
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldNotReceive('fetch');
+        $metadata = new CachedProjectMetadata($this->sourceCache($cache, $executor));
+        $fetchedIds = null;
+
+        $result = $metadata->getMany(
+            ['one', 'two'],
+            static fn (string $projectId): SourceFetchSpec => new SourceFetchSpec('hangar', 'project', ['project_id' => $projectId]),
+            authoritative: false,
+            fetchPending: function (array $pendingIds) use (&$fetchedIds): array {
+                $fetchedIds = $pendingIds;
+
+                return ['two' => ['title' => 'Fetched']];
+            },
+        );
+
+        self::assertSame(['two'], $fetchedIds);
+        self::assertSame(['one' => $cached, 'two' => ['title' => 'Fetched']], $result);
+        self::assertSame(['title' => 'Fetched'], $cache->get($second->cacheKey())['data'] ?? null);
+    }
+
+    public function test_get_many_without_a_batch_fetcher_still_reads_ids_individually(): void
+    {
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $cache->put(
+            (new SourceFetchSpec('modrinth', 'project', ['project_id' => 'one']))->cacheKey(),
+            $this->entry(['title' => 'One'], time() + 60),
+            300,
+        );
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldNotReceive('fetch');
+        $metadata = new CachedProjectMetadata($this->sourceCache($cache, $executor));
+
+        self::assertSame(
+            ['one' => ['title' => 'One']],
+            $metadata->getMany(
+                ['one'],
+                static fn (string $projectId): SourceFetchSpec => new SourceFetchSpec('modrinth', 'project', ['project_id' => $projectId]),
+                authoritative: false,
+            ),
+        );
+    }
+
     private function sourceCache(
         LaravelCacheRepository $cache,
         SourceFetchExecutorInterface $executor,

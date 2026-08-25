@@ -2,6 +2,8 @@
 
 namespace Kazaminosuke\ModManager\Support;
 
+use RuntimeException;
+
 /**
  * Shared per-project metadata cache mechanics.
  *
@@ -142,17 +144,80 @@ final class CachedProjectMetadata
     /**
      * @param array<int, string|int> $projectIds
      * @param callable(string): ?SourceFetchSpec $specForProject
+     * @param (callable(list<string>): array<string, mixed>)|null $fetchPending
      * @return array<string, mixed>
      */
-    public function getMany(array $projectIds, callable $specForProject, bool $authoritative): array
-    {
+    public function getMany(
+        array $projectIds,
+        callable $specForProject,
+        bool $authoritative,
+        ?callable $fetchPending = null,
+    ): array {
+        $projectIds = array_values(array_unique(array_map(
+            static fn (mixed $projectId): string => (string) $projectId,
+            $projectIds,
+        )));
+
+        if ($projectIds === [] || $fetchPending === null) {
+            $projects = [];
+
+            foreach ($projectIds as $projectId) {
+                $project = $this->get($specForProject($projectId), $authoritative);
+
+                if ($project !== null) {
+                    $projects[$projectId] = $project;
+                }
+            }
+
+            return $projects;
+        }
+
+        $peeked = $this->peekMany($projectIds, $specForProject);
         $projects = [];
+        $pending = [];
 
-        foreach (array_unique($projectIds) as $projectId) {
-            $projectId = (string) $projectId;
-            $project = $this->get($specForProject($projectId), $authoritative);
+        foreach ($projectIds as $projectId) {
+            $probe = $peeked[$projectId] ?? $this->terminalMiss();
 
-            if ($project !== null) {
+            if (is_array($probe['data'])) {
+                $projects[$projectId] = $probe['data'];
+
+                continue;
+            }
+
+            if ($probe['retry_delayed']) {
+                if ($authoritative) {
+                    throw new RuntimeException(
+                        "Source project metadata [{$projectId}] is temporarily unavailable.",
+                    );
+                }
+
+                continue;
+            }
+
+            if ($probe['pending']) {
+                $pending[] = $projectId;
+            }
+        }
+
+        if ($pending === []) {
+            return $projects;
+        }
+
+        $fetched = $fetchPending($pending);
+
+        if (!is_array($fetched)) {
+            $fetched = [];
+        }
+
+        if ($fetched !== []) {
+            $this->primeMany($fetched, $specForProject);
+        }
+
+        foreach ($pending as $projectId) {
+            $project = $fetched[$projectId] ?? null;
+
+            if (is_array($project)) {
                 $projects[$projectId] = $project;
             }
         }

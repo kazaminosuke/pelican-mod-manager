@@ -2,8 +2,11 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Jobs;
 
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Jobs\WarmProjectMetadata;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
@@ -120,6 +123,36 @@ class WarmProjectMetadataTest extends TestCase
         (new WarmProjectMetadata('modrinth', ['a', 'b']))->handle($registry);
 
         self::assertSame(['a', 'b'], $deferredIds);
+    }
+
+    public function test_handle_skips_ids_already_claimed_by_a_concurrent_cold_start(): void
+    {
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $held = $cache->lock('mmr_warm_project:hangar:'.hash('sha256', 'b'), 30);
+        self::assertTrue($held->get());
+
+        $source = Mockery::mock(implode(',', [
+            ProjectSourceInterface::class,
+            ProjectMetadataPeekManyInterface::class,
+        ]));
+        $source->shouldReceive('isConfigured')->once()->andReturnTrue();
+        $source->shouldReceive('peekProjects')->once()->with(['a', 'b'])->andReturn([
+            'a' => ['data' => null, 'pending' => true],
+            'b' => ['data' => null, 'pending' => true],
+        ]);
+        $source->shouldReceive('peekProjects')->once()->with(['a'])->andReturn([
+            'a' => ['data' => null, 'pending' => true],
+        ]);
+        $source->shouldReceive('getProjectsByIds')->once()->with(['a'])->andReturn(['a' => ['title' => 'A']]);
+        $source->shouldReceive('primeProjects')->once()->with(['a' => ['title' => 'A']]);
+
+        $registry = Mockery::mock(ProjectSourceRegistry::class);
+        $registry->shouldReceive('getByValue')->once()->with('hangar')->andReturn($source);
+
+        (new WarmProjectMetadata('hangar', ['a', 'b']))->handle($registry, $cache);
+
+        $held->release();
+        self::assertTrue(true);
     }
 
     public function test_handle_refetches_only_ids_still_pending_when_an_overlapping_job_already_filled_cache(): void

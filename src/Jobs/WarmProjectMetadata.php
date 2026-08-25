@@ -2,6 +2,9 @@
 
 namespace Kazaminosuke\ModManager\Jobs;
 
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -19,9 +22,10 @@ use Throwable;
  * source rather than once per project).
  *
  * getProjectsByIds() already fetches in bulk where the source actually has
- * a bulk endpoint (Modrinth, CurseForge) and loops individually where it
- * doesn't (Hangar, GitHub Releases) - either way, this reduces N queued
- * jobs down to one.
+ * a bulk endpoint (Modrinth, CurseForge) and uses a bounded HTTP pool where
+ * it doesn't (Hangar, GitHub Releases) - either way, this reduces N queued
+ * jobs down to one. Overlapping cold-start jobs also take a per-project
+ * fetch lock so shared IDs are requested once.
  *
  * Deliberately NOT throttled by WarmRequestThrottle: unlike
  * WarmCatalogSearch/WarmCatalogCacheCommand's speculative, nobody-may-be-
@@ -62,7 +66,7 @@ final class WarmProjectMetadata implements ShouldBeUnique, ShouldQueue
         return "warm_project_metadata:{$this->sourceKey}:".hash('sha256', implode(',', $ids));
     }
 
-    public function handle(ProjectSourceRegistry $registry): void
+    public function handle(ProjectSourceRegistry $registry, ?CacheRepository $cache = null): void
     {
         $projectIds = $this->normalizedProjectIds();
 
@@ -86,21 +90,30 @@ final class WarmProjectMetadata implements ShouldBeUnique, ShouldQueue
         // Overlapping exact-set jobs can share some ids without sharing a
         // ShouldBeUnique key. Re-peek after leaving the queue so a preceding
         // job's completed entries (and retry-delayed failures) are removed
-        // before any upstream call. Fully concurrent starts may still overlap,
-        // but no already-visible result is fetched again later in the queue.
+        // before any upstream call.
         if ($source instanceof ProjectMetadataPeekManyInterface) {
-            $peeked = $source->peekProjects($projectIds);
-            $projectIds = array_values(array_filter(
-                $projectIds,
-                static fn (string $projectId): bool => ($peeked[$projectId]['pending'] ?? false) === true,
-            ));
+            $projectIds = $this->stillPendingProjectIds($source, $projectIds);
 
             if ($projectIds === []) {
                 return;
             }
         }
 
+        [$projectIds, $locks] = $this->claimExclusiveProjectIds($projectIds, $cache);
+
+        if ($projectIds === []) {
+            return;
+        }
+
         try {
+            if ($locks !== [] && $source instanceof ProjectMetadataPeekManyInterface) {
+                $projectIds = $this->stillPendingProjectIds($source, $projectIds);
+
+                if ($projectIds === []) {
+                    return;
+                }
+            }
+
             if ($source instanceof AuthoritativeBatchProjectSourceInterface) {
                 // Only the sources with a real batch endpoint make a missing
                 // id conclusive. Their fresh-only method prevents stale batch
@@ -125,6 +138,8 @@ final class WarmProjectMetadata implements ShouldBeUnique, ShouldQueue
             }
 
             return;
+        } finally {
+            $this->releaseProjectLocks($locks);
         }
 
         if ($map !== []) {
@@ -166,5 +181,67 @@ final class WarmProjectMetadata implements ShouldBeUnique, ShouldQueue
         }
 
         return $primed;
+    }
+
+    /**
+     * @param array<int, string> $projectIds
+     * @return array<int, string>
+     */
+    private function stillPendingProjectIds(ProjectMetadataPeekManyInterface $source, array $projectIds): array
+    {
+        $peeked = $source->peekProjects($projectIds);
+
+        return array_values(array_filter(
+            $projectIds,
+            static fn (string $projectId): bool => ($peeked[$projectId]['pending'] ?? false) === true,
+        ));
+    }
+
+    /**
+     * @param array<int, string> $projectIds
+     * @return array{0: array<int, string>, 1: list<Lock>}
+     */
+    private function claimExclusiveProjectIds(array $projectIds, ?CacheRepository $cache): array
+    {
+        if ($cache === null || !method_exists($cache, 'getStore')) {
+            return [$projectIds, []];
+        }
+
+        $store = $cache->getStore();
+
+        if (!$store instanceof LockProvider) {
+            return [$projectIds, []];
+        }
+
+        $owned = [];
+        $locks = [];
+        $ttl = max(15, $this->timeout);
+
+        foreach ($projectIds as $projectId) {
+            $lock = $cache->lock($this->projectFetchLockKey($projectId), $ttl);
+
+            if ($lock->get()) {
+                $owned[] = $projectId;
+                $locks[] = $lock;
+            }
+        }
+
+        return [$owned, $locks];
+    }
+
+    /** @param list<Lock> $locks */
+    private function releaseProjectLocks(array $locks): void
+    {
+        foreach ($locks as $lock) {
+            try {
+                $lock->release();
+            } catch (Throwable) {
+            }
+        }
+    }
+
+    private function projectFetchLockKey(string $projectId): string
+    {
+        return 'mmr_warm_project:'.$this->sourceKey.':'.hash('sha256', $projectId);
     }
 }

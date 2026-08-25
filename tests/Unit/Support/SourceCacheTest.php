@@ -304,6 +304,21 @@ class SourceCacheTest extends TestCase
         self::assertTrue($sourceCache->peek($spec)['fresh']);
     }
 
+    public function test_project_cold_fetch_is_serialized_by_a_store_lock(): void
+    {
+        $cache = $this->cache();
+        $spec = new SourceFetchSpec('hangar', 'project', ['project_id' => 'LuckPerms']);
+        $data = ['project_id' => 'LuckPerms', 'title' => 'LuckPerms'];
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')->once()->andReturn($data);
+        $executor->shouldNotReceive('emptyResult');
+        $sourceCache = $this->sourceCache($cache, 'sync', $executor);
+
+        self::assertSame($data, $sourceCache->swr($spec, CacheProfile::ProjectMetadata));
+        self::assertSame($data, $sourceCache->swr($spec, CacheProfile::ProjectMetadata));
+        self::assertTrue($sourceCache->peek($spec)['fresh']);
+    }
+
     public function test_search_lock_timeout_never_starts_a_second_inline_fetch(): void
     {
         $lock = Mockery::mock(CacheLock::class);

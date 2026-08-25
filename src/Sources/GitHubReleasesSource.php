@@ -189,7 +189,12 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
      */
     protected function getProjectsByIdsUsingCache(array $projectIds, bool $authoritative): array
     {
-        return $this->cachedProjectMetadata->getMany($projectIds, $this->projectSpec(...), $authoritative);
+        return $this->cachedProjectMetadata->getMany(
+            $projectIds,
+            $this->projectSpec(...),
+            $authoritative,
+            fn (array $pendingIds): array => $this->fetchProjectsByIdsWithPool($pendingIds),
+        );
     }
 
     /** @return array<int, mixed> */
@@ -441,12 +446,116 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     protected function fetchProject(SourceFetchSpec $spec, float $timeoutSeconds): array
     {
         [$owner, $name] = $this->repositoryArguments($spec);
-        $response = $this->getJson("/repos/$owner/$name", [], $timeoutSeconds);
-        if (!isset($response['id'])) {
+        $projectId = $owner.'/'.$name;
+        $fetched = $this->fetchProjectsByIdsWithPool([$projectId], $timeoutSeconds);
+        $project = $fetched[$projectId] ?? null;
+
+        if (!is_array($project)) {
             throw new Exception("GitHub repository [$owner/$name] was not found.");
         }
 
-        return $this->normalizeProject($response);
+        return $project;
+    }
+
+    /**
+     * GitHub has no bulk repository endpoint for this metadata, so bound the
+     * concurrent fallback the same way latest-release REST lookup already does.
+     *
+     * @param array<int, string> $projectIds
+     * @return array<string, array<string, mixed>>
+     */
+    protected function fetchProjectsByIdsWithPool(array $projectIds, ?float $timeoutSeconds = null): array
+    {
+        $repositories = [];
+
+        foreach ($projectIds as $projectId) {
+            $projectId = (string) $projectId;
+            $repo = $this->parseIdentifier($projectId);
+
+            if ($repo === null) {
+                continue;
+            }
+
+            [$owner, $name] = array_map('strtolower', $repo);
+            $repositories[$projectId] = ['owner' => $owner, 'name' => $name];
+        }
+
+        if ($repositories === []) {
+            return [];
+        }
+
+        $timeoutSeconds ??= CacheProfile::ProjectMetadata->backgroundTimeoutSeconds();
+        $deadline = microtime(true) + max(0.1, $timeoutSeconds);
+        $resolved = [];
+        $headers = [
+            'Accept' => 'application/vnd.github+json',
+            'X-GitHub-Api-Version' => '2022-11-28',
+        ];
+        $token = $this->token();
+
+        foreach (array_chunk($repositories, self::REST_POOL_SIZE, true) as $chunk) {
+            try {
+                $remaining = $this->remainingTimeout($deadline);
+            } catch (Throwable $exception) {
+                report($exception);
+
+                break;
+            }
+
+            $aliases = [];
+
+            try {
+                $responses = Http::pool(function (Pool $pool) use ($chunk, $remaining, $headers, $token, &$aliases) {
+                    $poolRequests = [];
+
+                    foreach ($chunk as $repositoryKey => $repository) {
+                        $alias = 'github_project_'.sha1($repositoryKey);
+                        $aliases[$alias] = $repositoryKey;
+                        $request = $pool->as($alias)
+                            ->asJson()
+                            ->withHeaders($headers)
+                            ->timeout($remaining)
+                            ->connectTimeout(min(1.0, $remaining));
+
+                        if ($token !== '') {
+                            $request = $request->withToken($token);
+                        }
+
+                        $poolRequests[] = $request->get(
+                            self::BASE_URL."/repos/{$repository['owner']}/{$repository['name']}",
+                        );
+                    }
+
+                    return $poolRequests;
+                });
+            } catch (Throwable $exception) {
+                report($exception);
+
+                continue;
+            }
+
+            foreach ($aliases as $alias => $repositoryKey) {
+                try {
+                    $response = $responses[$alias] ?? null;
+
+                    if (!$response instanceof Response || !$response->successful()) {
+                        throw new Exception("GitHub repository [$repositoryKey] was not found.");
+                    }
+
+                    $payload = $response->json();
+
+                    if (!is_array($payload) || !isset($payload['id'])) {
+                        throw new Exception("GitHub repository [$repositoryKey] was not found.");
+                    }
+
+                    $resolved[$repositoryKey] = $this->normalizeProject($payload);
+                } catch (Throwable $exception) {
+                    report($exception);
+                }
+            }
+        }
+
+        return $resolved;
     }
 
     /**

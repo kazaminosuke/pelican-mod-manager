@@ -248,7 +248,12 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
      */
     protected function getProjectsByIdsUsingCache(array $projectIds, bool $authoritative): array
     {
-        return $this->cachedProjectMetadata->getMany($projectIds, $this->projectSpec(...), $authoritative);
+        return $this->cachedProjectMetadata->getMany(
+            $projectIds,
+            $this->projectSpec(...),
+            $authoritative,
+            fn (array $pendingIds): array => $this->fetchProjectsByIdsWithPool($pendingIds),
+        );
     }
 
     /** @return array<int, mixed> */
@@ -534,12 +539,93 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             throw new Exception('Invalid Hangar project identifier.');
         }
 
-        $response = $this->getJson("/projects/$projectId", [], $timeoutSeconds);
-        if (!isset($response['id'])) {
+        $fetched = $this->fetchProjectsByIdsWithPool([$projectId], $timeoutSeconds);
+        $project = $fetched[$projectId] ?? null;
+
+        if (!is_array($project)) {
             throw new Exception("Hangar project [$projectId] was not found.");
         }
 
-        return $this->normalizeProject($response);
+        return $project;
+    }
+
+    /**
+     * Hangar has no bulk project endpoint, so bound the concurrent fallback
+     * the same way latest-version lookup already does.
+     *
+     * @param array<int, string> $projectIds
+     * @return array<string, array<string, mixed>>
+     */
+    protected function fetchProjectsByIdsWithPool(array $projectIds, ?float $timeoutSeconds = null): array
+    {
+        $projectIds = array_values(array_filter(
+            $projectIds,
+            static fn (mixed $projectId): bool => is_string($projectId) && $projectId !== '',
+        ));
+
+        if ($projectIds === []) {
+            return [];
+        }
+
+        $timeoutSeconds ??= CacheProfile::ProjectMetadata->backgroundTimeoutSeconds();
+        $deadline = microtime(true) + max(0.1, $timeoutSeconds);
+        $resolved = [];
+
+        foreach (array_chunk($projectIds, self::LATEST_VERSION_POOL_SIZE) as $chunk) {
+            try {
+                $remaining = $this->remainingTimeout($deadline);
+            } catch (Throwable $exception) {
+                report($exception);
+
+                break;
+            }
+
+            $aliases = [];
+
+            try {
+                $responses = Http::pool(function (Pool $pool) use ($chunk, $remaining, &$aliases) {
+                    $poolRequests = [];
+
+                    foreach (array_values($chunk) as $index => $projectId) {
+                        $alias = "hangar_project_$index";
+                        $aliases[$alias] = $projectId;
+                        $poolRequests[] = $pool->as($alias)
+                            ->asJson()
+                            ->timeout($remaining)
+                            ->connectTimeout(min(1.0, $remaining))
+                            ->get(self::BASE_URL."/projects/$projectId");
+                    }
+
+                    return $poolRequests;
+                });
+            } catch (Throwable $exception) {
+                report($exception);
+
+                continue;
+            }
+
+            foreach ($aliases as $alias => $projectId) {
+                try {
+                    $response = $responses[$alias] ?? null;
+
+                    if (!$response instanceof Response || !$response->successful()) {
+                        throw new Exception("Hangar project [$projectId] was not found.");
+                    }
+
+                    $payload = $response->json();
+
+                    if (!is_array($payload) || !isset($payload['id'])) {
+                        throw new Exception("Hangar project [$projectId] was not found.");
+                    }
+
+                    $resolved[$projectId] = $this->normalizeProject($payload);
+                } catch (Throwable $exception) {
+                    report($exception);
+                }
+            }
+        }
+
+        return $resolved;
     }
 
     /** @return array<int, array<string, mixed>> */

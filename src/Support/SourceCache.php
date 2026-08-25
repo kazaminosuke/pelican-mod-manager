@@ -345,7 +345,7 @@ final class SourceCache
         CacheProfile $profile,
         float $timeoutSeconds,
     ): mixed {
-        if ($spec->operation !== 'search' || !method_exists($this->cache, 'getStore')) {
+        if (!$this->usesSingleFlight($spec) || !method_exists($this->cache, 'getStore')) {
             return $this->performFetchAndStore($spec, $profile, $timeoutSeconds);
         }
 
@@ -354,10 +354,10 @@ final class SourceCache
             return $this->performFetchAndStore($spec, $profile, $timeoutSeconds);
         }
 
-        // Hangar's catalog search is ~1s. The after-response warm and a
-        // visitor who opens that tab while it is in flight must share one
-        // upstream call instead of stacking two. Wait up to this request's
-        // own budget for the in-flight fetch to land, then read the entry.
+        // Catalog search and per-project metadata share an upstream fetch lock
+        // so overlapping warm jobs and a visitor who opens the same miss while
+        // it is in flight share one call instead of stacking two. Wait up to
+        // this request's own budget for the in-flight fetch to land, then read.
         $lockTtl = max(12, (int) ceil($timeoutSeconds) + 1);
         $lock = $this->cache->lock('mmr_src_fetch:'.$spec->cacheKey(), $lockTtl);
         $waitSeconds = max(1, (int) ceil($timeoutSeconds));
@@ -527,6 +527,11 @@ final class SourceCache
     private function supportsAsyncDispatch(): bool
     {
         return $this->operations->supportsAsyncDispatch();
+    }
+
+    private function usesSingleFlight(SourceFetchSpec $spec): bool
+    {
+        return in_array($spec->operation, ['search', 'project'], true);
     }
 
     private function dispatchRevalidation(
