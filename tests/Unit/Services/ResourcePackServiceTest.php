@@ -67,4 +67,35 @@ final class ResourcePackServiceTest extends TestCase
         self::assertSame('1.0.0', $metadata['version_number']);
         self::assertSame(str_repeat('a', 128), $metadata['hashes']['sha512']);
     }
+
+    public function test_get_installed_treats_missing_metadata_as_null(): void
+    {
+        $server = new Server();
+        $server->forceFill(['id' => 4]);
+        $repository = Mockery::mock(DaemonFileRepository::class);
+        $repository->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
+        $repository->shouldReceive('getContent')
+            ->once()
+            ->with(ResourcePackService::METADATA_FILENAME)
+            ->andThrow(new \Illuminate\Contracts\Filesystem\FileNotFoundException('missing'));
+
+        self::assertNull((new ResourcePackService())->getInstalled($server, $repository));
+    }
+
+    public function test_get_installed_wraps_wings_transport_failures(): void
+    {
+        $server = new Server();
+        $server->forceFill(['id' => 4]);
+        $repository = Mockery::mock(DaemonFileRepository::class);
+        $repository->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
+        $repository->shouldReceive('getContent')
+            ->once()
+            ->with(ResourcePackService::METADATA_FILENAME)
+            ->andThrow(new \RuntimeException('connection refused'));
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Resource pack metadata is unavailable.');
+
+        (new ResourcePackService())->getInstalled($server, $repository);
+    }
 }

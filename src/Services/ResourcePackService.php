@@ -33,6 +33,15 @@ final class ResourcePackService
             $content = $fileRepository->setServer($server)->getContent(self::METADATA_FILENAME);
         } catch (FileNotFoundException) {
             return null;
+        } catch (Exception $exception) {
+            // Match InstalledMetadataRepository: a Wings transport failure is
+            // not evidence that no pack is installed, and must not turn the
+            // Resource Pack page into a Livewire 500 on mount.
+            if (function_exists('report') && app()->bound(\Illuminate\Contracts\Debug\ExceptionHandler::class)) {
+                report($exception);
+            }
+
+            throw new Exception('Resource pack metadata is unavailable.', previous: $exception);
         }
 
         try {

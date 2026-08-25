@@ -1348,10 +1348,19 @@ class ModManagerPage extends Page implements HasTable
             $type = static::detectProjectType($server);
 
             if ($type === ProjectType::ResourcePack) {
-                $installed = app(ResourcePackService::class)->getInstalled($server, $fileRepository);
-                $this->installedModsMetadata = $installed === null ? [] : [$installed];
-                $this->installedFilesCount = $installed === null ? 0 : 1;
-                $this->installedScanDataReady = true;
+                try {
+                    $installed = app(ResourcePackService::class)->getInstalled($server, $fileRepository);
+                    $this->installedModsMetadata = $installed === null ? [] : [$installed];
+                    $this->installedFilesCount = $installed === null ? 0 : 1;
+                    $this->installedScanDataReady = true;
+                } catch (Exception $exception) {
+                    if (function_exists('report') && app()->bound(\Illuminate\Contracts\Debug\ExceptionHandler::class)) {
+                        report($exception);
+                    }
+                    $this->installedModsMetadata = [];
+                    $this->installedFilesCount = -1;
+                    $this->installedScanDataReady = false;
+                }
                 unset($this->cachedTabs);
 
                 return $this->installedModsMetadata;
