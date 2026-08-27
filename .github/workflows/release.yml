@@ -1,0 +1,177 @@
+name: Auto Release on Version Bump
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - plugin.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # The workflow's own update.json commit must never become a release trigger.
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from plugin.json
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="$(jq -er '.version | select(type == "string" and length > 0)' plugin.json)"
+
+          # Keep the manifest value unchanged while ensuring the GitHub tag has
+          # exactly one leading "v". The current manifest is already v-prefixed.
+          case "$VERSION" in
+            v*) TAG="$VERSION" ;;
+            *) TAG="v$VERSION" ;;
+          esac
+
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm that the version changed
+        id: version_change
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          changed=true
+
+          if [[ ! "$BEFORE_SHA" =~ ^0+$ ]] && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            if git cat-file -e "${BEFORE_SHA}:plugin.json" 2>/dev/null; then
+              PREVIOUS_VERSION="$(git show "${BEFORE_SHA}:plugin.json" | jq -er '.version | select(type == "string" and length > 0)')"
+              if [[ "$PREVIOUS_VERSION" == "$CURRENT_VERSION" ]]; then
+                changed=false
+              fi
+            fi
+          fi
+
+          printf 'changed=%s\n' "$changed" >> "$GITHUB_OUTPUT"
+
+          if [[ "$changed" == false ]]; then
+            echo 'plugin.json changed, but its version did not change; skipping release.'
+          fi
+
+      - name: Check whether the release already exists
+        id: release_check
+        if: steps.version_change.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists; release creation will be skipped."
+          else
+            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and verify plugin artifact
+        if: steps.version_change.outputs.changed == 'true' && steps.release_check.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Keep only files required by a Pelican plugin. git archive also
+          # prevents untracked local-only files from entering the artifact.
+          git archive --format=zip --output=pelican-mod-manager.zip HEAD \
+            plugin.json LICENSE config database lang resources src
+
+          unzip -Z1 pelican-mod-manager.zip > archive-files.txt
+          grep -Fxq 'plugin.json' archive-files.txt
+          grep -Fxq 'LICENSE' archive-files.txt
+
+          while IFS= read -r path; do
+            case "$path" in
+              plugin.json|LICENSE|config|config/*|database|database/*|lang|lang/*|resources|resources/*|src|src/*) ;;
+              *)
+                echo "Unexpected file in plugin artifact: $path"
+                exit 1
+                ;;
+            esac
+          done < archive-files.txt
+
+          echo 'Plugin artifact contents:'
+          cat archive-files.txt
+
+      - name: Create GitHub Release
+        if: steps.version_change.outputs.changed == 'true' && steps.release_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # This repository has no CHANGELOG.md; use GitHub's generated notes,
+          # including the previous tag comparison when one is available.
+          gh release create "$TAG" pelican-mod-manager.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes
+
+      - name: Verify release availability
+        if: steps.version_change.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Update update.json
+        if: steps.version_change.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/pelican-mod-manager.zip"
+          jq --indent 4 --arg version "$VERSION" --arg download_url "$DOWNLOAD_URL" \
+            '.["*"].version = $version | .["*"].download_url = $download_url' \
+            update.json > update.json.tmp
+          mv update.json.tmp update.json
+
+      - name: Commit updated release metadata
+        if: steps.version_change.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add update.json
+
+          if git diff --cached --quiet -- update.json; then
+            echo 'update.json is already current; no metadata commit is needed.'
+            exit 0
+          fi
+
+          git commit -m "chore: update release metadata for ${TAG} [skip ci]"
+          git push origin HEAD:main
