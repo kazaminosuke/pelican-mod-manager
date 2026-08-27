@@ -87,6 +87,80 @@ jobs:
             printf 'exists=false\n' >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Prepare release notes from CHANGELOG.md
+        if: steps.version_change.outputs.changed == 'true' && steps.release_check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f CHANGELOG.md ]]; then
+            echo "CHANGELOG.md is required for release $TAG."
+            exit 1
+          fi
+
+          CHANGELOG_VERSION="${VERSION#v}"
+
+          awk -v version="$CHANGELOG_VERSION" -v prefixed_version="$VERSION" '
+            function matches_heading(line, candidate, heading, suffix) {
+              heading = "## [" candidate "]"
+              if (index(line, heading) != 1) {
+                return 0
+              }
+
+              suffix = substr(line, length(heading) + 1)
+              return suffix == "" || suffix ~ /^[[:space:]]/
+            }
+
+            {
+              if (!found && (matches_heading($0, version) || (prefixed_version != version && matches_heading($0, prefixed_version)))) {
+                found = 1
+                next
+              }
+
+              if (found && $0 ~ /^## \[/) {
+                found = 0
+              }
+
+              if (found) {
+                lines[++count] = $0
+              }
+            }
+
+            END {
+              start = 1
+              end = count
+
+              while (start <= end && lines[start] ~ /^[[:space:]]*$/) {
+                start++
+              }
+
+              while (end >= start && lines[end] ~ /^[[:space:]]*$/) {
+                end--
+              }
+
+              for (i = start; i <= end; i++) {
+                print lines[i]
+              }
+            }
+          ' CHANGELOG.md > release_notes.md
+
+          if [[ ! -s release_notes.md ]]; then
+            echo "CHANGELOG.md has no non-empty section for version $VERSION."
+            exit 1
+          fi
+
+          PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [[ -n "$PREV_TAG" && "$PREV_TAG" != "$TAG" ]]; then
+            printf '\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+              "$GITHUB_REPOSITORY" "$PREV_TAG" "$TAG" >> release_notes.md
+          fi
+
+          echo 'Release notes:'
+          cat release_notes.md
+
       - name: Build and verify plugin artifact
         if: steps.version_change.outputs.changed == 'true' && steps.release_check.outputs.exists == 'false'
         shell: bash
@@ -124,13 +198,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # This repository has no CHANGELOG.md; use GitHub's generated notes,
-          # including the previous tag comparison when one is available.
           gh release create "$TAG" pelican-mod-manager.zip \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --generate-notes
+            --notes-file release_notes.md
 
       - name: Verify release availability
         if: steps.version_change.outputs.changed == 'true'
