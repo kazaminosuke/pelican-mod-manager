@@ -111,7 +111,7 @@ jobs:
               }
 
               suffix = substr(line, length(heading) + 1)
-              return suffix ~ /^[[:space:]]*$/
+              return suffix ~ /^[[:space:]]/
             }
 
             {
@@ -168,6 +168,11 @@ jobs:
             exit 1
           }
 
+          if grep -Fq '**Full Changelog**:' release_notes.md; then
+            echo "CHANGELOG.md must not contain a Full Changelog line; the workflow adds it automatically."
+            exit 1
+          fi
+
           PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
           if [[ -n "$PREV_TAG" && "$PREV_TAG" != "$TAG" ]]; then
             FULL_CHANGELOG_URL="https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG}"
@@ -175,12 +180,7 @@ jobs:
             FULL_CHANGELOG_URL="https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"
           fi
 
-          EXPECTED_FULL_CHANGELOG="**Full Changelog**: ${FULL_CHANGELOG_URL}"
-          if [[ "$(grep -Fxc "$EXPECTED_FULL_CHANGELOG" release_notes.md || true)" != 1 ]]; then
-            echo "CHANGELOG.md section for version $VERSION must contain exactly:"
-            echo "$EXPECTED_FULL_CHANGELOG"
-            exit 1
-          fi
+          printf '\n\n**Full Changelog**: %s\n' "$FULL_CHANGELOG_URL" >> release_notes.md
 
           echo 'Release notes:'
           cat release_notes.md
