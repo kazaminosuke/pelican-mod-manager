@@ -87,7 +87,7 @@ jobs:
             printf 'exists=false\n' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Prepare release notes from CHANGELOG.md
+      - name: Extract release notes section from CHANGELOG.md
         if: steps.version_change.outputs.changed == 'true' && steps.release_check.outputs.exists == 'false'
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -111,12 +111,13 @@ jobs:
               }
 
               suffix = substr(line, length(heading) + 1)
-              return suffix == "" || suffix ~ /^[[:space:]]/
+              return suffix ~ /^[[:space:]]*$/
             }
 
             {
               if (!found && (matches_heading($0, version) || (prefixed_version != version && matches_heading($0, prefixed_version)))) {
                 found = 1
+                lines[++count] = $0
                 next
               }
 
@@ -152,10 +153,33 @@ jobs:
             exit 1
           fi
 
+          if ! tail -n +2 release_notes.md | grep -q '[^[:space:]]'; then
+            echo "CHANGELOG.md section for version $VERSION is empty."
+            exit 1
+          fi
+
+          grep -Fxq '### 日本語' release_notes.md || {
+            echo "CHANGELOG.md section for version $VERSION is missing the Japanese heading."
+            exit 1
+          }
+
+          grep -Fxq '### English' release_notes.md || {
+            echo "CHANGELOG.md section for version $VERSION is missing the English heading."
+            exit 1
+          }
+
           PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
           if [[ -n "$PREV_TAG" && "$PREV_TAG" != "$TAG" ]]; then
-            printf '\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
-              "$GITHUB_REPOSITORY" "$PREV_TAG" "$TAG" >> release_notes.md
+            FULL_CHANGELOG_URL="https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG}"
+          else
+            FULL_CHANGELOG_URL="https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"
+          fi
+
+          EXPECTED_FULL_CHANGELOG="**Full Changelog**: ${FULL_CHANGELOG_URL}"
+          if [[ "$(grep -Fxc "$EXPECTED_FULL_CHANGELOG" release_notes.md || true)" != 1 ]]; then
+            echo "CHANGELOG.md section for version $VERSION must contain exactly:"
+            echo "$EXPECTED_FULL_CHANGELOG"
+            exit 1
           fi
 
           echo 'Release notes:'
