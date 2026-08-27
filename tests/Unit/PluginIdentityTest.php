@@ -24,9 +24,12 @@ final class PluginIdentityTest extends TestCase
             $manifest['update_url'],
         );
         self::assertSame($manifest['version'], $updates['*']['version']);
+        $tag = str_starts_with($manifest['version'], 'v')
+            ? $manifest['version']
+            : 'v'.$manifest['version'];
         self::assertSame(
             'https://github.com/kazaminosuke/'.self::PLUGIN_ID.'/releases/download/'
-                .$manifest['version'].'/'.self::PLUGIN_ID.'.zip',
+                .$tag.'/'.self::PLUGIN_ID.'.zip',
             $updates['*']['download_url'],
         );
     }
