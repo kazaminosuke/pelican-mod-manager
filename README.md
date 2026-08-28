@@ -6,17 +6,10 @@ A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, upd
 
 ## Screenshots
 
-### Catalog
-
-![Catalog](docs/screenshots/catalog-plugin.png)
-
-### Installed Projects
-
-![Installed Projects](docs/screenshots/installed-mod.png)
-
-### Settings
-
-![Plugin Settings](docs/screenshots/plugin-settings.png)
+<p align="center">
+  <img src="docs/screenshots/catalog-plugin.png" width="49%" alt="Catalog">
+  <img src="docs/screenshots/installed-mod.png" width="49%" alt="Installed Projects">
+</p>
 
 ## Supported sources
 
