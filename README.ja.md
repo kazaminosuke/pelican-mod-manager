@@ -4,8 +4,12 @@
 
 [Pelican Panel](https://pelican.dev) 用のプラグインです。**Modrinth、CurseForge、Hangar、GitHub Releases** のMod・Plugin・Datapack・Resource Packを、サーバーパネル上で検索・インストール・更新・管理できます。
 
-![カタログタブ](docs/images/catalog.png)
-![インストール済みタブ](docs/images/installed.png)
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/catalog-plugin.png" width="49%" alt="Catalog">
+  <img src="docs/screenshots/installed-mod.png" width="49%" alt="Installed Projects">
+</p>
 
 ## 対応ソース
 
