@@ -4,8 +4,19 @@
 
 A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, update, and manage Minecraft mods, plugins, datapacks, and resource packs from **Modrinth, CurseForge, Hangar, and GitHub Releases** directly in the server panel.
 
-![Catalog tab](docs/images/catalog.png)
-![Installed tab](docs/images/installed.png)
+## Screenshots
+
+### Catalog
+
+![Catalog](docs/screenshots/catalog-plugin.png)
+
+### Installed Projects
+
+![Installed Projects](docs/screenshots/installed-mod.png)
+
+### Settings
+
+![Plugin Settings](docs/screenshots/plugin-settings.png)
 
 ## Supported sources
 
