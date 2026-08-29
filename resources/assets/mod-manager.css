@@ -21,6 +21,11 @@
 .mmr-catalog-sort-toolbar{width:12rem;min-width:10rem;}
 .mmr-catalog-sort-select{display:block;width:100%;min-height:2.25rem;border-radius:.5rem;border:1px solid rgb(209 213 219);background:#fff;padding:.5rem .75rem;color:rgb(17 24 39);font-size:.875rem;line-height:1.25rem;}
 .dark .mmr-catalog-sort-select{border-color:rgb(75 85 99);background:rgb(31 41 55);color:#fff;}
+.mmr-table-scroll-ctn .fi-ta-search-field{order:0;}
+.mmr-catalog-sort-toolbar{order:1;}
+.mmr-table-scroll-ctn .fi-ta-filters-dropdown{order:2;}
+.mmr-catalog-toolbar-actions{order:3;}
+.mmr-table-scroll-ctn .fi-ta-col-manager-dropdown{order:4;}
 .mmr-table-action-registration{display:none!important;}
 .mmr-catalog-toolbar-actions,.mmr-catalog-view-toggle{display:flex;align-items:center;gap:.375rem;flex-wrap:wrap;}
 .mmr-catalog-toolbar-button{min-height:2.25rem;border:1px solid rgb(209 213 219);border-radius:.5rem;background:#fff;padding:.4rem .7rem;color:rgb(55 65 81);font-size:.8125rem;font-weight:600;line-height:1.25rem;white-space:nowrap;}
