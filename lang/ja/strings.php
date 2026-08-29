@@ -129,6 +129,17 @@ return [
             'environment_server' => 'サーバー必須/任意',
             'environment_client' => 'クライアント専用',
         ],
+        'override' => [
+            'label' => '互換性を上書き',
+            'active' => '上書き中',
+            'heading' => 'Catalog互換性の上書き',
+            'description' => 'このCatalog URLだけに適用され、検索と互換性判定へすぐ反映されます。サーバー設定やEggプロファイルは変更しません。',
+            'minecraft_version' => 'Minecraftバージョン',
+            'loader' => 'Loader / Platform',
+            'automatic_value' => '自動検出: :value',
+            'apply' => '適用',
+            'reset' => 'Autoへ戻す',
+        ],
     ],
 
     'version' => [

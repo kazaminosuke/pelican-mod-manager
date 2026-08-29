@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Enums;
 use App\Models\Server;
 use Filament\Support\Contracts\HasIcon;
 use Filament\Support\Contracts\HasLabel;
+use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 
 enum MinecraftLoader: string implements HasIcon, HasLabel
@@ -59,6 +60,10 @@ enum MinecraftLoader: string implements HasIcon, HasLabel
      */
     public static function fromServer(Server $server): ?MinecraftLoader
     {
+        if (($override = CatalogCompatibilityOverride::loader($server)) !== null) {
+            return self::tryFrom($override);
+        }
+
         $server->loadMissing('egg');
 
         $tags = $server->egg->tags ?? [];

@@ -10,7 +10,7 @@
         // V1 stored sanitized copies of whole Filament table fragments. V9
         // stores display values only, and catalog row actions are CSS-mask
         // buttons rather than per-row inline SVGs.
-        const SCHEMA_VERSION = 9;
+        const SCHEMA_VERSION = 10;
         const STORAGE_PREFIX = `mmr-table-swr:v${SCHEMA_VERSION}:`;
         const INDEX_KEY = `${STORAGE_PREFIX}index`;
         const DEBUG_STORAGE_KEY = 'mmrSwrDebug';
@@ -306,6 +306,8 @@
             activeTab: String(getWireValue(wire, 'activeTab', '') ?? ''),
             paginators: normalize(getWireValue(wire, 'paginators', {})) ?? {},
             catalogSort: String(getWireValue(wire, 'catalogSort', 'downloads') ?? 'downloads'),
+            minecraftVersionOverride: getWireValue(wire, 'minecraftVersionOverride', null),
+            loaderOverride: getWireValue(wire, 'loaderOverride', null),
             perPage: getWireValue(wire, 'tableRecordsPerPage', null),
             tableSearchDigest: valueDigest(getWireValue(wire, 'tableSearch', '')),
             tableFiltersDigest: valueDigest(getWireValue(wire, 'tableFilters', {})),
@@ -336,6 +338,8 @@
                             ? 'filters'
                             : changed.includes('catalogSort')
                                 ? 'sort'
+                                : changed.includes('minecraftVersionOverride') || changed.includes('loaderOverride')
+                                    ? 'compatibility'
                                 : changed.includes('tableColumnsDigest')
                                     ? 'columns'
                                     : 'other';
@@ -361,6 +365,8 @@
                 activeTab: getWireValue(wire, 'activeTab'),
                 tableSearch: getWireValue(wire, 'tableSearch', ''),
                 catalogSort: getWireValue(wire, 'catalogSort', 'downloads'),
+                minecraftVersionOverride: getWireValue(wire, 'minecraftVersionOverride', null),
+                loaderOverride: getWireValue(wire, 'loaderOverride', null),
                 tableFilters: getWireValue(wire, 'tableFilters', {}),
                 paginators: getWireValue(wire, 'paginators', {}),
                 perPage: getWireValue(wire, 'tableRecordsPerPage'),

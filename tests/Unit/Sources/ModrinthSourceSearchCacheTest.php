@@ -135,6 +135,45 @@ class ModrinthSourceSearchCacheTest extends TestCase
         );
     }
 
+    public function test_datapack_search_uses_modrinths_real_mod_type_and_datapack_category(): void
+    {
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                self::assertSame([
+                    ['categories:datapack'],
+                    ['versions:1.21.1'],
+                    ['project_type:mod'],
+                    ['categories:worldgen'],
+                ], json_decode($spec->arguments['query']['facets'], true, 512, JSON_THROW_ON_ERROR));
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new ModrinthSource($this->sourceCache($this->cache(), $executor)))
+            ->search($this->server(), ProjectType::Datapack, filters: ['category' => 'worldgen']);
+    }
+
+    public function test_resource_pack_environment_and_category_filters_are_part_of_the_cache_spec(): void
+    {
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                $facets = json_decode($spec->arguments['query']['facets'], true, 512, JSON_THROW_ON_ERROR);
+                self::assertContains(['categories:16x'], $facets);
+                self::assertContains('environment:client_only', $facets[array_key_last($facets)]);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new ModrinthSource($this->sourceCache($this->cache(), $executor)))
+            ->search($this->server(), ProjectType::ResourcePack, filters: ['category' => '16x', 'environment' => 'client']);
+    }
+
     public function test_a_different_page_is_a_distinct_cache_entry(): void
     {
         $cache = $this->cache();

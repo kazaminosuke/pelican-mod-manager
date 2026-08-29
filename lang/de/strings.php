@@ -129,6 +129,17 @@ return [
             'environment_server' => 'Server erforderlich/optional',
             'environment_client' => 'Nur Client',
         ],
+        'override' => [
+            'label' => 'Kompatibilität überschreiben',
+            'active' => 'Überschreibung aktiv',
+            'heading' => 'Katalog-Kompatibilität überschreiben',
+            'description' => 'Gilt nur für diese Katalog-URL und ändert Suche und Kompatibilitätsprüfung sofort. Server und Egg-Profil bleiben unverändert.',
+            'minecraft_version' => 'Minecraft-Version',
+            'loader' => 'Loader / Plattform',
+            'automatic_value' => 'Automatisch erkannt: :value',
+            'apply' => 'Anwenden',
+            'reset' => 'Auf Auto zurücksetzen',
+        ],
     ],
 
     'version' => [

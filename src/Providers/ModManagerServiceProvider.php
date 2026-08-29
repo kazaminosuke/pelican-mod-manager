@@ -19,10 +19,11 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
-use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
+use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
@@ -77,6 +78,7 @@ class ModManagerServiceProvider extends ServiceProvider
         ]);
 
         Queue::looping(function (): void {
+            CatalogCompatibilityOverride::clear();
             MinecraftVersionResolver::clear();
             // EggProfileResolver::resolve() is memoized the same way and by
             // the same reasoning (ProjectType::fromServer() alone runs 30+

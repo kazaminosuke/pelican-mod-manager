@@ -8,6 +8,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
@@ -50,6 +51,7 @@ final class WarmCatalogSearch implements ShouldBeUnique, ShouldQueue
         public readonly string $loader,
         public readonly string $mcVersion,
         public readonly string $sort = 'downloads',
+        public readonly bool $usesCompatibilityOverride = false,
     ) {}
 
     /**
@@ -99,20 +101,6 @@ final class WarmCatalogSearch implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $currentLoader = $type->getLoaderSlug($server);
-        if ($currentLoader === null && $type === ProjectType::ResourcePack) {
-            $currentLoader = $type->value;
-        }
-        $currentVersion = MinecraftVersionResolver::resolve($server);
-
-        // The unique key describes the snapshot selected by the scheduler.
-        // If the representative server changed while this job waited, do not
-        // warm a different cache entry under the stale unique lock; the next
-        // scheduled/per-visit pass will enqueue the current combination.
-        if ($currentLoader !== $this->loader || $currentVersion !== $this->mcVersion) {
-            return;
-        }
-
         $source = null;
         foreach ($registry->availableFor($server, $type) as $candidate) {
             if ($candidate->getKey()->value === $this->sourceKey) {
@@ -127,9 +115,32 @@ final class WarmCatalogSearch implements ShouldBeUnique, ShouldQueue
         }
 
         try {
+            if ($this->usesCompatibilityOverride) {
+                CatalogCompatibilityOverride::set(
+                    $server,
+                    $this->mcVersion,
+                    $type === ProjectType::ResourcePack ? null : $this->loader,
+                );
+            }
+
+            $currentLoader = $type->getLoaderSlug($server);
+            if ($currentLoader === null && $type === ProjectType::ResourcePack) {
+                $currentLoader = $type->value;
+            }
+            $currentVersion = MinecraftVersionResolver::resolve($server);
+
+            // Auto-detected scheduled snapshots are discarded when a server
+            // changed while queued. Explicit Catalog snapshots are restored
+            // above and intentionally warm their URL-specific cache key.
+            if ($currentLoader !== $this->loader || $currentVersion !== $this->mcVersion) {
+                return;
+            }
+
             $source->warmSearch($server, $type, $this->page, null, ['sort' => $this->sort]);
         } catch (Throwable $exception) {
             report($exception);
+        } finally {
+            CatalogCompatibilityOverride::clear($server);
         }
     }
 }

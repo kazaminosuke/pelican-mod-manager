@@ -6,6 +6,7 @@ use App\Models\Server;
 use Exception;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\AuthoritativeBatchProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\BatchLatestVersionSourceInterface;
@@ -993,6 +994,48 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             operation: 'resolve_identifier',
             arguments: ['identifier' => $identifier],
         ));
+    }
+
+    /** @return array<string, string> */
+    public function catalogCategoryOptions(ProjectType $type): array
+    {
+        if (!$this->isConfigured() || $type === ProjectType::Datapack) {
+            return [];
+        }
+
+        $classId = $this->classIdFor($type);
+        if ($classId === null) {
+            return [];
+        }
+
+        try {
+            $categories = Cache::remember(
+                "pelican-mod-manager:curseforge-categories:$classId",
+                now()->addDay(),
+                fn (): array => $this->getJson('/categories', ['gameId' => self::GAME_ID, 'classId' => $classId])['data'] ?? [],
+            );
+        } catch (Throwable) {
+            return [];
+        }
+
+        $options = [];
+        foreach (is_array($categories) ? $categories : [] as $category) {
+            if (!is_array($category)) {
+                continue;
+            }
+
+            $id = (int) ($category['id'] ?? 0);
+            $name = trim((string) ($category['name'] ?? ''));
+            if ($id <= 0 || $name === '' || ($type === ProjectType::ResourcePack && $id === self::CATEGORY_ID_DATAPACK)) {
+                continue;
+            }
+
+            $options[(string) $id] = $name;
+        }
+
+        asort($options, SORT_NATURAL | SORT_FLAG_CASE);
+
+        return $options;
     }
 
     protected function fetchProjectByIdentifier(string $identifier, float $timeoutSeconds): ?array

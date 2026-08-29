@@ -15,6 +15,10 @@ class MinecraftVersionResolver
 
     public static function resolve(Server $server): ?string
     {
+        if (($override = CatalogCompatibilityOverride::version($server)) !== null) {
+            return $override;
+        }
+
         $key = $server->getKey();
         $serverKey = is_int($key) || is_string($key)
             ? (string) $key

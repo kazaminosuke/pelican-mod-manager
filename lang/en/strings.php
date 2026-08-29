@@ -129,6 +129,17 @@ return [
             'environment_server' => 'Server required/optional',
             'environment_client' => 'Client only',
         ],
+        'override' => [
+            'label' => 'Compatibility override',
+            'active' => 'Override active',
+            'heading' => 'Catalog compatibility override',
+            'description' => 'Applies only to this Catalog URL and immediately changes searches and compatibility checks. It does not change the server or egg profile.',
+            'minecraft_version' => 'Minecraft version',
+            'loader' => 'Loader / platform',
+            'automatic_value' => 'Auto-detected: :value',
+            'apply' => 'Apply',
+            'reset' => 'Reset to Auto',
+        ],
     ],
 
     'version' => [

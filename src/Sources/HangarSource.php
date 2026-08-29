@@ -192,6 +192,9 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         if ($search) {
             $params['query'] = $search;
         }
+        if (!empty($filters['category'])) {
+            $params['category'] = $filters['category'];
+        }
 
         return $this->spec(self::OPERATION_SEARCH, ['params' => $params]);
     }

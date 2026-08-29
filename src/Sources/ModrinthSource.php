@@ -148,11 +148,18 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
     private function buildSearchSpec(Server $server, ProjectType $type, int $page, ?string $search, array $filters): ?SourceFetchSpec
     {
         $minecraftLoader = $type->getLoaderSlug($server);
-        $projectType = $type->value;
+        // Modrinth models plugins and datapacks as mod projects with a
+        // platform category. `project_type:plugin/datapack` is not a valid
+        // primary project-type facet and is silently ignored by the API.
+        $projectType = in_array($type, [ProjectType::Plugin, ProjectType::Datapack], true)
+            ? ProjectType::Mod->value
+            : $type->value;
         $minecraftVersion = MinecraftVersionResolver::resolve($server);
 
-        if (in_array($type, [ProjectType::Datapack, ProjectType::ResourcePack], true)) {
+        if ($type === ProjectType::ResourcePack) {
             $facetGroups = [["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
+        } elseif ($type === ProjectType::Datapack) {
+            $facetGroups = [['categories:datapack'], ["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
         } else {
             if (!$minecraftLoader) {
                 return null;
@@ -166,8 +173,26 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         }
         if (!empty($filters['environment'])) {
             $facetGroups[] = $filters['environment'] === 'server'
-                ? ['server_side:required', 'server_side:optional']
-                : ['server_side:unsupported'];
+                ? [
+                    'environment:client_and_server',
+                    'environment:client_only_server_optional',
+                    'environment:server_only',
+                    'environment:server_only_client_optional',
+                    'environment:dedicated_server_only',
+                    'environment:client_or_server',
+                    'environment:client_or_server_prefers_both',
+                    'environment:unknown',
+                ]
+                : [
+                    'environment:client_and_server',
+                    'environment:client_only',
+                    'environment:client_only_server_optional',
+                    'environment:singleplayer_only',
+                    'environment:server_only_client_optional',
+                    'environment:client_or_server',
+                    'environment:client_or_server_prefers_both',
+                    'environment:unknown',
+                ];
         }
 
         $data = [

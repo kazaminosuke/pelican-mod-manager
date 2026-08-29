@@ -11,6 +11,7 @@ use App\Traits\Filament\BlockAccessInConflict;
 use Exception;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
@@ -51,13 +52,16 @@ use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
+use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Support\CacheVersion;
+use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
+use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
@@ -166,6 +170,13 @@ class ModManagerPage extends Page implements HasTable
     /** Catalog page; page 1 is intentionally omitted from the URL. */
     #[Url(as: 'page', history: true, keep: false, except: 1)]
     public int $catalogPage = 1;
+
+    /** Catalog-only compatibility overrides; null means use auto-detection. */
+    #[Url(as: 'mc', history: true, keep: false)]
+    public ?string $minecraftVersionOverride = null;
+
+    #[Url(as: 'loader', history: true, keep: false)]
+    public ?string $loaderOverride = null;
 
     protected bool $syncingCatalogUrl = false;
 
@@ -494,6 +505,8 @@ class ModManagerPage extends Page implements HasTable
         $this->loadDefaultActiveTab();
         $this->restoreCatalogStateFromUrl();
         $this->rejectUnauthorizedInstalledTab();
+        $this->normalizeCatalogCompatibilityOverrides();
+        $this->configureCatalogCompatibilityOverride();
         if ($this->activeTab === 'installed') {
             $this->dispatchInstalledScanIfMissing();
         }
@@ -502,6 +515,12 @@ class ModManagerPage extends Page implements HasTable
         $this->refreshInstalledOperationState();
 
         $this->catalogWarmPending = true;
+    }
+
+    public function hydrate(): void
+    {
+        $this->normalizeCatalogCompatibilityOverrides();
+        $this->configureCatalogCompatibilityOverride();
     }
 
     /**
@@ -579,6 +598,7 @@ class ModManagerPage extends Page implements HasTable
                 $loader,
                 $mcVersion,
                 $this->catalogSort,
+                $this->hasCatalogCompatibilityOverride(),
             );
         }
     }
@@ -878,6 +898,7 @@ class ModManagerPage extends Page implements HasTable
         // with far fewer results) - plus resets the column manager state. It was
         // being silently dropped by this method overriding it without calling it.
         $this->baseUpdatedActiveTab();
+        $this->configureCatalogCompatibilityOverride();
         // A tab change starts a new result set. Let Livewire initialize page 1
         // from its default instead of carrying a literal `page=1` into the
         // URL, especially for Installed where page and source are not
@@ -3113,20 +3134,182 @@ class ModManagerPage extends Page implements HasTable
 
         $this->catalogCategoryOptionsKey = $memoKey;
 
-        if (static::detectProjectType($server) === ProjectType::ResourcePack) {
+        $type = static::detectProjectType($server);
+        if ($type === null) {
             return $this->catalogCategoryOptions = [];
         }
 
-        if ($this->getCurrentSource()?->getKey() === ProjectSourceKey::CurseForge
-            && static::detectProjectType($server) === ProjectType::Datapack) {
-            return $this->catalogCategoryOptions = [];
-        }
+        $source = $this->getCurrentSource();
 
-        return $this->catalogCategoryOptions = match ($this->getCurrentSource()?->getKey()) {
-            ProjectSourceKey::Modrinth => ['adventure' => 'Adventure', 'cursed' => 'Cursed', 'decoration' => 'Decoration', 'economy' => 'Economy', 'equipment' => 'Equipment', 'food' => 'Food', 'magic' => 'Magic', 'optimization' => 'Optimization', 'social' => 'Social', 'technology' => 'Technology', 'utility' => 'Utility', 'worldgen' => 'World Generation'],
-            ProjectSourceKey::CurseForge => ['406' => 'Technology', '407' => 'Storage', '408' => 'Cosmetic', '409' => 'Ores and Resources', '410' => 'Armor, Tools, and Weapons', '412' => 'Miscellaneous', '413' => 'Server Utility', '414' => 'Food', '415' => 'Energy', '416' => 'Farming', '417' => 'Transport', '419' => 'Magic'],
+        return $this->catalogCategoryOptions = match ($source?->getKey()) {
+            ProjectSourceKey::Modrinth => $this->modrinthCategoryOptions($type),
+            ProjectSourceKey::CurseForge => $source instanceof CurseForgeSource
+                ? $source->catalogCategoryOptions($type)
+                : [],
+            ProjectSourceKey::Hangar => $type === ProjectType::Plugin ? [
+                'admin_tools' => 'Admin Tools',
+                'chat' => 'Chat',
+                'dev_tools' => 'Developer Tools',
+                'economy' => 'Economy',
+                'gameplay' => 'Gameplay',
+                'games' => 'Games',
+                'protection' => 'Protection',
+                'role_playing' => 'Role Playing',
+                'world_management' => 'World Management',
+                'misc' => 'Miscellaneous',
+            ] : [],
             default => [],
         };
+    }
+
+    /** @return array<string, string> */
+    private function modrinthCategoryOptions(ProjectType $type): array
+    {
+        $categories = $type === ProjectType::ResourcePack
+            ? ['combat', 'cursed', 'decoration', 'modded', 'realistic', 'simplistic', 'themed', 'tweaks', 'utility', 'vanilla-like', 'audio', 'blocks', 'core-shaders', 'entities', 'environment', 'equipment', 'fonts', 'gui', 'items', 'locale', 'models', '8x-', '16x', '32x', '48x', '64x', '128x', '256x', '512x+']
+            : ['adventure', 'cursed', 'decoration', 'economy', 'equipment', 'food', 'game-mechanics', 'library', 'magic', 'management', 'minigame', 'mobs', 'optimization', 'social', 'storage', 'technology', 'transportation', 'utility', 'worldgen'];
+
+        return array_combine($categories, array_map(
+            static fn (string $category): string => Str::of($category)->replace('-', ' ')->title()->toString(),
+            $categories,
+        ));
+    }
+
+    /** @return array<string, string> */
+    protected function getCatalogLoaderOverrideOptions(): array
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $type = static::detectProjectType($server);
+        $source = $this->getCurrentSource()?->getKey();
+
+        $loaders = match (true) {
+            $type === ProjectType::Mod && in_array($source, [ProjectSourceKey::Modrinth, ProjectSourceKey::CurseForge], true) => [
+                MinecraftLoader::NeoForge,
+                MinecraftLoader::Forge,
+                MinecraftLoader::Fabric,
+                MinecraftLoader::Quilt,
+            ],
+            $type === ProjectType::Plugin && $source === ProjectSourceKey::Modrinth => [
+                MinecraftLoader::Paper,
+                MinecraftLoader::Purpur,
+                MinecraftLoader::Folia,
+                MinecraftLoader::Spigot,
+                MinecraftLoader::Bukkit,
+                MinecraftLoader::Sponge,
+                MinecraftLoader::Velocity,
+                MinecraftLoader::Waterfall,
+                MinecraftLoader::Bungeecord,
+            ],
+            $type === ProjectType::Plugin && $source === ProjectSourceKey::Hangar => [
+                MinecraftLoader::Paper,
+                MinecraftLoader::Velocity,
+                MinecraftLoader::Waterfall,
+            ],
+            default => [],
+        };
+
+        $options = [];
+        foreach ($loaders as $loader) {
+            $options[$loader->value] = $loader->getLabel();
+        }
+
+        return $options;
+    }
+
+    protected function canOverrideCatalogVersion(): bool
+    {
+        return $this->activeTab !== 'installed'
+            && $this->getCurrentSource()?->supportsSearch() === true;
+    }
+
+    protected function hasCatalogCompatibilityOverride(): bool
+    {
+        return ($this->canOverrideCatalogVersion() && $this->minecraftVersionOverride !== null)
+            || ($this->loaderOverride !== null && array_key_exists($this->loaderOverride, $this->getCatalogLoaderOverrideOptions()));
+    }
+
+    protected function normalizeCatalogCompatibilityOverrides(): void
+    {
+        $version = is_string($this->minecraftVersionOverride) ? trim($this->minecraftVersionOverride) : '';
+        $this->minecraftVersionOverride = $version !== '' && preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $version) === 1
+            ? $version
+            : null;
+
+        $loader = is_string($this->loaderOverride) ? trim($this->loaderOverride) : '';
+        $this->loaderOverride = MinecraftLoader::tryFrom($loader)?->value;
+    }
+
+    protected function configureCatalogCompatibilityOverride(): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        if (!$this->canOverrideCatalogVersion()) {
+            $this->minecraftVersionOverride = null;
+        }
+        if ($this->loaderOverride !== null
+            && !array_key_exists($this->loaderOverride, $this->getCatalogLoaderOverrideOptions())) {
+            $this->loaderOverride = null;
+        }
+
+        CatalogCompatibilityOverride::set(
+            $server,
+            $this->minecraftVersionOverride,
+            $this->loaderOverride,
+        );
+    }
+
+    protected function automaticMinecraftVersion(): string
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+
+        return CatalogCompatibilityOverride::without(
+            $server,
+            fn (): string => MinecraftVersionResolver::resolve($server) ?? trans('pelican-mod-manager::strings.page.unknown'),
+        );
+    }
+
+    protected function automaticMinecraftLoader(): string
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+
+        return CatalogCompatibilityOverride::without(
+            $server,
+            fn (): string => MinecraftLoader::fromServer($server)?->getLabel() ?? trans('pelican-mod-manager::strings.page.unknown'),
+        );
+    }
+
+    public function applyCatalogCompatibilityOverride(array $data): void
+    {
+        $this->minecraftVersionOverride = $this->canOverrideCatalogVersion()
+            ? ($data['minecraft_version'] ?? null)
+            : null;
+        $this->loaderOverride = array_key_exists((string) ($data['loader'] ?? ''), $this->getCatalogLoaderOverrideOptions())
+            ? (string) $data['loader']
+            : null;
+        $this->normalizeCatalogCompatibilityOverrides();
+        $this->configureCatalogCompatibilityOverride();
+        $this->refreshCatalogAfterCompatibilityChange();
+    }
+
+    public function resetCatalogCompatibilityOverride(): void
+    {
+        $this->minecraftVersionOverride = null;
+        $this->loaderOverride = null;
+        $this->configureCatalogCompatibilityOverride();
+        $this->refreshCatalogAfterCompatibilityChange();
+    }
+
+    private function refreshCatalogAfterCompatibilityChange(): void
+    {
+        $this->isTableLoaded = false;
+        $this->catalogPage = 1;
+        unset($this->paginators[self::TABLE_PAGINATOR_NAME]);
+        $this->forgetVersionCaches();
+        $this->resetTable();
+        $this->dispatchCatalogWarm(false);
     }
 
     protected function getHeaderActions(): array
@@ -3150,6 +3333,43 @@ class ModManagerPage extends Page implements HasTable
             && in_array(ProjectSourceKey::GitHubReleases->value, $availableSourceKeys, true);
 
         return [
+            Action::make('catalog_compatibility_override')
+                ->label(fn (): string => $this->hasCatalogCompatibilityOverride()
+                    ? trans('pelican-mod-manager::strings.table.override.active')
+                    : trans('pelican-mod-manager::strings.table.override.label'))
+                ->icon('tabler-adjustments-horizontal')
+                ->color(fn (): string => $this->hasCatalogCompatibilityOverride() ? 'warning' : 'gray')
+                ->visible(fn (): bool => $this->canOverrideCatalogVersion() || $this->getCatalogLoaderOverrideOptions() !== [])
+                ->modalHeading(trans('pelican-mod-manager::strings.table.override.heading'))
+                ->modalDescription(trans('pelican-mod-manager::strings.table.override.description'))
+                ->modalWidth(Width::Small)
+                ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.table.override.apply'))
+                ->fillForm(fn (): array => [
+                    'minecraft_version' => $this->minecraftVersionOverride,
+                    'loader' => $this->loaderOverride,
+                ])
+                ->schema([
+                    TextInput::make('minecraft_version')
+                        ->label(trans('pelican-mod-manager::strings.table.override.minecraft_version'))
+                        ->helperText(fn (): string => trans('pelican-mod-manager::strings.table.override.automatic_value', ['value' => $this->automaticMinecraftVersion()]))
+                        ->maxLength(32)
+                        ->regex('/^[0-9A-Za-z._+\-]+$/')
+                        ->visible(fn (): bool => $this->canOverrideCatalogVersion()),
+                    Select::make('loader')
+                        ->label(trans('pelican-mod-manager::strings.table.override.loader'))
+                        ->helperText(fn (): string => trans('pelican-mod-manager::strings.table.override.automatic_value', ['value' => $this->automaticMinecraftLoader()]))
+                        ->options(fn (): array => $this->getCatalogLoaderOverrideOptions())
+                        ->native(false)
+                        ->visible(fn (): bool => $this->getCatalogLoaderOverrideOptions() !== []),
+                ])
+                ->extraModalFooterActions([
+                    Action::make('reset_catalog_compatibility_override')
+                        ->label(trans('pelican-mod-manager::strings.table.override.reset'))
+                        ->color('gray')
+                        ->action(fn () => $this->resetCatalogCompatibilityOverride())
+                        ->cancelParentActions(),
+                ])
+                ->action(fn (array $data) => $this->applyCatalogCompatibilityOverride($data)),
             Action::make('open_folder')
                 ->label(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->tooltip(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
