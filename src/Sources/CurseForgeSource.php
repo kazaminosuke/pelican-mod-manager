@@ -18,9 +18,9 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
-use Kazaminosuke\ModManager\Support\CacheProfile;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
 use Kazaminosuke\ModManager\Support\CachedSearchOperations;
+use Kazaminosuke\ModManager\Support\CacheProfile;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
@@ -80,6 +80,8 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     protected const SORT_FIELD_LAST_UPDATED = 3;
 
     protected const SORT_FIELD_POPULARITY = 2;
+
+    protected const SORT_FIELD_RELEASED_DATE = 11;
 
     /** @var array<string, string> */
     protected array $lastWarmVersionFailures = [];
@@ -171,32 +173,55 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         // empty page with a zero range.
         $page = min(max(1, $page), intdiv(self::MAX_SEARCH_RESULTS, self::SEARCH_PAGE_SIZE));
 
+        $requestedVersion = trim((string) ($filters['version'] ?? ''));
         $params = [
             'gameId' => self::GAME_ID,
             'classId' => $classId,
-            'gameVersion' => MinecraftVersionResolver::resolve($server),
+            'gameVersion' => preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
+                ? $requestedVersion
+                : MinecraftVersionResolver::resolve($server),
             'index' => ($page - 1) * self::SEARCH_PAGE_SIZE,
             'pageSize' => self::SEARCH_PAGE_SIZE,
-            'sortField' => match ($filters['sort'] ?? 'downloads') {
-                'updated' => self::SORT_FIELD_LAST_UPDATED,
-                'popularity' => self::SORT_FIELD_POPULARITY,
-                default => self::SORT_FIELD_TOTAL_DOWNLOADS,
-            },
-            'sortOrder' => 'desc',
         ];
 
+        $sortField = match ($filters['sort'] ?? 'downloads') {
+            'relevance' => null,
+            'updated' => self::SORT_FIELD_LAST_UPDATED,
+            'popularity' => self::SORT_FIELD_POPULARITY,
+            'created' => self::SORT_FIELD_RELEASED_DATE,
+            default => self::SORT_FIELD_TOTAL_DOWNLOADS,
+        };
+        if ($sortField !== null) {
+            $params['sortField'] = $sortField;
+            $params['sortOrder'] = 'desc';
+        }
+
         if ($type === ProjectType::Mod) {
-            $modLoaderType = $this->modLoaderTypeFor($server);
-            if ($modLoaderType === null) {
+            $selectedLoaders = array_values(array_filter(array_map(
+                static fn (mixed $value): ?int => is_numeric($value) ? (int) $value : null,
+                (array) ($filters['loaders'] ?? []),
+            ), static fn (?int $value): bool => $value !== null && in_array($value, [1, 2, 3, 4, 5, 6], true)));
+            $modLoaderType = $selectedLoaders === [] ? $this->modLoaderTypeFor($server) : null;
+            if ($selectedLoaders === [] && $modLoaderType === null) {
                 return null;
             }
-            $params['modLoaderType'] = $modLoaderType;
+            if ($selectedLoaders !== []) {
+                $params['modLoaderTypes'] = json_encode(array_values(array_unique($selectedLoaders)), JSON_THROW_ON_ERROR);
+            } else {
+                $params['modLoaderType'] = $modLoaderType;
+            }
         }
 
         if ($type === ProjectType::Datapack) {
             $params['categoryId'] = self::CATEGORY_ID_DATAPACK;
-        } elseif (!empty($filters['category'])) {
-            $params['categoryId'] = (int) $filters['category'];
+        } else {
+            $categoryIds = array_values(array_filter(array_map(
+                static fn (mixed $value): int => (int) $value,
+                (array) ($filters['categories'] ?? []),
+            ), static fn (int $value): bool => $value > 0));
+            if ($categoryIds !== []) {
+                $params['categoryIds'] = json_encode(array_slice(array_values(array_unique($categoryIds)), 0, 10), JSON_THROW_ON_ERROR);
+            }
         }
         if ($search) {
             $params['searchFilter'] = $search;
@@ -354,6 +379,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             operation: 'projects',
             arguments: ['project_ids' => $modIds],
         );
+
         return $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
     }
 
@@ -1036,6 +1062,51 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         asort($options, SORT_NATURAL | SORT_FLAG_CASE);
 
         return $options;
+    }
+
+    /** @return array<string, string> */
+    public function catalogVersionOptions(): array
+    {
+        if (!$this->isConfigured()) {
+            return [];
+        }
+
+        try {
+            $versions = Cache::remember(
+                'pelican-mod-manager:curseforge-catalog-game-versions',
+                now()->addDay(),
+                fn (): array => $this->getJson('/minecraft/version')['data'] ?? [],
+            );
+        } catch (\Throwable) {
+            return [];
+        }
+
+        $options = [];
+        foreach (is_array($versions) ? $versions : [] as $version) {
+            if (!is_array($version)) {
+                continue;
+            }
+
+            $value = trim((string) ($version['versionString'] ?? ''));
+            if ($value !== '') {
+                $options[$value] = $value;
+            }
+        }
+
+        return $options;
+    }
+
+    /** @return array<string, string> */
+    public function catalogLoaderOptions(): array
+    {
+        return [
+            '1' => 'Forge',
+            '2' => 'Cauldron',
+            '3' => 'LiteLoader',
+            '4' => 'Fabric',
+            '5' => 'Quilt',
+            '6' => 'NeoForge',
+        ];
     }
 
     protected function fetchProjectByIdentifier(string $identifier, float $timeoutSeconds): ?array

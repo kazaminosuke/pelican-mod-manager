@@ -13,6 +13,7 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
+use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
@@ -34,6 +35,7 @@ class CurseForgeSourceSearchCacheTest extends TestCase
     {
         Container::setInstance($this->previousContainer);
         MinecraftVersionResolver::clear();
+        CatalogCompatibilityOverride::clear();
         Mockery::close();
 
         parent::tearDown();
@@ -108,6 +110,50 @@ class CurseForgeSourceSearchCacheTest extends TestCase
 
         self::assertTrue($source->supportsProjectType(ProjectType::ResourcePack));
         self::assertSame(['hits' => [], 'total_hits' => 0], $source->search($this->server(), ProjectType::ResourcePack));
+    }
+
+    public function test_resource_pack_search_maps_multiple_categories_version_and_creation_sort(): void
+    {
+        $this->bindApiKey('test-key');
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function (SourceFetchSpec $spec): bool {
+                self::assertSame('1.20.6', $spec->arguments['params']['gameVersion']);
+                self::assertSame('[12,34]', $spec->arguments['params']['categoryIds']);
+                self::assertSame(11, $spec->arguments['params']['sortField']);
+                self::assertSame('desc', $spec->arguments['params']['sortOrder']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new CurseForgeSource($this->sourceCache($this->cache(), $executor)))
+            ->search($this->server(), ProjectType::ResourcePack, filters: [
+                'version' => '1.20.6',
+                'categories' => ['12', '34'],
+                'sort' => 'created',
+            ]);
+    }
+
+    public function test_mod_search_maps_multiple_official_loader_types(): void
+    {
+        $this->bindApiKey('test-key');
+        $server = $this->server();
+        CatalogCompatibilityOverride::set($server, '1.21.1', 'neoforge');
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function (SourceFetchSpec $spec): bool {
+                self::assertSame('[4,6]', $spec->arguments['params']['modLoaderTypes']);
+                self::assertArrayNotHasKey('modLoaderType', $spec->arguments['params']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new CurseForgeSource($this->sourceCache($this->cache(), $executor)))
+            ->search($server, ProjectType::Mod, filters: ['loaders' => ['4', '6']]);
     }
 
     public function test_search_clamps_an_unreachable_page_to_curseforges_final_supported_offset(): void

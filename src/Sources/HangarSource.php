@@ -17,10 +17,10 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
-use Kazaminosuke\ModManager\Support\CacheProfile;
-use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
 use Kazaminosuke\ModManager\Support\CachedSearchOperations;
+use Kazaminosuke\ModManager\Support\CacheProfile;
+use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
@@ -161,15 +161,18 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             return null;
         }
 
-        $platform = $this->platformFor($server);
+        $platform = strtoupper(trim((string) ($filters['platform'] ?? ''))) ?: $this->platformFor($server);
 
-        if ($platform === null) {
+        if (!in_array($platform, ['PAPER', 'WATERFALL', 'VELOCITY'], true)) {
             return null;
         }
 
+        $requestedVersion = trim((string) ($filters['version'] ?? ''));
         $params = [
             'platform' => $platform,
-            'version' => MinecraftVersionResolver::resolve($server),
+            'version' => preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
+                ? $requestedVersion
+                : MinecraftVersionResolver::resolve($server),
             // The table paginator renders 20 records per page. Hangar accepts
             // that limit even though its version-listing endpoint permits up
             // to 25; using PAGE_SIZE here made its offset skip five records
@@ -183,21 +186,98 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             // separate ascending/descending option. "stars" is Hangar's own
             // community-rating signal, the closest match to the catalog
             // dropdown's "popularity" preset.
-            'sort' => match ($filters['sort'] ?? 'downloads') {
-                'updated' => 'updated',
-                'popularity' => 'stars',
-                default => 'downloads',
-            },
+            'sort' => in_array(($filters['sort'] ?? null), ['stars', 'recent_downloads', 'downloads', 'updated', 'newest'], true)
+                ? $filters['sort']
+                : 'downloads',
         ];
 
         if ($search) {
             $params['query'] = $search;
         }
-        if (!empty($filters['category'])) {
+        if (array_key_exists((string) ($filters['category'] ?? ''), $this->catalogCategoryOptions())) {
             $params['category'] = $filters['category'];
+        }
+        if (array_key_exists((string) ($filters['tag'] ?? ''), $this->catalogTagOptions())) {
+            $params['tag'] = $filters['tag'];
         }
 
         return $this->spec(self::OPERATION_SEARCH, ['params' => $params]);
+    }
+
+    /** @return array<string, string> */
+    public function catalogPlatformOptions(): array
+    {
+        return [
+            'PAPER' => 'Paper',
+            'WATERFALL' => 'Waterfall',
+            'VELOCITY' => 'Velocity',
+        ];
+    }
+
+    /** @return array<string, string> */
+    public function catalogTagOptions(): array
+    {
+        return [
+            'ADDON' => 'Addon',
+            'LIBRARY' => 'Library',
+            'SUPPORTS_FOLIA' => 'Supports Folia',
+        ];
+    }
+
+    /** @return array<string, string> */
+    public function catalogCategoryOptions(): array
+    {
+        return [
+            'admin_tools' => 'Admin Tools',
+            'chat' => 'Chat',
+            'dev_tools' => 'Developer Tools',
+            'economy' => 'Economy',
+            'gameplay' => 'Gameplay',
+            'games' => 'Games',
+            'protection' => 'Protection',
+            'role_playing' => 'Role Playing',
+            'world_management' => 'World Management',
+            'misc' => 'Miscellaneous',
+        ];
+    }
+
+    /** @return array<string, string> */
+    public function catalogVersionOptions(string $platform): array
+    {
+        $platform = strtoupper($platform);
+        if (!array_key_exists($platform, $this->catalogPlatformOptions())) {
+            return [];
+        }
+
+        try {
+            $groups = Cache::remember(
+                'pelican-mod-manager:hangar-catalog-versions:'.strtolower($platform),
+                now()->addDay(),
+                fn (): array => $this->getJson(
+                    '/platforms/'.$platform.'/versions',
+                    [],
+                    CacheProfile::Search->backgroundTimeoutSeconds(),
+                ),
+            );
+        } catch (Throwable) {
+            return [];
+        }
+
+        $options = [];
+        foreach ($groups as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+
+            foreach ([...(array) ($group['subVersions'] ?? []), $group['version'] ?? null] as $version) {
+                $value = trim((string) $version);
+                if ($value !== '') {
+                    $options[$value] = $value;
+                }
+            }
+        }
+
+        return $options;
     }
 
     /** @return array<string, mixed>|null */

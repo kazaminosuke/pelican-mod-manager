@@ -10,10 +10,20 @@ use Kazaminosuke\ModManager\Support\EggProfileResolver;
 
 enum MinecraftLoader: string implements HasIcon, HasLabel
 {
+    case Babric = 'babric';
+    case BtaBabric = 'bta-babric';
+    case Canvas = 'canvas';
     case NeoForge = 'neoforge';
     case Forge = 'forge';
     case Fabric = 'fabric';
     case Quilt = 'quilt';
+    case JavaAgent = 'java-agent';
+    case LegacyFabric = 'legacy-fabric';
+    case LiteLoader = 'liteloader';
+    case ModLoader = 'modloader';
+    case NilLoader = 'nilloader';
+    case Ornithe = 'ornithe';
+    case Rift = 'rift';
     case Folia = 'folia';
     case Purpur = 'purpur';
     case Paper = 'paper';
@@ -23,10 +33,21 @@ enum MinecraftLoader: string implements HasIcon, HasLabel
     case Velocity = 'velocity';
     case Waterfall = 'waterfall';
     case Bungeecord = 'bungeecord';
+    case Geyser = 'geyser';
 
     public function getLabel(): string
     {
-        return str($this->name)->title();
+        return match ($this) {
+            self::BtaBabric => 'BTA Babric',
+            self::JavaAgent => 'Java Agent',
+            self::LegacyFabric => 'Legacy Fabric',
+            self::LiteLoader => 'LiteLoader',
+            self::ModLoader => 'ModLoader',
+            self::NeoForge => 'NeoForge',
+            self::NilLoader => 'NilLoader',
+            self::Bungeecord => 'BungeeCord',
+            default => str($this->name)->title(),
+        };
     }
 
     public function getIcon(): string
@@ -45,6 +66,7 @@ enum MinecraftLoader: string implements HasIcon, HasLabel
             self::Velocity => 'mcloader-velocity',
             self::Waterfall => 'mcloader-waterfall',
             self::Bungeecord => 'mcloader-bungeecord',
+            default => 'tabler-package',
         };
     }
 

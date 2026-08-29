@@ -153,25 +153,65 @@ class ModrinthSourceSearchCacheTest extends TestCase
             ->andReturn(['hits' => [], 'total_hits' => 0]);
 
         (new ModrinthSource($this->sourceCache($this->cache(), $executor)))
-            ->search($this->server(), ProjectType::Datapack, filters: ['category' => 'worldgen']);
+            ->search($this->server(), ProjectType::Datapack, filters: ['categories' => ['worldgen']]);
     }
 
-    public function test_resource_pack_environment_and_category_filters_are_part_of_the_cache_spec(): void
+    public function test_resource_pack_category_groups_apply_but_environment_does_not(): void
     {
         $executor = Mockery::mock(SourceFetchExecutorInterface::class);
         $executor->shouldReceive('fetch')
             ->once()
             ->withArgs(function ($spec): bool {
                 $facets = json_decode($spec->arguments['query']['facets'], true, 512, JSON_THROW_ON_ERROR);
+                self::assertContains(['categories:vanilla-like'], $facets);
+                self::assertContains(['categories:blocks'], $facets);
                 self::assertContains(['categories:16x'], $facets);
-                self::assertContains('environment:client_only', $facets[array_key_last($facets)]);
+                self::assertFalse(collect($facets)->flatten()->contains(
+                    static fn (string $facet): bool => str_starts_with($facet, 'environment:'),
+                ));
 
                 return true;
             })
             ->andReturn(['hits' => [], 'total_hits' => 0]);
 
         (new ModrinthSource($this->sourceCache($this->cache(), $executor)))
-            ->search($this->server(), ProjectType::ResourcePack, filters: ['category' => '16x', 'environment' => 'client']);
+            ->search($this->server(), ProjectType::ResourcePack, filters: [
+                'categories' => ['vanilla-like'],
+                'features' => ['blocks'],
+                'resolutions' => ['16x'],
+                'environment' => 'client',
+            ]);
+    }
+
+    public function test_modrinth_advanced_facets_and_official_sort_are_mapped_server_side(): void
+    {
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                $facets = json_decode($spec->arguments['query']['facets'], true, 512, JSON_THROW_ON_ERROR);
+                self::assertContains(['open_source:true'], $facets);
+                self::assertContains(['disclosure_types!=telemetry'], $facets);
+                self::assertContains(['downloads:>=1000'], $facets);
+                self::assertContains(['follows:>=25'], $facets);
+                self::assertContains(['created_timestamp:>=2025-01-01T00:00:00Z'], $facets);
+                self::assertContains(['modified_timestamp:>=2025-06-01T00:00:00Z'], $facets);
+                self::assertSame('follows', $spec->arguments['query']['index']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new ModrinthSource($this->sourceCache($this->cache(), $executor)))
+            ->search($this->server(), ProjectType::Datapack, filters: [
+                'license' => '__open_source__',
+                'exclude_disclosures' => ['telemetry'],
+                'min_downloads' => '1000',
+                'min_follows' => '25',
+                'created_after' => '2025-01-01',
+                'updated_after' => '2025-06-01',
+                'sort' => 'follows',
+            ]);
     }
 
     public function test_a_different_page_is_a_distinct_cache_entry(): void

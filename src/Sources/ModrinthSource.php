@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Sources;
 use App\Models\Server;
 use Exception;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Cache;
 use Kazaminosuke\ModManager\Contracts\AuthoritativeBatchProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\BatchLatestVersionSourceInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
@@ -13,9 +14,9 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchHandlerInterface;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
-use Kazaminosuke\ModManager\Support\CacheProfile;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
 use Kazaminosuke\ModManager\Support\CachedSearchOperations;
+use Kazaminosuke\ModManager\Support\CacheProfile;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
@@ -23,6 +24,7 @@ use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Kazaminosuke\ModManager\Support\UpstreamHttp;
+use Throwable;
 
 class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchLatestVersionSourceInterface, ProjectMetadataPeekManyInterface, ProjectSourceInterface, SourceFetchAuthoritativeInterface, SourceFetchHandlerInterface
 {
@@ -129,6 +131,143 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         return $this->cachedSearch->search($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
+    /** @return array<string, string> */
+    public function catalogVersionOptions(): array
+    {
+        try {
+            $versions = Cache::remember(
+                'pelican-mod-manager:modrinth-catalog-game-versions',
+                now()->addDay(),
+                fn (): array => $this->metadata('/tag/game_version'),
+            );
+        } catch (Throwable) {
+            return [];
+        }
+
+        $options = [];
+        foreach ($versions as $version) {
+            if (!is_array($version) || ($version['version_type'] ?? null) !== 'release') {
+                continue;
+            }
+
+            $value = trim((string) ($version['version'] ?? ''));
+            if ($value !== '') {
+                $options[$value] = $value;
+            }
+        }
+
+        return $options;
+    }
+
+    /** @return array<string, string> */
+    public function catalogLoaderOptions(ProjectType $type, bool $platforms = false): array
+    {
+        if (!in_array($type, [ProjectType::Mod, ProjectType::Plugin], true)) {
+            return [];
+        }
+
+        try {
+            $loaders = Cache::remember(
+                'pelican-mod-manager:modrinth-catalog-loaders',
+                now()->addDay(),
+                fn (): array => $this->metadata('/tag/loader'),
+            );
+        } catch (Throwable) {
+            return [];
+        }
+
+        $pluginPlatforms = ['bungeecord', 'geyser', 'velocity', 'waterfall'];
+        $pluginLoaders = ['bukkit', 'folia', 'paper', 'purpur', 'spigot', 'sponge'];
+        $options = [];
+        foreach ($loaders as $loader) {
+            if (!is_array($loader)) {
+                continue;
+            }
+
+            $slug = trim((string) ($loader['name'] ?? ''));
+            $supportedTypes = array_map('strval', (array) ($loader['supported_project_types'] ?? []));
+            if ($slug === '' || !in_array('mod', $supportedTypes, true)) {
+                continue;
+            }
+
+            if ($type === ProjectType::Plugin) {
+                $allowed = $platforms ? $pluginPlatforms : $pluginLoaders;
+                if (!in_array($slug, $allowed, true)) {
+                    continue;
+                }
+            } elseif (in_array($slug, [...$pluginPlatforms, ...$pluginLoaders, 'datapack'], true)) {
+                continue;
+            }
+
+            $options[$slug] = $this->metadataLabel($slug);
+        }
+
+        return $options;
+    }
+
+    /** @return array<string, array<string, string>> */
+    public function catalogCategoryGroups(ProjectType $type): array
+    {
+        $metadataProjectType = in_array($type, [ProjectType::Plugin, ProjectType::Datapack], true)
+            ? ProjectType::Mod->value
+            : $type->value;
+        try {
+            $categories = Cache::remember(
+                'pelican-mod-manager:modrinth-catalog-categories',
+                now()->addDay(),
+                fn (): array => $this->metadata('/tag/category'),
+            );
+        } catch (Throwable) {
+            return [];
+        }
+
+        $groups = [];
+        foreach ($categories as $category) {
+            if (!is_array($category) || ($category['project_type'] ?? null) !== $metadataProjectType) {
+                continue;
+            }
+
+            $slug = trim((string) ($category['name'] ?? ''));
+            $header = trim((string) ($category['header'] ?? 'categories'));
+            if ($slug !== '') {
+                $groups[$header][$slug] = $this->metadataLabel($slug);
+            }
+        }
+
+        return $groups;
+    }
+
+    /** @return array<string, string> */
+    public function catalogLicenseOptions(): array
+    {
+        try {
+            $licenses = Cache::remember(
+                'pelican-mod-manager:modrinth-catalog-licenses',
+                now()->addDay(),
+                fn (): array => $this->metadata('/tag/license'),
+            );
+        } catch (Throwable) {
+            return [];
+        }
+
+        $options = [];
+        foreach ($licenses as $license) {
+            if (!is_array($license)) {
+                continue;
+            }
+
+            $short = trim((string) ($license['short'] ?? ''));
+            $name = trim((string) ($license['name'] ?? ''));
+            if ($short !== '') {
+                $options[$short] = $name !== '' && $name !== $short ? "$short — $name" : $short;
+            }
+        }
+
+        asort($options, SORT_NATURAL | SORT_FLAG_CASE);
+
+        return $options;
+    }
+
     public function hasCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
         return $this->cachedSearch->hasCached($this->buildSearchSpec($server, $type, $page, $search, $filters));
@@ -154,24 +293,37 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $projectType = in_array($type, [ProjectType::Plugin, ProjectType::Datapack], true)
             ? ProjectType::Mod->value
             : $type->value;
-        $minecraftVersion = MinecraftVersionResolver::resolve($server);
+        $requestedVersion = trim((string) ($filters['version'] ?? ''));
+        $minecraftVersion = preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
+            ? $requestedVersion
+            : MinecraftVersionResolver::resolve($server);
+        $selectedLoaders = $this->slugFilterValues($filters['loaders'] ?? []);
+        $selectedPlatforms = $this->slugFilterValues($filters['platforms'] ?? []);
 
         if ($type === ProjectType::ResourcePack) {
             $facetGroups = [["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
         } elseif ($type === ProjectType::Datapack) {
             $facetGroups = [['categories:datapack'], ["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
         } else {
-            if (!$minecraftLoader) {
+            if (!$minecraftLoader && $selectedLoaders === [] && $selectedPlatforms === []) {
                 return null;
             }
 
-            $facetGroups = [["categories:$minecraftLoader"], ["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
+            $selectedCompatibility = [...$selectedLoaders, ...$selectedPlatforms];
+            $facetGroups = [
+                array_map(static fn (string $loader): string => "categories:$loader", $selectedCompatibility !== [] ? $selectedCompatibility : [$minecraftLoader]),
+                ["versions:$minecraftVersion"],
+                ["project_type:{$projectType}"],
+            ];
         }
 
-        if (!empty($filters['category'])) {
-            $facetGroups[] = ['categories:'.$filters['category']];
+        foreach (['categories', 'features', 'resolutions'] as $filterKey) {
+            $values = $this->slugFilterValues($filters[$filterKey] ?? []);
+            if ($values !== []) {
+                $facetGroups[] = array_map(static fn (string $value): string => "categories:$value", $values);
+            }
         }
-        if (!empty($filters['environment'])) {
+        if ($type === ProjectType::Mod && !empty($filters['environment'])) {
             $facetGroups[] = $filters['environment'] === 'server'
                 ? [
                     'environment:client_and_server',
@@ -195,15 +347,38 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
                 ];
         }
 
+        $license = trim((string) ($filters['license'] ?? ''));
+        if ($license === '__open_source__') {
+            $facetGroups[] = ['open_source:true'];
+        } elseif ($license !== '' && preg_match('/^[A-Za-z0-9.+\-]{1,64}$/', $license) === 1) {
+            $facetGroups[] = ['license:'.$license];
+        }
+
+        $disclosures = ['ai_content', 'advertisements', 'epilepsy_triggers', 'system_interactions', 'telemetry', 'derivative_work', 'paid_features', 'archived'];
+        foreach ($this->allowedFilterValues($filters['exclude_disclosures'] ?? [], $disclosures) as $disclosure) {
+            $facetGroups[] = ['disclosure_types!='.$disclosure];
+        }
+
+        foreach (['downloads', 'follows'] as $numericFacet) {
+            $minimum = filter_var($filters['min_'.$numericFacet] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+            if ($minimum !== false && $minimum !== null) {
+                $facetGroups[] = ["$numericFacet:>=$minimum"];
+            }
+        }
+        foreach (['created_timestamp' => 'created_after', 'modified_timestamp' => 'updated_after'] as $facet => $filterKey) {
+            $date = trim((string) ($filters[$filterKey] ?? ''));
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1) {
+                $facetGroups[] = ["$facet:>={$date}T00:00:00Z"];
+            }
+        }
+
         $data = [
             'offset' => ($page - 1) * 20,
             'limit' => 20,
             'facets' => json_encode($facetGroups),
-            'index' => match ($filters['sort'] ?? 'downloads') {
-                'updated' => 'updated',
-                'popularity' => 'relevance',
-                default => 'downloads',
-            },
+            'index' => in_array(($filters['sort'] ?? null), ['relevance', 'downloads', 'follows', 'newest', 'updated'], true)
+                ? $filters['sort']
+                : 'downloads',
         ];
 
         if ($search) {
@@ -211,6 +386,58 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         }
 
         return $this->spec(self::OPERATION_SEARCH, ['query' => $data]);
+    }
+
+    /** @return array<int, string> */
+    private function stringFilterValues(mixed $value): array
+    {
+        $values = is_array($value) ? $value : [$value];
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn (mixed $item): string => is_scalar($item) ? trim((string) $item) : '',
+            $values,
+        ))));
+    }
+
+    /** @param array<int, string> $allowed
+     *  @return array<int, string>
+     */
+    private function allowedFilterValues(mixed $value, array $allowed): array
+    {
+        return array_values(array_intersect($this->stringFilterValues($value), $allowed));
+    }
+
+    /** @return array<int, string> */
+    private function slugFilterValues(mixed $value): array
+    {
+        return array_values(array_filter(
+            $this->stringFilterValues($value),
+            static fn (string $item): bool => preg_match('/^[a-z0-9][a-z0-9+._-]{0,63}$/', $item) === 1,
+        ));
+    }
+
+    /** @return array<int, mixed> */
+    private function metadata(string $path): array
+    {
+        $payload = $this->http(10.0)->throw()->get(self::BASE_URL.$path)->json();
+
+        return is_array($payload) ? $payload : [];
+    }
+
+    private function metadataLabel(string $slug): string
+    {
+        return match ($slug) {
+            'bta-babric' => 'BTA Babric',
+            'bungeecord' => 'BungeeCord',
+            'java-agent' => 'Java Agent',
+            'legacy-fabric' => 'Legacy Fabric',
+            'liteloader' => 'LiteLoader',
+            'modloader' => 'ModLoader',
+            'neoforge' => 'NeoForge',
+            'nilloader' => 'NilLoader',
+            'optifine' => 'OptiFine',
+            default => str($slug)->replace('-', ' ')->title()->toString(),
+        };
     }
 
     /**
@@ -466,6 +693,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $projectIds = array_values(array_unique($projectIds));
         sort($projectIds);
         $spec = $this->spec(self::OPERATION_PROJECTS, ['project_ids' => $projectIds]);
+
         return $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
     }
 
