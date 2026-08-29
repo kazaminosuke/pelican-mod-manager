@@ -45,6 +45,8 @@ final class PluginIdentityTest extends TestCase
             'MOD_MANAGER_DATAPACK_NAV_SORT',
             'MOD_MANAGER_RESOURCEPACK_NAV_SORT',
             'MOD_MANAGER_CURSEFORGE_API_KEY',
+            'MOD_MANAGER_MODRINTH_TOKEN',
+            'MOD_MANAGER_HANGAR_API_KEY',
             'MOD_MANAGER_GITHUB_TOKEN',
         ] as $key) {
             self::assertStringContainsString("env('{$key}'", $config);

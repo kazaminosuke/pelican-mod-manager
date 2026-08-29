@@ -9,6 +9,8 @@ return [
         'resourcepack' => env('MOD_MANAGER_RESOURCEPACK_NAV_SORT', 13),
     ],
     'curseforge_api_key' => env('MOD_MANAGER_CURSEFORGE_API_KEY'),
+    'modrinth_token' => env('MOD_MANAGER_MODRINTH_TOKEN'),
+    'hangar_api_key' => env('MOD_MANAGER_HANGAR_API_KEY'),
     'github_token' => env('MOD_MANAGER_GITHUB_TOKEN'),
     // Local-only Performance Profiler + existing timing logs. Leave false
     // in production: the Mod Manager overlay and Livewire/image hooks are

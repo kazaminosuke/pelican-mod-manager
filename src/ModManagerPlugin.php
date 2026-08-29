@@ -207,6 +207,18 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 ->password()
                 ->revealable()
                 ->default(fn () => config('pelican-mod-manager.curseforge_api_key')),
+            TextInput::make('modrinth_token')
+                ->label(trans('pelican-mod-manager::strings.settings.modrinth_token'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.modrinth_token_helper'))
+                ->password()
+                ->revealable()
+                ->default(fn () => config('pelican-mod-manager.modrinth_token')),
+            TextInput::make('hangar_api_key')
+                ->label(trans('pelican-mod-manager::strings.settings.hangar_api_key'))
+                ->helperText(trans('pelican-mod-manager::strings.settings.hangar_api_key_helper'))
+                ->password()
+                ->revealable()
+                ->default(fn () => config('pelican-mod-manager.hangar_api_key')),
             TextInput::make('github_token')
                 ->label(trans('pelican-mod-manager::strings.settings.github_token'))
                 ->helperText(trans('pelican-mod-manager::strings.settings.github_token_helper'))
@@ -311,6 +323,8 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             'MOD_MANAGER_DATAPACK_NAV_SORT' => $data['datapack_nav_sort'],
             'MOD_MANAGER_RESOURCEPACK_NAV_SORT' => $data['resourcepack_nav_sort'],
             'MOD_MANAGER_CURSEFORGE_API_KEY' => $data['curseforge_api_key'] ?? '',
+            'MOD_MANAGER_MODRINTH_TOKEN' => $data['modrinth_token'] ?? '',
+            'MOD_MANAGER_HANGAR_API_KEY' => $data['hangar_api_key'] ?? '',
             'MOD_MANAGER_GITHUB_TOKEN' => $data['github_token'] ?? '',
             'MOD_MANAGER_ALLOW_USER_EGG_PROFILE_EDIT' => ($data['allow_user_egg_profile_edit'] ?? false) ? 'true' : 'false',
             'MOD_MANAGER_ALLOW_USER_PROJECT_INSTALL' => ($data['allow_user_project_install'] ?? false) ? 'true' : 'false',

@@ -6,6 +6,7 @@ use App\Models\Server;
 use Exception;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\BatchLatestVersionSourceInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
@@ -586,7 +587,8 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             $aliases = [];
 
             try {
-                $responses = Http::pool(function (Pool $pool) use ($chunk, $remaining, &$aliases) {
+                $headers = $this->authHeaders();
+                $responses = Http::pool(function (Pool $pool) use ($chunk, $remaining, $headers, &$aliases) {
                     $poolRequests = [];
 
                     foreach (array_values($chunk) as $index => $projectId) {
@@ -594,6 +596,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
                         $aliases[$alias] = $projectId;
                         $poolRequests[] = $pool->as($alias)
                             ->asJson()
+                            ->withHeaders($headers)
                             ->timeout($remaining)
                             ->connectTimeout(min(1.0, $remaining))
                             ->get(self::BASE_URL."/projects/$projectId");
@@ -911,7 +914,8 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         $aliases = [];
 
         try {
-            $responses = Http::pool(function (Pool $pool) use ($projectIds, $params, $timeoutSeconds, &$aliases) {
+            $headers = $this->authHeaders();
+            $responses = Http::pool(function (Pool $pool) use ($projectIds, $params, $timeoutSeconds, $headers, &$aliases) {
                 $poolRequests = [];
 
                 foreach ($projectIds as $index => $projectId) {
@@ -919,6 +923,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
                     $aliases[$alias] = $projectId;
                     $poolRequests[] = $pool->as($alias)
                         ->asJson()
+                        ->withHeaders($headers)
                         ->timeout($timeoutSeconds)
                         ->connectTimeout(min(1.0, $timeoutSeconds))
                         ->get(self::BASE_URL."/projects/$projectId/versions", $params);
@@ -1030,6 +1035,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
     {
         $timeoutSeconds = max(0.1, $timeoutSeconds);
         $response = Http::asJson()
+            ->withHeaders($this->authHeaders())
             ->timeout($timeoutSeconds)
             ->connectTimeout(min(1.0, $timeoutSeconds))
             ->throw()
@@ -1041,6 +1047,44 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         }
 
         return $response;
+    }
+
+    /** @return array<string, string> */
+    private function authHeaders(): array
+    {
+        $apiKey = trim((string) config('pelican-mod-manager.hangar_api_key', ''));
+        if ($apiKey === '') {
+            return [];
+        }
+
+        $cacheKey = 'pelican-mod-manager:hangar-jwt:'.hash('sha256', $apiKey);
+        $token = Cache::get($cacheKey);
+
+        if (!is_string($token) || $token === '') {
+            try {
+                $response = Http::asJson()
+                    ->timeout(5)
+                    ->connectTimeout(1)
+                    ->withOptions(['query' => ['apiKey' => $apiKey]])
+                    ->post(self::BASE_URL.'/authenticate')
+                    ->throw()
+                    ->json();
+            } catch (Throwable) {
+                // The official endpoint requires the key in the query string.
+                // Never retain its request exception, whose URL may contain it.
+                throw new Exception('Hangar API authentication failed.');
+            }
+
+            $token = is_array($response) ? ($response['token'] ?? null) : null;
+            if (!is_string($token) || $token === '') {
+                throw new Exception('Hangar API authentication failed.');
+            }
+
+            $expiresInMs = is_array($response) ? (int) ($response['expiresIn'] ?? 0) : 0;
+            Cache::put($cacheKey, $token, max(60, intdiv($expiresInMs, 1000) - 60));
+        }
+
+        return ['Authorization' => 'HangarAuth '.$token];
     }
 
     protected function remainingTimeout(float $deadline): float

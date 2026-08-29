@@ -927,7 +927,10 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
 
     private function http(float $timeoutSeconds): PendingRequest
     {
-        return UpstreamHttp::json()
+        $token = trim((string) config('pelican-mod-manager.modrinth_token', ''));
+        $headers = $token !== '' ? ['Authorization' => $token] : [];
+
+        return UpstreamHttp::json($headers)
             ->timeout($timeoutSeconds)
             ->connectTimeout(min(1.0, $timeoutSeconds));
     }
