@@ -74,7 +74,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
         }
     }
 
-    public function test_catalog_toolbar_uses_a_page_action_and_single_view_toggle(): void
+    public function test_catalog_toolbar_uses_column_manager_and_single_view_toggle(): void
     {
         $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
         $plugin = (string) file_get_contents(dirname(__DIR__, 3).'/src/ModManagerPlugin.php');
@@ -83,8 +83,8 @@ final class ModManagerBrowserAssetsTest extends TestCase
 
         self::assertStringNotContainsString('mmr-table-action-registration', $page);
         self::assertStringNotContainsString("mountTableAction(\\'catalog_compatibility_override\\')", $plugin);
-        self::assertStringContainsString("mountAction(\\'catalogCompatibilityOverride\\')", $plugin);
-        self::assertStringContainsString('data-mmr-compatibility-override', $plugin);
+        self::assertStringNotContainsString("mountAction(\\'catalogCompatibilityOverride\\')", $plugin);
+        self::assertStringNotContainsString('data-mmr-compatibility-override', $plugin);
         self::assertSame(1, substr_count($plugin, 'data-mmr-view-toggle'));
         self::assertStringNotContainsString('mmr-catalog-toolbar-actions', $plugin);
         self::assertStringNotContainsString('mmr-catalog-view-toggle', $plugin);
@@ -94,6 +94,8 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('.mmr-catalog-toolbar-button{min-height:2.25rem;border:0;', $css);
         self::assertStringContainsString('.mmr-catalog-toolbar-button:focus-visible{outline:2px solid', $css);
         self::assertStringNotContainsString('[data-mmr-override-active="true"]{border-color:', $css);
+        self::assertStringContainsString('.fi-ta-col-manager-dropdown{order:3;}', $css);
+        self::assertStringContainsString('[data-mmr-view-toggle]{order:4;}', $css);
     }
 
     public function test_catalog_list_keeps_the_original_table_columns_and_panel_is_css_scoped(): void
@@ -105,11 +107,16 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString('use Filament\\Tables\\Columns\\Layout\\Stack;', $page);
         self::assertStringContainsString("->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])", $page);
         self::assertStringContainsString('->description(function (array $record): ?string {', $page);
+        self::assertSame(4, substr_count($page, '->toggleable()'));
         self::assertStringNotContainsString('mmr-record-', $page);
         self::assertStringNotContainsString('.fi-ta-record-content-ctn', $css);
         self::assertStringContainsString('.mmr-project-icon-cell .fi-ta-image img{display:block;inline-size:4.5cqi;', $css);
         self::assertStringContainsString('[data-mmr-catalog-view="panel"] .fi-ta-table>tbody{display:grid;', $css);
-        self::assertStringContainsString('repeat(auto-fit,minmax(min(100%,16.5rem),1fr))', $css);
+        self::assertStringContainsString('@container (min-width:36rem)', $css);
+        self::assertStringContainsString('repeat(2,minmax(0,1fr))', $css);
+        self::assertStringContainsString('@container (min-width:54rem)', $css);
+        self::assertStringContainsString('repeat(3,minmax(0,1fr))', $css);
+        self::assertStringNotContainsString('repeat(auto-fit', $css);
     }
 
     public function test_all_manager_assets_have_a_deterministic_compressed_size_budget(): void

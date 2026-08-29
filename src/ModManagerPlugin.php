@@ -86,11 +86,8 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // concrete page class it needs to appear on.
         $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
         $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
-        $overrideLabel = e(json_encode(trans('pelican-mod-manager::strings.table.override.label'), JSON_THROW_ON_ERROR));
-        $overrideActiveLabel = e(json_encode(trans('pelican-mod-manager::strings.table.override.active'), JSON_THROW_ON_ERROR));
         $switchToListLabel = e(trans('pelican-mod-manager::strings.table.view.switch_to_list'));
         $switchToPanelLabel = e(trans('pelican-mod-manager::strings.table.view.switch_to_panel'));
-        $overrideIcon = app(BladeIconsFactory::class)->svg('tabler-adjustments-horizontal', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
         $listIcon = app(BladeIconsFactory::class)->svg('tabler-list', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
         $panelIcon = app(BladeIconsFactory::class)->svg('tabler-layout-grid', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
 
@@ -104,11 +101,6 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 .'<option :value="value" x-text="label"></option>'
                 .'</template>'
                 .'</select></div>'
-                .'<button type="button" class="mmr-catalog-toolbar-button mmr-catalog-toolbar-icon-button" data-mmr-compatibility-override x-cloak x-show="$wire.activeTab !== \'installed\'" wire:click="mountAction(\'catalogCompatibilityOverride\')"'
-                .' :aria-label="($wire.minecraftVersionOverride || $wire.loaderOverride) ? '.$overrideActiveLabel.' : '.$overrideLabel.'"'
-                .' :title="($wire.minecraftVersionOverride || $wire.loaderOverride) ? '.$overrideActiveLabel.' : '.$overrideLabel.'"'
-                .' :data-mmr-override-active="($wire.minecraftVersionOverride || $wire.loaderOverride) ? \'true\' : \'false\'">'
-                .$overrideIcon.'</button>'
                 .'<button type="button" class="mmr-catalog-toolbar-button mmr-catalog-toolbar-icon-button" data-mmr-view-toggle x-cloak x-show="$wire.activeTab !== \'installed\'"'
                 .' data-mmr-view-list-label="'.$switchToListLabel.'" data-mmr-view-panel-label="'.$switchToPanelLabel.'"'
                 .' aria-label="'.$switchToPanelLabel.'" title="'.$switchToPanelLabel.'">'
