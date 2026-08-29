@@ -161,18 +161,34 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             return null;
         }
 
-        $platform = strtoupper(trim((string) ($filters['platform'] ?? ''))) ?: $this->platformFor($server);
+        $selectedPlatform = strtoupper(trim((string) ($filters['platform'] ?? '')));
+        $automaticPlatform = $this->platformFor($server);
+        $platform = $selectedPlatform ?: $automaticPlatform;
 
         if (!in_array($platform, ['PAPER', 'WATERFALL', 'VELOCITY'], true)) {
             return null;
         }
 
         $requestedVersion = trim((string) ($filters['version'] ?? ''));
-        $params = [
-            'platform' => $platform,
-            'version' => preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
-                ? $requestedVersion
-                : MinecraftVersionResolver::resolve($server),
+        $explicitVersion = preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
+            ? $requestedVersion
+            : null;
+        // An automatically detected version belongs to the automatically
+        // detected platform. Hangar's proxy platforms use their own version
+        // domains (for example Velocity 3.x/4.x), so carrying a Paper
+        // Minecraft version across an explicit platform change creates a
+        // contradictory query. An explicitly selected version remains
+        // authoritative for the selected platform.
+        $automaticVersion = $selectedPlatform === '' || $selectedPlatform === $automaticPlatform
+            ? MinecraftVersionResolver::resolve($server)
+            : null;
+        $params = ['platform' => $platform];
+
+        if (($version = $explicitVersion ?? $automaticVersion) !== null) {
+            $params['version'] = $version;
+        }
+
+        $params += [
             // The table paginator renders 20 records per page. Hangar accepts
             // that limit even though its version-listing endpoint permits up
             // to 25; using PAGE_SIZE here made its offset skip five records

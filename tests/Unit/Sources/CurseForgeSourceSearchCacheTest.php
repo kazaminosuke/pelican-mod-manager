@@ -136,6 +136,27 @@ class CurseForgeSourceSearchCacheTest extends TestCase
             ]);
     }
 
+    public function test_category_filter_keeps_automatic_mod_version_and_loader_params(): void
+    {
+        $this->bindApiKey('test-key');
+        $server = $this->server();
+        CatalogCompatibilityOverride::set($server, '1.21.1', 'neoforge');
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function (SourceFetchSpec $spec): bool {
+                self::assertSame('1.21.1', $spec->arguments['params']['gameVersion']);
+                self::assertSame(6, $spec->arguments['params']['modLoaderType']);
+                self::assertSame('[421]', $spec->arguments['params']['categoryIds']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new CurseForgeSource($this->sourceCache($this->cache(), $executor)))
+            ->search($server, ProjectType::Mod, filters: ['categories' => ['421']]);
+    }
+
     public function test_mod_search_maps_multiple_official_loader_types(): void
     {
         $this->bindApiKey('test-key');

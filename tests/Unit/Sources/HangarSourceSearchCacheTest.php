@@ -116,4 +116,35 @@ class HangarSourceSearchCacheTest extends TestCase
             ]),
         );
     }
+
+    public function test_explicit_platform_change_does_not_reuse_an_incompatible_automatic_version(): void
+    {
+        $server = Mockery::mock(Server::class);
+        CatalogCompatibilityOverride::set($server, '1.21.11', 'paper');
+
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                self::assertSame([
+                    'platform' => 'VELOCITY',
+                    'limit' => 20,
+                    'offset' => 0,
+                    'sort' => 'downloads',
+                    'tag' => 'LIBRARY',
+                ], $spec->arguments['params']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $operations = new InstalledOperationManager($cache, app('config'));
+        $source = new HangarSource(new SourceCache($cache, $operations, $executor));
+
+        $source->search($server, ProjectType::Plugin, filters: [
+            'platform' => 'VELOCITY',
+            'tag' => 'LIBRARY',
+        ]);
+    }
 }

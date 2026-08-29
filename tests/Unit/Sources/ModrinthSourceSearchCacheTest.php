@@ -13,6 +13,7 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Mockery;
@@ -52,6 +53,7 @@ class ModrinthSourceSearchCacheTest extends TestCase
     protected function tearDown(): void
     {
         Container::setInstance($this->previousContainer);
+        CatalogCompatibilityOverride::clear();
         MinecraftVersionResolver::clear();
         Mockery::close();
 
@@ -133,6 +135,32 @@ class ModrinthSourceSearchCacheTest extends TestCase
             ['hits' => [], 'total_hits' => 0],
             $source->search($this->server(), ProjectType::ResourcePack),
         );
+    }
+
+    public function test_explicit_catalog_filters_keep_the_automatic_mod_compatibility_facets(): void
+    {
+        $server = $this->server();
+        CatalogCompatibilityOverride::set($server, '1.21.1', 'neoforge');
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                $facets = json_decode($spec->arguments['query']['facets'], true, 512, JSON_THROW_ON_ERROR);
+
+                self::assertContains(['categories:neoforge'], $facets);
+                self::assertContains(['versions:1.21.1'], $facets);
+                self::assertContains(['categories:library'], $facets);
+                self::assertContains('environment:server_only', collect($facets)->flatten()->all());
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new ModrinthSource($this->sourceCache($this->cache(), $executor)))
+            ->search($server, ProjectType::Mod, filters: [
+                'categories' => ['library'],
+                'environment' => 'server',
+            ]);
     }
 
     public function test_datapack_search_uses_modrinths_real_mod_type_and_datapack_category(): void
