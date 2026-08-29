@@ -8,7 +8,67 @@
     window.__mmrRuntimeInstalled = true;
 
     const projectIconPlaceholder = document.currentScript?.dataset.mmrProjectIconPlaceholder ?? '';
+    const catalogViewStorageKey = 'pelican-mod-manager.catalog-view';
     let headerScrollFrame = null;
+    let catalogViewFrame = null;
+
+    const storedCatalogView = () => {
+        try {
+            return localStorage.getItem(catalogViewStorageKey) === 'panel' ? 'panel' : 'list';
+        } catch (_) {
+            return 'list';
+        }
+    };
+
+    const applyCatalogView = () => {
+        catalogViewFrame = null;
+        const wrapper = document.querySelector('.mmr-table-scroll-ctn');
+        const toggles = [...document.querySelectorAll('[data-mmr-view-mode]')];
+        if (!wrapper || toggles.length === 0) {
+            wrapper?.removeAttribute('data-mmr-catalog-view');
+            return;
+        }
+
+        const view = storedCatalogView();
+        wrapper.dataset.mmrCatalogView = view;
+        toggles.forEach((toggle) => {
+            const active = toggle.dataset.mmrViewMode === view;
+            toggle.setAttribute('aria-pressed', active ? 'true' : 'false');
+            toggle.dataset.mmrViewActive = active ? 'true' : 'false';
+        });
+    };
+
+    const queueCatalogView = () => {
+        if (catalogViewFrame !== null) {
+            return;
+        }
+        catalogViewFrame = requestAnimationFrame(applyCatalogView);
+    };
+
+    document.addEventListener('click', (event) => {
+        const toggle = event.target instanceof Element ? event.target.closest('[data-mmr-view-mode]') : null;
+        if (!toggle) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        try {
+            localStorage.setItem(catalogViewStorageKey, toggle.dataset.mmrViewMode === 'panel' ? 'panel' : 'list');
+        } catch (_) {
+            // A locked-down browser may disable storage; the current view can
+            // still change for this rendered page.
+        }
+        const wrapper = document.querySelector('.mmr-table-scroll-ctn');
+        if (wrapper) {
+            wrapper.dataset.mmrCatalogView = toggle.dataset.mmrViewMode === 'panel' ? 'panel' : 'list';
+        }
+        queueCatalogView();
+    }, true);
+
+    new MutationObserver(queueCatalogView).observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener('livewire:navigated', queueCatalogView);
+    queueCatalogView();
 
     // Image errors do not bubble, so one capture-phase listener replaces a
     // large inline onerror attribute on every catalog row and survives morphs.
@@ -62,6 +122,10 @@
         if (headerScrollFrame !== null) {
             cancelAnimationFrame(headerScrollFrame);
             headerScrollFrame = null;
+        }
+        if (catalogViewFrame !== null) {
+            cancelAnimationFrame(catalogViewFrame);
+            catalogViewFrame = null;
         }
     });
 })();
