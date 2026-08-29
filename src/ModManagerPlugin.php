@@ -86,6 +86,8 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // concrete page class it needs to appear on.
         $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
         $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
+        $overrideLabel = e(json_encode(trans('pelican-mod-manager::strings.table.override.label'), JSON_THROW_ON_ERROR));
+        $overrideActiveLabel = e(json_encode(trans('pelican-mod-manager::strings.table.override.active'), JSON_THROW_ON_ERROR));
 
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
@@ -93,10 +95,18 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 '<div class="mmr-catalog-sort-toolbar" x-cloak x-show="$wire.activeTab !== \'installed\'">'
                 .'<label for="mmr-catalog-sort" class="fi-sr-only">'.e(trans('pelican-mod-manager::strings.table.sort.label')).'</label>'
                 .'<select id="mmr-catalog-sort" wire:model.live="catalogSort" class="mmr-catalog-sort-select">'
-                .'<option value="downloads">'.e(trans('pelican-mod-manager::strings.table.sort.downloads')).'</option>'
-                .'<option value="updated">'.e(trans('pelican-mod-manager::strings.table.sort.updated')).'</option>'
-                .'<option value="popularity">'.e(trans('pelican-mod-manager::strings.table.sort.popularity')).'</option>'
-                .'</select></div>',
+                .'<template x-for="([value, label]) in Object.entries($wire.catalogSortOptions || {})" :key="value">'
+                .'<option :value="value" x-text="label"></option>'
+                .'</template>'
+                .'</select></div>'
+                .'<div class="mmr-catalog-toolbar-actions" x-cloak x-show="$wire.activeTab !== \'installed\'">'
+                .'<button type="button" class="mmr-catalog-toolbar-button" wire:click="mountTableAction(\'catalog_compatibility_override\')"'
+                .' :data-mmr-override-active="($wire.minecraftVersionOverride || $wire.loaderOverride) ? \'true\' : \'false\'">'
+                .'<span x-text="($wire.minecraftVersionOverride || $wire.loaderOverride) ? '.$overrideActiveLabel.' : '.$overrideLabel.'"></span></button>'
+                .'<div class="mmr-catalog-view-toggle" role="group" aria-label="'.e(trans('pelican-mod-manager::strings.table.view.label')).'">'
+                .'<button type="button" class="mmr-catalog-toolbar-button" data-mmr-view-mode="list">'.e(trans('pelican-mod-manager::strings.table.view.list')).'</button>'
+                .'<button type="button" class="mmr-catalog-toolbar-button" data-mmr-view-mode="panel">'.e(trans('pelican-mod-manager::strings.table.view.panel')).'</button>'
+                .'</div></div>',
             ),
             $pageClasses,
         );
@@ -491,8 +501,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         InstalledMetadataResetService $resets,
         DaemonFileRepository $fileRepository,
         ?User $actor,
-    ): void
-    {
+    ): void {
         $clearedServers = [];
         $failureCount = 0;
 
@@ -612,5 +621,4 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
 
         return $types;
     }
-
 }

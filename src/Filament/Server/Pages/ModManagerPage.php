@@ -11,6 +11,7 @@ use App\Traits\Filament\BlockAccessInConflict;
 use Exception;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
@@ -30,8 +31,11 @@ use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\Indicator;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -53,6 +57,8 @@ use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
+use Kazaminosuke\ModManager\Sources\HangarSource;
+use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
@@ -84,6 +90,7 @@ class ModManagerPage extends Page implements HasTable
         InteractsWithTable::bootedInteractsWithTable as protected baseBootedInteractsWithTable;
         InteractsWithTable::loadTable as protected baseLoadTable;
         InteractsWithTable::resetTableColumnManager as protected baseResetTableColumnManager;
+        InteractsWithTable::removeTableFilter as protected baseRemoveTableFilter;
         InteractsWithTable::updatedTableFilters as protected baseUpdatedTableFilters;
         InteractsWithTable::updatedTableSearch as protected baseUpdatedTableSearch;
     }
@@ -161,7 +168,15 @@ class ModManagerPage extends Page implements HasTable
      * The catalog sort is deliberately separate from Filament's table filters:
      * it changes result ordering but never narrows the result set.
      */
+    #[Url(as: 'sort', history: true, keep: false, except: 'downloads')]
     public string $catalogSort = 'downloads';
+
+    /** @var array<string, string> Browser-visible options for the toolbar select. */
+    public array $catalogSortOptions = [];
+
+    /** Catalog filters are shareable and participate in browser back/forward. */
+    #[Url(as: 'filters', history: true, keep: false)]
+    public ?array $tableFilters = null;
 
     /** Catalog source only; Installed intentionally clears this query value. */
     #[Url(as: 'source', history: true, keep: false)]
@@ -412,8 +427,7 @@ class ModManagerPage extends Page implements HasTable
             'source' => $this->activeTab,
             'page' => (int) $this->getTablePage(),
             'search' => (string) $this->getTableSearch(),
-            'filter_category' => $filterState['catalog_category']['value'] ?? null,
-            'filter_environment' => $filterState['catalog_environment']['value'] ?? null,
+            'filters' => $filterState,
             'sort' => $this->catalogSort,
             'table_loaded' => (bool) $this->isTableLoaded,
             'php_ms' => $this->getModManagerTimingElapsedMs(),
@@ -493,10 +507,6 @@ class ModManagerPage extends Page implements HasTable
 
     public function mount(): void
     {
-        $this->catalogSort = $this->normalizeCatalogSort(
-            session()->get($this->getCatalogSortSessionKey(), 'downloads'),
-        );
-
         $this->refreshInstalledScanDataReady();
         // HasTabs resolves and then caches getTabs() while choosing the default
         // tab. Read the persisted scan result first, otherwise that first
@@ -504,6 +514,11 @@ class ModManagerPage extends Page implements HasTable
         // the whole component request (including after a browser reload).
         $this->loadDefaultActiveTab();
         $this->restoreCatalogStateFromUrl();
+        $requestedSort = request()->query->has('sort')
+            ? $this->catalogSort
+            : session()->get($this->getCatalogSortSessionKey(), 'downloads');
+        $this->refreshCatalogSortOptions();
+        $this->catalogSort = $this->normalizeCatalogSort($requestedSort);
         $this->rejectUnauthorizedInstalledTab();
         $this->normalizeCatalogCompatibilityOverrides();
         $this->configureCatalogCompatibilityOverride();
@@ -667,12 +682,9 @@ class ModManagerPage extends Page implements HasTable
             return false;
         }
 
-        $filterState = $this->tableFilters ?? [];
-        $category = $filterState['catalog_category']['value'] ?? null;
-        $environment = $filterState['catalog_environment']['value'] ?? null;
-
-        return ($category === null || $category === '')
-            && ($environment === null || $environment === '');
+        return !collect($this->tableFilters ?? [])->flatten()->contains(
+            static fn (mixed $value): bool => is_scalar($value) && trim((string) $value) !== '',
+        );
     }
 
     protected function currentCatalogPageForWarm(): int
@@ -827,11 +839,37 @@ class ModManagerPage extends Page implements HasTable
     /** @return array<string, string> */
     protected function getCatalogSortOptions(): array
     {
-        return [
-            'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
-            'updated' => trans('pelican-mod-manager::strings.table.sort.updated'),
-            'popularity' => trans('pelican-mod-manager::strings.table.sort.popularity'),
-        ];
+        return match ($this->getCurrentSource()?->getKey()) {
+            ProjectSourceKey::Modrinth => [
+                'relevance' => trans('pelican-mod-manager::strings.table.sort.relevance'),
+                'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
+                'follows' => trans('pelican-mod-manager::strings.table.sort.follows'),
+                'newest' => trans('pelican-mod-manager::strings.table.sort.newest'),
+                'updated' => trans('pelican-mod-manager::strings.table.sort.updated'),
+            ],
+            ProjectSourceKey::CurseForge => [
+                'relevance' => trans('pelican-mod-manager::strings.table.sort.relevance'),
+                'popularity' => trans('pelican-mod-manager::strings.table.sort.popularity'),
+                'updated' => trans('pelican-mod-manager::strings.table.sort.updated'),
+                'created' => trans('pelican-mod-manager::strings.table.sort.created'),
+                'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
+            ],
+            ProjectSourceKey::Hangar => [
+                'stars' => trans('pelican-mod-manager::strings.table.sort.stars'),
+                'recent_downloads' => trans('pelican-mod-manager::strings.table.sort.recent_downloads'),
+                'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
+                'updated' => trans('pelican-mod-manager::strings.table.sort.updated'),
+                'newest' => trans('pelican-mod-manager::strings.table.sort.newest'),
+            ],
+            default => [
+                'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
+            ],
+        };
+    }
+
+    protected function refreshCatalogSortOptions(): void
+    {
+        $this->catalogSortOptions = $this->getCatalogSortOptions();
     }
 
     protected function normalizeCatalogSort(mixed $sort): string
@@ -853,10 +891,11 @@ class ModManagerPage extends Page implements HasTable
     {
         $this->isTableLoaded = false;
         $this->catalogSort = $this->normalizeCatalogSort($sort);
+        $this->refreshCatalogSortOptions();
         session()->put($this->getCatalogSortSessionKey(), $this->catalogSort);
 
         $this->resetPage(self::TABLE_PAGINATOR_NAME);
-        $this->resetTable();
+        $this->flushCachedTableRecords();
         $this->dispatchCatalogWarm();
     }
 
@@ -917,6 +956,9 @@ class ModManagerPage extends Page implements HasTable
         // a source tab, so discard them before Filament rebuilds the form.
         // Catalog sorting is an independent Livewire property and stays intact.
         $this->tableFilters = [];
+        $this->tableDeferredFilters = [];
+        $this->refreshCatalogSortOptions();
+        $this->catalogSort = $this->normalizeCatalogSort($this->catalogSort);
         $this->resetTable();
         $this->queueHeaderScroll();
         $this->dispatchCatalogWarm();
@@ -1099,6 +1141,41 @@ class ModManagerPage extends Page implements HasTable
     {
         $this->isTableLoaded = false;
         $this->baseUpdatedTableFilters();
+    }
+
+    public function removeTableFilter(string $filterName, ?string $field = null, bool $isRemovingAllFilters = false): void
+    {
+        if (is_string($field) && str_starts_with($field, 'value__')) {
+            $value = substr($field, 7);
+            $values = $this->catalogFilterValues($this->tableFilters ?? [], $filterName);
+            $this->tableFilters[$filterName]['values'] = array_values(array_filter(
+                $values,
+                static fn (string $candidate): bool => $candidate !== $value,
+            ));
+            $this->isTableLoaded = false;
+            $this->tableDeferredFilters = $this->tableFilters;
+            $this->applyTableFilters();
+            $this->flushCachedTableRecords();
+
+            return;
+        }
+
+        if ($filterName === 'catalog_advanced' && is_string($field) && str_starts_with($field, 'exclude__')) {
+            $value = substr($field, 9);
+            $values = $this->catalogAdvancedFilterValues($this->tableFilters ?? [], 'exclude_disclosures');
+            $this->tableFilters['catalog_advanced']['exclude_disclosures'] = array_values(array_filter(
+                $values,
+                static fn (string $candidate): bool => $candidate !== $value,
+            ));
+            $this->isTableLoaded = false;
+            $this->tableDeferredFilters = $this->tableFilters;
+            $this->applyTableFilters();
+            $this->flushCachedTableRecords();
+
+            return;
+        }
+
+        $this->baseRemoveTableFilter($filterName, $field, $isRemovingAllFilters);
     }
 
     /**
@@ -1375,7 +1452,7 @@ class ModManagerPage extends Page implements HasTable
                     $this->installedFilesCount = $installed === null ? 0 : 1;
                     $this->installedScanDataReady = true;
                 } catch (Exception $exception) {
-                    if (function_exists('report') && app()->bound(\Illuminate\Contracts\Debug\ExceptionHandler::class)) {
+                    if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
                         report($exception);
                     }
                     $this->installedModsMetadata = [];
@@ -2064,20 +2141,12 @@ class ModManagerPage extends Page implements HasTable
             return true;
         }
 
-        $filterState = $this->tableFilters ?? [];
-        $category = $filterState['catalog_category']['value'] ?? null;
-        $environment = $filterState['catalog_environment']['value'] ?? null;
-
         return $currentSource->hasCachedSearch(
             $server,
             $type,
             (int) $this->getTablePage(),
             $this->getTableSearch(),
-            [
-                'sort' => $this->catalogSort,
-                'category' => $category,
-                'environment' => $currentSource->getKey() === ProjectSourceKey::Modrinth ? $environment : null,
-            ],
+            $this->catalogSearchFilters(),
         );
     }
 
@@ -2378,6 +2447,10 @@ class ModManagerPage extends Page implements HasTable
     public function table(Table $table): Table
     {
         return $table
+            ->headerActions([
+                $this->catalogCompatibilityOverrideAction()
+                    ->extraAttributes(['class' => 'mmr-table-action-registration']),
+            ])
             ->records(function (?string $search, int $page) {
                 $this->projectIconRowIndexMap = null;
 
@@ -2518,21 +2591,12 @@ class ModManagerPage extends Page implements HasTable
                 $this->paginators[self::TABLE_PAGINATOR_NAME] = $page;
                 $this->catalogPage = $page;
 
-                $filterState = $this->tableFilters ?? [];
-                $category = $filterState['catalog_category']['value'] ?? null;
-                $environment = $filterState['catalog_environment']['value'] ?? null;
-                $sortOption = $this->catalogSort;
-
                 $searchCatalog = fn (int $catalogPage): array => $currentSource->search(
                     $server,
                     $type,
                     $catalogPage,
                     $search,
-                    [
-                        'sort' => $sortOption,
-                        'category' => $category,
-                        'environment' => $currentSource->getKey() === ProjectSourceKey::Modrinth ? $environment : null,
-                    ],
+                    $this->catalogSearchFilters(),
                 );
                 $requestedPage = $page;
                 $response = $searchCatalog($page);
@@ -2585,21 +2649,130 @@ class ModManagerPage extends Page implements HasTable
             // the Installed tab is deliberately excluded from this check.
             ->deferLoading(fn (): bool => !$this->hasWarmRecordsCache())
             ->paginated([self::TABLE_PAGE_SIZE])
-            // Category labels can be long (for example, "Armor, Tools, and
-            // Weapons"), so retain a wider filters panel for the two real filters.
-            ->filtersFormWidth(Width::Medium)
+            ->filtersFormWidth(Width::Large)
             ->filters([
+                SelectFilter::make('catalog_version')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
+                    ->options(fn () => $this->getCatalogVersionOptions())
+                    ->searchable()
+                    ->preload()
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getCatalogVersionOptions() !== []),
+                SelectFilter::make('catalog_loader')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.loader'))
+                    ->options(fn () => $this->getCatalogLoaderFilterOptions())
+                    ->multiple()
+                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
+                    ->searchable()
+                    ->preload()
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getCatalogLoaderFilterOptions() !== []),
+                SelectFilter::make('catalog_platform')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.platform'))
+                    ->options(fn () => $this->getCatalogPlatformFilterOptions())
+                    ->multiple()
+                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
+                    ->searchable()
+                    ->preload()
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getCatalogPlatformFilterOptions() !== []),
                 SelectFilter::make('catalog_category')
                     ->label(trans('pelican-mod-manager::strings.table.filters.category'))
                     ->options(fn () => $this->getCatalogCategoryOptions())
-                    ->visible(fn () => $this->activeTab !== 'installed' && $this->getCatalogCategoryOptions() !== []),
+                    ->multiple()
+                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
+                    ->searchable()
+                    ->preload()
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getCatalogCategoryOptions() !== []),
+                SelectFilter::make('catalog_feature')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.feature'))
+                    ->options(fn () => $this->getModrinthCategoryGroupOptions('features'))
+                    ->multiple()
+                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getModrinthCategoryGroupOptions('features') !== []),
+                SelectFilter::make('catalog_resolution')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.resolution'))
+                    ->options(fn () => $this->getModrinthCategoryGroupOptions('resolutions'))
+                    ->multiple()
+                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getModrinthCategoryGroupOptions('resolutions') !== []),
                 SelectFilter::make('catalog_environment')
                     ->label(trans('pelican-mod-manager::strings.table.filters.environment'))
                     ->options([
                         'server' => trans('pelican-mod-manager::strings.table.filters.environment_server'),
                         'client' => trans('pelican-mod-manager::strings.table.filters.environment_client'),
                     ])
-                    ->visible(fn () => $this->activeTab !== 'installed' && $this->getCurrentSource()?->getKey() === ProjectSourceKey::Modrinth),
+                    ->visible(fn () => $this->catalogFilterVisible()
+                        && $this->getCurrentSource()?->getKey() === ProjectSourceKey::Modrinth
+                        && $this->currentProjectType() === ProjectType::Mod),
+                Filter::make('catalog_advanced')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.advanced'))
+                    ->schema([
+                        Section::make(trans('pelican-mod-manager::strings.table.filters.advanced'))
+                            ->collapsed()
+                            ->collapsible()
+                            ->schema([
+                                Select::make('license')
+                                    ->label(trans('pelican-mod-manager::strings.table.filters.license'))
+                                    ->options(fn () => $this->getCatalogLicenseOptions())
+                                    ->searchable()
+                                    ->native(false),
+                                Select::make('exclude_disclosures')
+                                    ->label(trans('pelican-mod-manager::strings.table.filters.exclude_disclosures'))
+                                    ->options(fn () => $this->getCatalogDisclosureOptions())
+                                    ->multiple()
+                                    ->searchable()
+                                    ->native(false),
+                                TextInput::make('min_downloads')
+                                    ->label(trans('pelican-mod-manager::strings.table.filters.min_downloads'))
+                                    ->numeric()
+                                    ->minValue(0),
+                                TextInput::make('min_follows')
+                                    ->label(trans('pelican-mod-manager::strings.table.filters.min_followers'))
+                                    ->numeric()
+                                    ->minValue(0),
+                                DatePicker::make('created_after')
+                                    ->label(trans('pelican-mod-manager::strings.table.filters.created_after'))
+                                    ->native(false),
+                                DatePicker::make('updated_after')
+                                    ->label(trans('pelican-mod-manager::strings.table.filters.updated_after'))
+                                    ->native(false),
+                            ])
+                            ->columns(2),
+                    ])
+                    ->indicateUsing(function (array $state): array {
+                        $indicators = [];
+                        $labels = [
+                            'license' => trans('pelican-mod-manager::strings.table.filters.license'),
+                            'min_downloads' => trans('pelican-mod-manager::strings.table.filters.min_downloads'),
+                            'min_follows' => trans('pelican-mod-manager::strings.table.filters.min_followers'),
+                            'created_after' => trans('pelican-mod-manager::strings.table.filters.created_after'),
+                            'updated_after' => trans('pelican-mod-manager::strings.table.filters.updated_after'),
+                        ];
+                        foreach ($labels as $field => $label) {
+                            if (filled($state[$field] ?? null)) {
+                                $indicators[] = Indicator::make($label.': '.$state[$field])->removeField($field);
+                            }
+                        }
+                        foreach ((array) ($state['exclude_disclosures'] ?? []) as $disclosure) {
+                            $label = $this->getCatalogDisclosureOptions()[(string) $disclosure] ?? null;
+                            if ($label !== null) {
+                                $indicators[] = Indicator::make($label)->removeField('exclude__'.(string) $disclosure);
+                            }
+                        }
+
+                        return $indicators;
+                    })
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getCurrentSource() instanceof ModrinthSource),
+                SelectFilter::make('catalog_hangar_platform')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.platform'))
+                    ->options(fn () => $this->getHangarPlatformOptions())
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarPlatformOptions() !== []),
+                SelectFilter::make('catalog_hangar_category')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.category'))
+                    ->options(fn () => $this->getHangarCategoryOptions())
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarCategoryOptions() !== []),
+                SelectFilter::make('catalog_hangar_tag')
+                    ->label(trans('pelican-mod-manager::strings.table.filters.tag'))
+                    ->options(fn () => $this->getHangarTagOptions())
+                    ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarTagOptions() !== []),
             ])
             ->emptyStateHeading(function () {
                 $currentSource = $this->getCurrentSource();
@@ -2664,6 +2837,12 @@ class ModManagerPage extends Page implements HasTable
                     })
                     ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1)
                     ->toggleable(),
+                TextColumn::make('catalog_compatibility')
+                    ->label(trans('pelican-mod-manager::strings.table.columns.compatibility'))
+                    ->state(fn (): string => $this->catalogCompatibilityLabel())
+                    ->badge()
+                    ->extraHeaderAttributes(['class' => 'mmr-compatibility-header'])
+                    ->extraCellAttributes(['class' => 'mmr-compatibility-cell']),
                 TextColumn::make('author')
                     ->label(trans('pelican-mod-manager::strings.table.columns.author'))
                     ->url(fn (array $record, $state) => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && $state) ? "https://modrinth.com/user/$state" : null, true)
@@ -3142,37 +3321,229 @@ class ModManagerPage extends Page implements HasTable
         $source = $this->getCurrentSource();
 
         return $this->catalogCategoryOptions = match ($source?->getKey()) {
-            ProjectSourceKey::Modrinth => $this->modrinthCategoryOptions($type),
+            ProjectSourceKey::Modrinth => $this->getModrinthCategoryGroupOptions('categories'),
             ProjectSourceKey::CurseForge => $source instanceof CurseForgeSource
                 ? $source->catalogCategoryOptions($type)
                 : [],
-            ProjectSourceKey::Hangar => $type === ProjectType::Plugin ? [
-                'admin_tools' => 'Admin Tools',
-                'chat' => 'Chat',
-                'dev_tools' => 'Developer Tools',
-                'economy' => 'Economy',
-                'gameplay' => 'Gameplay',
-                'games' => 'Games',
-                'protection' => 'Protection',
-                'role_playing' => 'Role Playing',
-                'world_management' => 'World Management',
-                'misc' => 'Miscellaneous',
-            ] : [],
             default => [],
         };
     }
 
     /** @return array<string, string> */
-    private function modrinthCategoryOptions(ProjectType $type): array
+    protected function getCatalogVersionOptions(): array
     {
-        $categories = $type === ProjectType::ResourcePack
-            ? ['combat', 'cursed', 'decoration', 'modded', 'realistic', 'simplistic', 'themed', 'tweaks', 'utility', 'vanilla-like', 'audio', 'blocks', 'core-shaders', 'entities', 'environment', 'equipment', 'fonts', 'gui', 'items', 'locale', 'models', '8x-', '16x', '32x', '48x', '64x', '128x', '256x', '512x+']
-            : ['adventure', 'cursed', 'decoration', 'economy', 'equipment', 'food', 'game-mechanics', 'library', 'magic', 'management', 'minigame', 'mobs', 'optimization', 'social', 'storage', 'technology', 'transportation', 'utility', 'worldgen'];
+        $source = $this->getCurrentSource();
 
-        return array_combine($categories, array_map(
-            static fn (string $category): string => Str::of($category)->replace('-', ' ')->title()->toString(),
-            $categories,
-        ));
+        return match (true) {
+            $source instanceof ModrinthSource => $source->catalogVersionOptions(),
+            $source instanceof CurseForgeSource => $source->catalogVersionOptions(),
+            $source instanceof HangarSource => $source->catalogVersionOptions($this->effectiveHangarPlatform()),
+            default => [],
+        };
+    }
+
+    /** @return array<string, string> */
+    protected function getCatalogLoaderFilterOptions(): array
+    {
+        $source = $this->getCurrentSource();
+        $type = $this->currentProjectType();
+
+        return match (true) {
+            $source instanceof ModrinthSource && $type !== null => $source->catalogLoaderOptions($type),
+            $source instanceof CurseForgeSource && $type === ProjectType::Mod => $source->catalogLoaderOptions(),
+            default => [],
+        };
+    }
+
+    /** @return array<string, string> */
+    protected function getCatalogPlatformFilterOptions(): array
+    {
+        $source = $this->getCurrentSource();
+        $type = $this->currentProjectType();
+
+        return $source instanceof ModrinthSource && $type === ProjectType::Plugin
+            ? $source->catalogLoaderOptions($type, platforms: true)
+            : [];
+    }
+
+    /** @return array<string, string> */
+    protected function getModrinthCategoryGroupOptions(string $group): array
+    {
+        $source = $this->getCurrentSource();
+        $type = $this->currentProjectType();
+        if (!$source instanceof ModrinthSource || $type === null) {
+            return [];
+        }
+
+        return $source->catalogCategoryGroups($type)[$group] ?? [];
+    }
+
+    /** @return array<string, string> */
+    protected function getCatalogLicenseOptions(): array
+    {
+        $source = $this->getCurrentSource();
+        if (!$source instanceof ModrinthSource) {
+            return [];
+        }
+
+        return ['__open_source__' => trans('pelican-mod-manager::strings.table.filters.open_source')]
+            + $source->catalogLicenseOptions();
+    }
+
+    /** @return array<string, string> */
+    protected function getCatalogDisclosureOptions(): array
+    {
+        if (!$this->getCurrentSource() instanceof ModrinthSource) {
+            return [];
+        }
+
+        return [
+            'ai_content' => trans('pelican-mod-manager::strings.table.filters.disclosures.ai_content'),
+            'advertisements' => trans('pelican-mod-manager::strings.table.filters.disclosures.advertisements'),
+            'epilepsy_triggers' => trans('pelican-mod-manager::strings.table.filters.disclosures.epilepsy_triggers'),
+            'system_interactions' => trans('pelican-mod-manager::strings.table.filters.disclosures.system_interactions'),
+            'telemetry' => trans('pelican-mod-manager::strings.table.filters.disclosures.telemetry'),
+            'derivative_work' => trans('pelican-mod-manager::strings.table.filters.disclosures.derivative_work'),
+            'paid_features' => trans('pelican-mod-manager::strings.table.filters.disclosures.paid_features'),
+            'archived' => trans('pelican-mod-manager::strings.table.filters.disclosures.archived'),
+        ];
+    }
+
+    /** @return array<string, string> */
+    protected function getHangarPlatformOptions(): array
+    {
+        $source = $this->getCurrentSource();
+
+        return $source instanceof HangarSource ? $source->catalogPlatformOptions() : [];
+    }
+
+    /** @return array<string, string> */
+    protected function getHangarCategoryOptions(): array
+    {
+        $source = $this->getCurrentSource();
+
+        return $source instanceof HangarSource ? $source->catalogCategoryOptions() : [];
+    }
+
+    /** @return array<string, string> */
+    protected function getHangarTagOptions(): array
+    {
+        $source = $this->getCurrentSource();
+
+        return $source instanceof HangarSource ? $source->catalogTagOptions() : [];
+    }
+
+    protected function effectiveHangarPlatform(): string
+    {
+        $selected = $this->catalogFilterValue($this->tableFilters ?? [], 'catalog_hangar_platform');
+        if ($selected !== null) {
+            return $selected;
+        }
+
+        /** @var Server $server */
+        $server = Filament::getTenant();
+
+        return match (MinecraftLoader::fromServer($server)) {
+            MinecraftLoader::Velocity => 'VELOCITY',
+            MinecraftLoader::Waterfall => 'WATERFALL',
+            default => 'PAPER',
+        };
+    }
+
+    protected function catalogFilterVisible(): bool
+    {
+        return $this->activeTab !== 'installed'
+            && $this->getCurrentSource()?->getKey() !== ProjectSourceKey::GitHubReleases;
+    }
+
+    protected function currentProjectType(): ?ProjectType
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+
+        return static::detectProjectType($server);
+    }
+
+    /** @param array<string, mixed> $state */
+    protected function catalogFilterValue(array $state, string $name): ?string
+    {
+        $value = $state[$name]['value'] ?? null;
+
+        return is_scalar($value) && trim((string) $value) !== '' ? trim((string) $value) : null;
+    }
+
+    /** @param array<string, mixed> $state
+     *  @return array<int, string>
+     */
+    protected function catalogFilterValues(array $state, string $name): array
+    {
+        $values = $state[$name]['values'] ?? [];
+
+        return array_values(array_filter(array_map(
+            static fn (mixed $value): string => is_scalar($value) ? trim((string) $value) : '',
+            is_array($values) ? $values : [],
+        )));
+    }
+
+    /** @return array<int, Indicator> */
+    protected function catalogSelectionIndicators(SelectFilter $filter, array $state): array
+    {
+        $options = collect($filter->getOptions())
+            ->mapWithKeys(fn (string|array $label, string $value): array => is_array($label) ? $label : [$value => $label]);
+
+        return collect((array) ($state['values'] ?? []))
+            ->filter(fn (mixed $value): bool => is_scalar($value) && $options->has((string) $value))
+            ->map(fn (mixed $value): Indicator => Indicator::make((string) $options->get((string) $value))
+                ->removeField('value__'.(string) $value))
+            ->values()
+            ->all();
+    }
+
+    /** @return array<string, mixed> */
+    protected function catalogSearchFilters(): array
+    {
+        $state = $this->tableFilters ?? [];
+
+        return [
+            'sort' => $this->catalogSort,
+            'version' => $this->catalogFilterValue($state, 'catalog_version'),
+            'loaders' => $this->catalogFilterValues($state, 'catalog_loader'),
+            'platforms' => $this->catalogFilterValues($state, 'catalog_platform'),
+            'categories' => $this->catalogFilterValues($state, 'catalog_category'),
+            'features' => $this->catalogFilterValues($state, 'catalog_feature'),
+            'resolutions' => $this->catalogFilterValues($state, 'catalog_resolution'),
+            'environment' => $this->catalogFilterValue($state, 'catalog_environment'),
+            'license' => $this->catalogAdvancedFilterValue($state, 'license'),
+            'exclude_disclosures' => $this->catalogAdvancedFilterValues($state, 'exclude_disclosures'),
+            'min_downloads' => $this->catalogAdvancedFilterValue($state, 'min_downloads'),
+            'min_follows' => $this->catalogAdvancedFilterValue($state, 'min_follows'),
+            'created_after' => $this->catalogAdvancedFilterValue($state, 'created_after'),
+            'updated_after' => $this->catalogAdvancedFilterValue($state, 'updated_after'),
+            'platform' => $this->catalogFilterValue($state, 'catalog_hangar_platform'),
+            'category' => $this->catalogFilterValue($state, 'catalog_hangar_category'),
+            'tag' => $this->catalogFilterValue($state, 'catalog_hangar_tag'),
+        ];
+    }
+
+    /** @param array<string, mixed> $state */
+    protected function catalogAdvancedFilterValue(array $state, string $name): ?string
+    {
+        $value = $state['catalog_advanced'][$name] ?? null;
+
+        return is_scalar($value) && trim((string) $value) !== '' ? trim((string) $value) : null;
+    }
+
+    /** @param array<string, mixed> $state
+     *  @return array<int, string>
+     */
+    protected function catalogAdvancedFilterValues(array $state, string $name): array
+    {
+        $values = $state['catalog_advanced'][$name] ?? [];
+
+        return array_values(array_filter(array_map(
+            static fn (mixed $value): string => is_scalar($value) ? trim((string) $value) : '',
+            is_array($values) ? $values : [],
+        )));
     }
 
     /** @return array<string, string> */
@@ -3182,6 +3553,17 @@ class ModManagerPage extends Page implements HasTable
         $server = Filament::getTenant();
         $type = static::detectProjectType($server);
         $source = $this->getCurrentSource()?->getKey();
+
+        if ($source === ProjectSourceKey::Modrinth && $this->getCurrentSource() instanceof ModrinthSource && $type !== null) {
+            $metadataOptions = $this->getCurrentSource()->catalogLoaderOptions($type)
+                + ($type === ProjectType::Plugin ? $this->getCurrentSource()->catalogLoaderOptions($type, platforms: true) : []);
+
+            return array_filter(
+                $metadataOptions,
+                static fn (string $label, string $value): bool => MinecraftLoader::tryFrom($value) !== null,
+                ARRAY_FILTER_USE_BOTH,
+            );
+        }
 
         $loaders = match (true) {
             $type === ProjectType::Mod && in_array($source, [ProjectSourceKey::Modrinth, ProjectSourceKey::CurseForge], true) => [
@@ -3281,6 +3663,22 @@ class ModManagerPage extends Page implements HasTable
         );
     }
 
+    protected function catalogCompatibilityLabel(): string
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $version = MinecraftVersionResolver::resolve($server) ?? trans('pelican-mod-manager::strings.page.unknown');
+        $type = static::detectProjectType($server);
+
+        if (!in_array($type, [ProjectType::Mod, ProjectType::Plugin], true)) {
+            return $version;
+        }
+
+        $loader = MinecraftLoader::fromServer($server)?->getLabel();
+
+        return $loader === null ? $version : "$version · $loader";
+    }
+
     public function applyCatalogCompatibilityOverride(array $data): void
     {
         $this->minecraftVersionOverride = $this->canOverrideCatalogVersion()
@@ -3308,8 +3706,53 @@ class ModManagerPage extends Page implements HasTable
         $this->catalogPage = 1;
         unset($this->paginators[self::TABLE_PAGINATOR_NAME]);
         $this->forgetVersionCaches();
-        $this->resetTable();
+        $this->flushCachedTableRecords();
         $this->dispatchCatalogWarm(false);
+    }
+
+    protected function catalogCompatibilityOverrideAction(): Action
+    {
+        return Action::make('catalog_compatibility_override')
+            ->label(fn (): string => $this->hasCatalogCompatibilityOverride()
+                ? trans('pelican-mod-manager::strings.table.override.active')
+                : trans('pelican-mod-manager::strings.table.override.label'))
+            ->icon('tabler-adjustments-horizontal')
+            ->color(fn (): string => $this->hasCatalogCompatibilityOverride() ? 'warning' : 'gray')
+            ->visible(fn (): bool => $this->canOverrideCatalogVersion() || $this->getCatalogLoaderOverrideOptions() !== [])
+            ->modalHeading(trans('pelican-mod-manager::strings.table.override.heading'))
+            ->modalDescription(trans('pelican-mod-manager::strings.table.override.description'))
+            ->modalWidth(Width::Small)
+            ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.table.override.apply'))
+            ->fillForm(fn (): array => [
+                'minecraft_version' => $this->minecraftVersionOverride,
+                'loader' => $this->loaderOverride,
+            ])
+            ->schema([
+                Select::make('minecraft_version')
+                    ->label(trans('pelican-mod-manager::strings.table.override.minecraft_version'))
+                    ->helperText(fn (): string => trans('pelican-mod-manager::strings.table.override.automatic_value', ['value' => $this->automaticMinecraftVersion()]))
+                    ->placeholder(fn (): string => trans('pelican-mod-manager::strings.table.override.auto'))
+                    ->options(fn (): array => $this->getCatalogVersionOptions())
+                    ->searchable()
+                    ->native(false)
+                    ->visible(fn (): bool => $this->canOverrideCatalogVersion()),
+                Select::make('loader')
+                    ->label(trans('pelican-mod-manager::strings.table.override.loader'))
+                    ->helperText(fn (): string => trans('pelican-mod-manager::strings.table.override.automatic_value', ['value' => $this->automaticMinecraftLoader()]))
+                    ->placeholder(fn (): string => trans('pelican-mod-manager::strings.table.override.auto'))
+                    ->options(fn (): array => $this->getCatalogLoaderOverrideOptions())
+                    ->searchable()
+                    ->native(false)
+                    ->visible(fn (): bool => $this->getCatalogLoaderOverrideOptions() !== []),
+            ])
+            ->extraModalFooterActions([
+                Action::make('reset_catalog_compatibility_override')
+                    ->label(trans('pelican-mod-manager::strings.table.override.reset'))
+                    ->color('gray')
+                    ->action(fn () => $this->resetCatalogCompatibilityOverride())
+                    ->cancelParentActions(),
+            ])
+            ->action(fn (array $data) => $this->applyCatalogCompatibilityOverride($data));
     }
 
     protected function getHeaderActions(): array
@@ -3333,43 +3776,6 @@ class ModManagerPage extends Page implements HasTable
             && in_array(ProjectSourceKey::GitHubReleases->value, $availableSourceKeys, true);
 
         return [
-            Action::make('catalog_compatibility_override')
-                ->label(fn (): string => $this->hasCatalogCompatibilityOverride()
-                    ? trans('pelican-mod-manager::strings.table.override.active')
-                    : trans('pelican-mod-manager::strings.table.override.label'))
-                ->icon('tabler-adjustments-horizontal')
-                ->color(fn (): string => $this->hasCatalogCompatibilityOverride() ? 'warning' : 'gray')
-                ->visible(fn (): bool => $this->canOverrideCatalogVersion() || $this->getCatalogLoaderOverrideOptions() !== [])
-                ->modalHeading(trans('pelican-mod-manager::strings.table.override.heading'))
-                ->modalDescription(trans('pelican-mod-manager::strings.table.override.description'))
-                ->modalWidth(Width::Small)
-                ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.table.override.apply'))
-                ->fillForm(fn (): array => [
-                    'minecraft_version' => $this->minecraftVersionOverride,
-                    'loader' => $this->loaderOverride,
-                ])
-                ->schema([
-                    TextInput::make('minecraft_version')
-                        ->label(trans('pelican-mod-manager::strings.table.override.minecraft_version'))
-                        ->helperText(fn (): string => trans('pelican-mod-manager::strings.table.override.automatic_value', ['value' => $this->automaticMinecraftVersion()]))
-                        ->maxLength(32)
-                        ->regex('/^[0-9A-Za-z._+\-]+$/')
-                        ->visible(fn (): bool => $this->canOverrideCatalogVersion()),
-                    Select::make('loader')
-                        ->label(trans('pelican-mod-manager::strings.table.override.loader'))
-                        ->helperText(fn (): string => trans('pelican-mod-manager::strings.table.override.automatic_value', ['value' => $this->automaticMinecraftLoader()]))
-                        ->options(fn (): array => $this->getCatalogLoaderOverrideOptions())
-                        ->native(false)
-                        ->visible(fn (): bool => $this->getCatalogLoaderOverrideOptions() !== []),
-                ])
-                ->extraModalFooterActions([
-                    Action::make('reset_catalog_compatibility_override')
-                        ->label(trans('pelican-mod-manager::strings.table.override.reset'))
-                        ->color('gray')
-                        ->action(fn () => $this->resetCatalogCompatibilityOverride())
-                        ->cancelParentActions(),
-                ])
-                ->action(fn (array $data) => $this->applyCatalogCompatibilityOverride($data)),
             Action::make('open_folder')
                 ->label(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->tooltip(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
