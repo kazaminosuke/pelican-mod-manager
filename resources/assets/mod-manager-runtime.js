@@ -23,18 +23,23 @@
     const applyCatalogView = () => {
         catalogViewFrame = null;
         const wrapper = document.querySelector('.mmr-table-scroll-ctn');
-        const toggles = [...document.querySelectorAll('[data-mmr-view-mode]')];
-        if (!wrapper || toggles.length === 0) {
+        const toggle = document.querySelector('[data-mmr-view-toggle]');
+        if (!wrapper || !toggle) {
             wrapper?.removeAttribute('data-mmr-catalog-view');
             return;
         }
 
         const view = storedCatalogView();
+        const target = view === 'panel' ? 'list' : 'panel';
+        const label = target === 'panel'
+            ? toggle.dataset.mmrViewPanelLabel
+            : toggle.dataset.mmrViewListLabel;
         wrapper.dataset.mmrCatalogView = view;
-        toggles.forEach((toggle) => {
-            const active = toggle.dataset.mmrViewMode === view;
-            toggle.setAttribute('aria-pressed', active ? 'true' : 'false');
-            toggle.dataset.mmrViewActive = active ? 'true' : 'false';
+        toggle.dataset.mmrViewTarget = target;
+        toggle.setAttribute('aria-label', label || '');
+        toggle.setAttribute('title', label || '');
+        toggle.querySelectorAll('[data-mmr-view-icon]').forEach((icon) => {
+            icon.hidden = icon.dataset.mmrViewIcon !== target;
         });
     };
 
@@ -46,22 +51,23 @@
     };
 
     document.addEventListener('click', (event) => {
-        const toggle = event.target instanceof Element ? event.target.closest('[data-mmr-view-mode]') : null;
+        const toggle = event.target instanceof Element ? event.target.closest('[data-mmr-view-toggle]') : null;
         if (!toggle) {
             return;
         }
 
         event.preventDefault();
         event.stopImmediatePropagation();
+        const target = toggle.dataset.mmrViewTarget === 'list' ? 'list' : 'panel';
         try {
-            localStorage.setItem(catalogViewStorageKey, toggle.dataset.mmrViewMode === 'panel' ? 'panel' : 'list');
+            localStorage.setItem(catalogViewStorageKey, target);
         } catch (_) {
             // A locked-down browser may disable storage; the current view can
             // still change for this rendered page.
         }
         const wrapper = document.querySelector('.mmr-table-scroll-ctn');
         if (wrapper) {
-            wrapper.dataset.mmrCatalogView = toggle.dataset.mmrViewMode === 'panel' ? 'panel' : 'list';
+            wrapper.dataset.mmrCatalogView = target;
         }
         queueCatalogView();
     }, true);

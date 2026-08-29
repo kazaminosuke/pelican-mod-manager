@@ -180,6 +180,8 @@ return [
             'label' => 'Catalog view',
             'list' => 'List',
             'panel' => 'Panel',
+            'switch_to_list' => 'Switch to list view',
+            'switch_to_panel' => 'Switch to panel view',
         ],
     ],
 

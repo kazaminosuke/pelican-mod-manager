@@ -180,6 +180,8 @@ return [
             'label' => 'Catalog表示',
             'list' => 'リスト',
             'panel' => 'パネル',
+            'switch_to_list' => 'リスト表示に切り替え',
+            'switch_to_panel' => 'パネル表示に切り替え',
         ],
     ],
 

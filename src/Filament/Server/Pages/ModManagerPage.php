@@ -2447,10 +2447,6 @@ class ModManagerPage extends Page implements HasTable
     public function table(Table $table): Table
     {
         return $table
-            ->headerActions([
-                $this->catalogCompatibilityOverrideAction()
-                    ->extraAttributes(['class' => 'mmr-table-action-registration']),
-            ])
             ->records(function (?string $search, int $page) {
                 $this->projectIconRowIndexMap = null;
 
@@ -2835,8 +2831,7 @@ class ModManagerPage extends Page implements HasTable
                         'github_releases' => 'gray',
                         default => 'gray',
                     })
-                    ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1)
-                    ->toggleable(),
+                    ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1),
                 TextColumn::make('catalog_compatibility')
                     ->label(trans('pelican-mod-manager::strings.table.columns.compatibility'))
                     ->state(fn (): string => $this->catalogCompatibilityLabel())
@@ -2846,14 +2841,12 @@ class ModManagerPage extends Page implements HasTable
                 TextColumn::make('author')
                     ->label(trans('pelican-mod-manager::strings.table.columns.author'))
                     ->url(fn (array $record, $state) => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && $state) ? "https://modrinth.com/user/$state" : null, true)
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'author'])
-                    ->toggleable(),
+                    ->extraCellAttributes(['data-mmr-swr-cell' => 'author']),
                 TextColumn::make('downloads')
                     ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
                     ->numeric()
                     ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="downloads" aria-hidden="true"></span>'))
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'downloads'])
-                    ->toggleable(),
+                    ->extraCellAttributes(['data-mmr-swr-cell' => 'downloads']),
                 TextColumn::make('date_modified')
                     ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
                     ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="calendar" aria-hidden="true"></span>'))
@@ -2863,8 +2856,7 @@ class ModManagerPage extends Page implements HasTable
 
                         return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
                     })
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'date_modified'])
-                    ->toggleable(),
+                    ->extraCellAttributes(['data-mmr-swr-cell' => 'date_modified']),
             ])
             ->recordUrl(function (array $record) {
                 if (!empty($record['unavailable']) || ($record['untracked'] ?? false)) {
@@ -3712,7 +3704,7 @@ class ModManagerPage extends Page implements HasTable
 
     protected function catalogCompatibilityOverrideAction(): Action
     {
-        return Action::make('catalog_compatibility_override')
+        return Action::make('catalogCompatibilityOverride')
             ->label(fn (): string => $this->hasCatalogCompatibilityOverride()
                 ? trans('pelican-mod-manager::strings.table.override.active')
                 : trans('pelican-mod-manager::strings.table.override.label'))

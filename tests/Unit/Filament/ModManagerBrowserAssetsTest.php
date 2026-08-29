@@ -41,6 +41,8 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('const heldContentControllers = new WeakMap()', $swr);
         self::assertStringContainsString('const heldPaginationControllers = new WeakMap()', $swr);
         self::assertStringContainsString('activeComponents.has(component?.el)', $swr);
+        self::assertStringContainsString("const CELL_SELECTOR = 'td[data-mmr-swr-cell]'", $swr);
+        self::assertStringContainsString("querySelectorAll('tbody > tr.fi-ta-row')", $swr);
         self::assertStringContainsString('morphUnsubscribes.splice(0)', $swr);
         self::assertStringNotContainsString('documentObserver.observe(document.documentElement', $swr);
         self::assertStringNotContainsString('for (const wrapper of document.querySelectorAll(WRAPPER_SELECTOR))', $swr);
@@ -70,6 +72,44 @@ final class ModManagerBrowserAssetsTest extends TestCase
         foreach (['versions', 'install_latest', 'update', 'installed', 'uninstall'] as $action) {
             self::assertStringContainsString('data-mmr-swr-row-action="'.$action.'"', $css);
         }
+    }
+
+    public function test_catalog_toolbar_uses_a_page_action_and_single_view_toggle(): void
+    {
+        $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+        $plugin = (string) file_get_contents(dirname(__DIR__, 3).'/src/ModManagerPlugin.php');
+        $runtime = $this->asset('mod-manager-runtime.js');
+        $css = $this->asset('mod-manager.css');
+
+        self::assertStringNotContainsString('mmr-table-action-registration', $page);
+        self::assertStringNotContainsString("mountTableAction(\\'catalog_compatibility_override\\')", $plugin);
+        self::assertStringContainsString("mountAction(\\'catalogCompatibilityOverride\\')", $plugin);
+        self::assertStringContainsString('data-mmr-compatibility-override', $plugin);
+        self::assertSame(1, substr_count($plugin, 'data-mmr-view-toggle'));
+        self::assertStringNotContainsString('mmr-catalog-toolbar-actions', $plugin);
+        self::assertStringNotContainsString('mmr-catalog-view-toggle', $plugin);
+        self::assertStringNotContainsString('data-mmr-view-mode=', $plugin);
+        self::assertStringContainsString("document.querySelector('[data-mmr-view-toggle]')", $runtime);
+        self::assertStringContainsString("const target = view === 'panel' ? 'list' : 'panel'", $runtime);
+        self::assertStringContainsString('.mmr-catalog-toolbar-button{min-height:2.25rem;border:0;', $css);
+        self::assertStringContainsString('.mmr-catalog-toolbar-button:focus-visible{outline:2px solid', $css);
+        self::assertStringNotContainsString('[data-mmr-override-active="true"]{border-color:', $css);
+    }
+
+    public function test_catalog_list_keeps_the_original_table_columns_and_panel_is_css_scoped(): void
+    {
+        $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+        $css = $this->asset('mod-manager.css');
+
+        self::assertStringNotContainsString('use Filament\\Tables\\Columns\\Layout\\Split;', $page);
+        self::assertStringNotContainsString('use Filament\\Tables\\Columns\\Layout\\Stack;', $page);
+        self::assertStringContainsString("->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])", $page);
+        self::assertStringContainsString('->description(function (array $record): ?string {', $page);
+        self::assertStringNotContainsString('mmr-record-', $page);
+        self::assertStringNotContainsString('.fi-ta-record-content-ctn', $css);
+        self::assertStringContainsString('.mmr-project-icon-cell .fi-ta-image img{display:block;inline-size:4.5cqi;', $css);
+        self::assertStringContainsString('[data-mmr-catalog-view="panel"] .fi-ta-table>tbody{display:grid;', $css);
+        self::assertStringContainsString('repeat(auto-fit,minmax(min(100%,16.5rem),1fr))', $css);
     }
 
     public function test_all_manager_assets_have_a_deterministic_compressed_size_budget(): void

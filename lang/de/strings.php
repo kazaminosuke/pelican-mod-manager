@@ -180,6 +180,8 @@ return [
             'label' => 'Katalogansicht',
             'list' => 'Liste',
             'panel' => 'Panel',
+            'switch_to_list' => 'Zur Listenansicht wechseln',
+            'switch_to_panel' => 'Zur Panelansicht wechseln',
         ],
     ],
 

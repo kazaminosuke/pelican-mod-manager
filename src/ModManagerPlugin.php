@@ -88,6 +88,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
         $overrideLabel = e(json_encode(trans('pelican-mod-manager::strings.table.override.label'), JSON_THROW_ON_ERROR));
         $overrideActiveLabel = e(json_encode(trans('pelican-mod-manager::strings.table.override.active'), JSON_THROW_ON_ERROR));
+        $switchToListLabel = e(trans('pelican-mod-manager::strings.table.view.switch_to_list'));
+        $switchToPanelLabel = e(trans('pelican-mod-manager::strings.table.view.switch_to_panel'));
+        $overrideIcon = app(BladeIconsFactory::class)->svg('tabler-adjustments-horizontal', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
+        $listIcon = app(BladeIconsFactory::class)->svg('tabler-list', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
+        $panelIcon = app(BladeIconsFactory::class)->svg('tabler-layout-grid', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
 
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
@@ -99,14 +104,16 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 .'<option :value="value" x-text="label"></option>'
                 .'</template>'
                 .'</select></div>'
-                .'<div class="mmr-catalog-toolbar-actions" x-cloak x-show="$wire.activeTab !== \'installed\'">'
-                .'<button type="button" class="mmr-catalog-toolbar-button" wire:click="mountTableAction(\'catalog_compatibility_override\')"'
+                .'<button type="button" class="mmr-catalog-toolbar-button mmr-catalog-toolbar-icon-button" data-mmr-compatibility-override x-cloak x-show="$wire.activeTab !== \'installed\'" wire:click="mountAction(\'catalogCompatibilityOverride\')"'
+                .' :aria-label="($wire.minecraftVersionOverride || $wire.loaderOverride) ? '.$overrideActiveLabel.' : '.$overrideLabel.'"'
+                .' :title="($wire.minecraftVersionOverride || $wire.loaderOverride) ? '.$overrideActiveLabel.' : '.$overrideLabel.'"'
                 .' :data-mmr-override-active="($wire.minecraftVersionOverride || $wire.loaderOverride) ? \'true\' : \'false\'">'
-                .'<span x-text="($wire.minecraftVersionOverride || $wire.loaderOverride) ? '.$overrideActiveLabel.' : '.$overrideLabel.'"></span></button>'
-                .'<div class="mmr-catalog-view-toggle" role="group" aria-label="'.e(trans('pelican-mod-manager::strings.table.view.label')).'">'
-                .'<button type="button" class="mmr-catalog-toolbar-button" data-mmr-view-mode="list">'.e(trans('pelican-mod-manager::strings.table.view.list')).'</button>'
-                .'<button type="button" class="mmr-catalog-toolbar-button" data-mmr-view-mode="panel">'.e(trans('pelican-mod-manager::strings.table.view.panel')).'</button>'
-                .'</div></div>',
+                .$overrideIcon.'</button>'
+                .'<button type="button" class="mmr-catalog-toolbar-button mmr-catalog-toolbar-icon-button" data-mmr-view-toggle x-cloak x-show="$wire.activeTab !== \'installed\'"'
+                .' data-mmr-view-list-label="'.$switchToListLabel.'" data-mmr-view-panel-label="'.$switchToPanelLabel.'"'
+                .' aria-label="'.$switchToPanelLabel.'" title="'.$switchToPanelLabel.'">'
+                .'<span data-mmr-view-icon="panel">'.$panelIcon.'</span>'
+                .'<span data-mmr-view-icon="list" hidden>'.$listIcon.'</span></button>',
             ),
             $pageClasses,
         );
