@@ -93,7 +93,8 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('->iconButton()', $plugin);
         self::assertStringContainsString("->icon('tabler-layout-grid')", $plugin);
         self::assertStringContainsString("->alpineClickHandler('null')", $plugin);
-        self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
+        self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE', $plugin);
+        self::assertStringNotContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
         self::assertStringContainsString("document.querySelector('[data-mmr-view-toggle]')", $runtime);
         self::assertStringContainsString("const target = view === 'panel' ? 'list' : 'panel'", $runtime);
         self::assertStringContainsString("toggle.querySelector(':scope > svg.fi-icon')", $runtime);

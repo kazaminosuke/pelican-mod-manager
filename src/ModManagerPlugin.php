@@ -127,10 +127,10 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             $pageClasses,
         );
         // Filament renders this hook inside the same toolbar group, directly
-        // after its column-manager trigger. This gives us the required DOM
+        // before its column-manager trigger. This gives us the required DOM
         // order without CSS ordering or client-side node movement.
         $panel->renderHook(
-            TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER,
+            TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
             fn () => new HtmlString($viewToggle()),
             $pageClasses,
         );
