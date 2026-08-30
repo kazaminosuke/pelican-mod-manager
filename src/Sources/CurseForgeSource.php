@@ -173,16 +173,32 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         // empty page with a zero range.
         $page = min(max(1, $page), intdiv(self::MAX_SEARCH_RESULTS, self::SEARCH_PAGE_SIZE));
 
-        $requestedVersion = trim((string) ($filters['version'] ?? ''));
+        $hasVersionList = array_key_exists('versions', $filters);
+        $requestedVersions = $this->versionFilterValues(
+            $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []),
+        );
+        $automaticVersion = MinecraftVersionResolver::resolve($server);
         $params = [
             'gameId' => self::GAME_ID,
             'classId' => $classId,
-            'gameVersion' => preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
-                ? $requestedVersion
-                : MinecraftVersionResolver::resolve($server),
             'index' => ($page - 1) * self::SEARCH_PAGE_SIZE,
             'pageSize' => self::SEARCH_PAGE_SIZE,
         ];
+
+        if ($hasVersionList) {
+            if ($requestedVersions !== []) {
+                // CurseForge's official API accepts up to four game versions
+                // in the gameVersions list, with OR semantics.
+                $params['gameVersions'] = json_encode(array_slice($requestedVersions, 0, 4), JSON_THROW_ON_ERROR);
+            } elseif ($automaticVersion !== null) {
+                $params['gameVersion'] = $automaticVersion;
+            }
+        } else {
+            // Keep the pre-multi-select input contract for callers outside
+            // the table page (and for older queued cache entries).
+            $requestedVersion = $requestedVersions[0] ?? null;
+            $params['gameVersion'] = $requestedVersion ?? $automaticVersion;
+        }
 
         $sortField = match ($filters['sort'] ?? 'downloads') {
             'relevance' => null,
@@ -1107,6 +1123,17 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             '5' => 'Quilt',
             '6' => 'NeoForge',
         ];
+    }
+
+    /** @return array<int, string> */
+    private function versionFilterValues(mixed $value): array
+    {
+        $values = is_array($value) ? $value : [$value];
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn (mixed $item): string => is_scalar($item) ? trim((string) $item) : '',
+            $values,
+        ), static fn (string $version): bool => preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $version) === 1)));
     }
 
     protected function fetchProjectByIdentifier(string $identifier, float $timeoutSeconds): ?array

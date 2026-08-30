@@ -293,17 +293,28 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $projectType = in_array($type, [ProjectType::Plugin, ProjectType::Datapack], true)
             ? ProjectType::Mod->value
             : $type->value;
-        $requestedVersion = trim((string) ($filters['version'] ?? ''));
-        $minecraftVersion = preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
-            ? $requestedVersion
-            : MinecraftVersionResolver::resolve($server);
+        $requestedVersions = $this->versionFilterValues(
+            array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []),
+        );
+        $minecraftVersion = MinecraftVersionResolver::resolve($server);
         $selectedLoaders = $this->slugFilterValues($filters['loaders'] ?? []);
         $selectedPlatforms = $this->slugFilterValues($filters['platforms'] ?? []);
 
+        $versionFacetValues = $requestedVersions !== []
+            ? $requestedVersions
+            : ($minecraftVersion !== null ? [$minecraftVersion] : []);
+
         if ($type === ProjectType::ResourcePack) {
-            $facetGroups = [["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
+            $facetGroups = [
+                array_map(static fn (string $version): string => "versions:$version", $versionFacetValues),
+                ["project_type:{$projectType}"],
+            ];
         } elseif ($type === ProjectType::Datapack) {
-            $facetGroups = [['categories:datapack'], ["versions:$minecraftVersion"], ["project_type:{$projectType}"]];
+            $facetGroups = [
+                ['categories:datapack'],
+                array_map(static fn (string $version): string => "versions:$version", $versionFacetValues),
+                ["project_type:{$projectType}"],
+            ];
         } else {
             if (!$minecraftLoader && $selectedLoaders === [] && $selectedPlatforms === []) {
                 return null;
@@ -312,10 +323,18 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             $selectedCompatibility = [...$selectedLoaders, ...$selectedPlatforms];
             $facetGroups = [
                 array_map(static fn (string $loader): string => "categories:$loader", $selectedCompatibility !== [] ? $selectedCompatibility : [$minecraftLoader]),
-                ["versions:$minecraftVersion"],
+                array_map(static fn (string $version): string => "versions:$version", $versionFacetValues),
                 ["project_type:{$projectType}"],
             ];
         }
+
+        // An unresolved server version is still a valid catalog query. Do not
+        // send an empty facet group, which Modrinth interprets differently
+        // from omitting the version compatibility constraint altogether.
+        $facetGroups = array_values(array_filter(
+            $facetGroups,
+            static fn (array $group): bool => $group !== [],
+        ));
 
         foreach (['categories', 'features', 'resolutions'] as $filterKey) {
             $values = $this->slugFilterValues($filters[$filterKey] ?? []);
@@ -397,6 +416,15 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             static fn (mixed $item): string => is_scalar($item) ? trim((string) $item) : '',
             $values,
         ))));
+    }
+
+    /** @return array<int, string> */
+    private function versionFilterValues(mixed $value): array
+    {
+        return array_values(array_filter(
+            $this->stringFilterValues($value),
+            static fn (string $version): bool => preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $version) === 1,
+        ));
     }
 
     /** @param array<int, string> $allowed

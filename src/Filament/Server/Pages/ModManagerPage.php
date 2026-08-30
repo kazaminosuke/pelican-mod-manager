@@ -50,6 +50,7 @@ use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
+use Kazaminosuke\ModManager\Filament\Filters\CatalogSelectFilter;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -514,6 +515,7 @@ class ModManagerPage extends Page implements HasTable
         // the whole component request (including after a browser reload).
         $this->loadDefaultActiveTab();
         $this->restoreCatalogStateFromUrl();
+        $this->normalizeCatalogMultiSelectState();
         $requestedSort = request()->query->has('sort')
             ? $this->catalogSort
             : session()->get($this->getCatalogSortSessionKey(), 'downloads');
@@ -2642,6 +2644,8 @@ class ModManagerPage extends Page implements HasTable
             ->deferLoading(fn (): bool => !$this->hasWarmRecordsCache())
             ->paginated([self::TABLE_PAGE_SIZE])
             ->filtersFormWidth(Width::Large)
+            ->filtersFormColumns(['default' => 1, 'md' => 2])
+            ->filtersFormMaxHeight('calc(100dvh - 8rem)')
             ->filtersTriggerAction(fn (Action $action): Action => $action->extraAttributes(
                 fn (): array => [
                     // Filament renders an integer zero as a filled badge. Add
@@ -2652,23 +2656,48 @@ class ModManagerPage extends Page implements HasTable
                 ],
             ))
             ->filters([
-                SelectFilter::make('catalog_version')
+                CatalogSelectFilter::make('catalog_version')
                     ->label(trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
                     ->options(fn () => $this->getCatalogVersionOptions())
+                    ->placeholder(fn (): string => $this->catalogVersionFilterPlaceholder())
+                    ->multiple()
+                    ->default(fn (): array => $this->catalogDefaultVersionValues())
+                    ->activeCountExcludedValues(fn (): array => $this->catalogDefaultVersionValues())
+                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators(
+                        $filter,
+                        $state,
+                        $this->catalogDefaultVersionValues(),
+                    ))
+                    ->modifyFormFieldUsing(function (Select $field): Select {
+                        // CurseForge documents a maximum of four values for
+                        // its gameVersions query parameter. Keep the UI and
+                        // the upstream request within that contract.
+                        return $this->getCurrentSource() instanceof CurseForgeSource
+                            ? $field->maxItems(4)
+                            : $field;
+                    })
                     ->searchable()
                     ->preload()
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getCatalogVersionOptions() !== []),
-                SelectFilter::make('catalog_loader')
+                CatalogSelectFilter::make('catalog_loader')
                     ->label(trans('pelican-mod-manager::strings.table.filters.loader'))
                     ->options(fn () => $this->getCatalogLoaderFilterOptions())
+                    ->placeholder(fn (): string => $this->catalogLoaderFilterPlaceholder())
                     ->multiple()
-                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
+                    ->default(fn (): array => $this->catalogDefaultLoaderValues())
+                    ->activeCountExcludedValues(fn (): array => $this->catalogDefaultLoaderValues())
+                    ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators(
+                        $filter,
+                        $state,
+                        $this->catalogDefaultLoaderValues(),
+                    ))
                     ->searchable()
                     ->preload()
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getCatalogLoaderFilterOptions() !== []),
                 SelectFilter::make('catalog_platform')
                     ->label(trans('pelican-mod-manager::strings.table.filters.platform'))
                     ->options(fn () => $this->getCatalogPlatformFilterOptions())
+                    ->placeholder(fn (): string => $this->catalogPlatformFilterPlaceholder())
                     ->multiple()
                     ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
                     ->searchable()
@@ -2677,6 +2706,7 @@ class ModManagerPage extends Page implements HasTable
                 SelectFilter::make('catalog_category')
                     ->label(trans('pelican-mod-manager::strings.table.filters.category'))
                     ->options(fn () => $this->getCatalogCategoryOptions())
+                    ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->multiple()
                     ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
                     ->searchable()
@@ -2685,12 +2715,14 @@ class ModManagerPage extends Page implements HasTable
                 SelectFilter::make('catalog_feature')
                     ->label(trans('pelican-mod-manager::strings.table.filters.feature'))
                     ->options(fn () => $this->getModrinthCategoryGroupOptions('features'))
+                    ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->multiple()
                     ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getModrinthCategoryGroupOptions('features') !== []),
                 SelectFilter::make('catalog_resolution')
                     ->label(trans('pelican-mod-manager::strings.table.filters.resolution'))
                     ->options(fn () => $this->getModrinthCategoryGroupOptions('resolutions'))
+                    ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->multiple()
                     ->indicateUsing(fn (SelectFilter $filter, array $state): array => $this->catalogSelectionIndicators($filter, $state))
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getModrinthCategoryGroupOptions('resolutions') !== []),
@@ -2700,44 +2732,44 @@ class ModManagerPage extends Page implements HasTable
                         'server' => trans('pelican-mod-manager::strings.table.filters.environment_server'),
                         'client' => trans('pelican-mod-manager::strings.table.filters.environment_client'),
                     ])
+                    ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->visible(fn () => $this->catalogFilterVisible()
                         && $this->getCurrentSource()?->getKey() === ProjectSourceKey::Modrinth
                         && $this->currentProjectType() === ProjectType::Mod),
                 Filter::make('catalog_advanced')
-                    ->label(trans('pelican-mod-manager::strings.table.filters.advanced'))
                     ->schema([
-                        Section::make(trans('pelican-mod-manager::strings.table.filters.advanced'))
-                            ->collapsed()
-                            ->collapsible()
-                            ->schema([
-                                Select::make('license')
-                                    ->label(trans('pelican-mod-manager::strings.table.filters.license'))
-                                    ->options(fn () => $this->getCatalogLicenseOptions())
-                                    ->searchable()
-                                    ->native(false),
-                                Select::make('exclude_disclosures')
-                                    ->label(trans('pelican-mod-manager::strings.table.filters.exclude_disclosures'))
-                                    ->options(fn () => $this->getCatalogDisclosureOptions())
-                                    ->multiple()
-                                    ->searchable()
-                                    ->native(false),
-                                TextInput::make('min_downloads')
-                                    ->label(trans('pelican-mod-manager::strings.table.filters.min_downloads'))
-                                    ->numeric()
-                                    ->minValue(0),
-                                TextInput::make('min_follows')
-                                    ->label(trans('pelican-mod-manager::strings.table.filters.min_followers'))
-                                    ->numeric()
-                                    ->minValue(0),
-                                DatePicker::make('created_after')
-                                    ->label(trans('pelican-mod-manager::strings.table.filters.created_after'))
-                                    ->native(false),
-                                DatePicker::make('updated_after')
-                                    ->label(trans('pelican-mod-manager::strings.table.filters.updated_after'))
-                                    ->native(false),
-                            ])
-                            ->columns(2),
+                        Select::make('license')
+                            ->label(trans('pelican-mod-manager::strings.table.filters.license'))
+                            ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
+                            ->options(fn () => $this->getCatalogLicenseOptions())
+                            ->searchable()
+                            ->native(false),
+                        Select::make('exclude_disclosures')
+                            ->label(trans('pelican-mod-manager::strings.table.filters.exclude_disclosures'))
+                            ->placeholder(trans('pelican-mod-manager::strings.table.filters.none'))
+                            ->options(fn () => $this->getCatalogDisclosureOptions())
+                            ->multiple()
+                            ->searchable()
+                            ->native(false),
+                        TextInput::make('min_downloads')
+                            ->label(trans('pelican-mod-manager::strings.table.filters.min_downloads'))
+                            ->numeric()
+                            ->minValue(0),
+                        TextInput::make('min_follows')
+                            ->label(trans('pelican-mod-manager::strings.table.filters.min_followers'))
+                            ->numeric()
+                            ->minValue(0),
+                        DatePicker::make('created_after')
+                            ->label(trans('pelican-mod-manager::strings.table.filters.created_after'))
+                            ->displayFormat(fn (): ?string => $this->catalogDateDisplayFormat())
+                            ->native(false),
+                        DatePicker::make('updated_after')
+                            ->label(trans('pelican-mod-manager::strings.table.filters.updated_after'))
+                            ->displayFormat(fn (): ?string => $this->catalogDateDisplayFormat())
+                            ->native(false),
                     ])
+                    ->columns(['default' => 1, 'md' => 2])
+                    ->columnSpanFull()
                     ->indicateUsing(function (array $state): array {
                         $indicators = [];
                         $labels = [
@@ -2749,7 +2781,10 @@ class ModManagerPage extends Page implements HasTable
                         ];
                         foreach ($labels as $field => $label) {
                             if (filled($state[$field] ?? null)) {
-                                $indicators[] = Indicator::make($label.': '.$state[$field])->removeField($field);
+                                $value = in_array($field, ['created_after', 'updated_after'], true)
+                                    ? $this->formatCatalogDateFilter($state[$field])
+                                    : (string) $state[$field];
+                                $indicators[] = Indicator::make($label.': '.$value)->removeField($field);
                             }
                         }
                         foreach ((array) ($state['exclude_disclosures'] ?? []) as $disclosure) {
@@ -2765,14 +2800,17 @@ class ModManagerPage extends Page implements HasTable
                 SelectFilter::make('catalog_hangar_platform')
                     ->label(trans('pelican-mod-manager::strings.table.filters.platform'))
                     ->options(fn () => $this->getHangarPlatformOptions())
+                    ->placeholder(fn (): string => $this->catalogHangarPlatformFilterPlaceholder())
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarPlatformOptions() !== []),
                 SelectFilter::make('catalog_hangar_category')
                     ->label(trans('pelican-mod-manager::strings.table.filters.category'))
                     ->options(fn () => $this->getHangarCategoryOptions())
+                    ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarCategoryOptions() !== []),
                 SelectFilter::make('catalog_hangar_tag')
                     ->label(trans('pelican-mod-manager::strings.table.filters.tag'))
                     ->options(fn () => $this->getHangarTagOptions())
+                    ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarTagOptions() !== []),
             ])
             ->emptyStateHeading(function () {
@@ -3344,6 +3382,86 @@ class ModManagerPage extends Page implements HasTable
         };
     }
 
+    protected function catalogAllFilterPlaceholder(): string
+    {
+        return trans('pelican-mod-manager::strings.table.filters.all');
+    }
+
+    protected function catalogVersionFilterPlaceholder(): string
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+
+        return MinecraftVersionResolver::resolve($server) ?? $this->catalogAllFilterPlaceholder();
+    }
+
+    /** @return array<int, string> */
+    protected function catalogDefaultVersionValues(): array
+    {
+        $version = $this->catalogVersionFilterPlaceholder();
+
+        return $version === $this->catalogAllFilterPlaceholder() ? [] : [$version];
+    }
+
+    protected function catalogLoaderFilterPlaceholder(): string
+    {
+        return $this->catalogLoaderPlaceholderFromOptions($this->getCatalogLoaderFilterOptions());
+    }
+
+    protected function catalogPlatformFilterPlaceholder(): string
+    {
+        return $this->catalogLoaderPlaceholderFromOptions($this->getCatalogPlatformFilterOptions());
+    }
+
+    /** @return array<int, string> */
+    protected function catalogDefaultLoaderValues(): array
+    {
+        $options = $this->getCatalogLoaderFilterOptions();
+        $value = $this->catalogLoaderValueForOptions($options);
+
+        return $value === null ? [] : [$value];
+    }
+
+    /** @param array<string, string> $options */
+    protected function catalogLoaderPlaceholderFromOptions(array $options): string
+    {
+        $value = $this->catalogLoaderValueForOptions($options);
+
+        return $value !== null
+            ? $options[$value]
+            : $this->catalogAllFilterPlaceholder();
+    }
+
+    /** @param array<string, string> $options */
+    protected function catalogLoaderValueForOptions(array $options): ?string
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $loader = MinecraftLoader::fromServer($server);
+        if ($loader === null) {
+            return null;
+        }
+
+        if (array_key_exists($loader->value, $options)) {
+            return $loader->value;
+        }
+
+        foreach ($options as $value => $label) {
+            if (strcasecmp($label, $loader->getLabel()) === 0) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    protected function catalogHangarPlatformFilterPlaceholder(): string
+    {
+        $platform = $this->effectiveHangarPlatform();
+
+        return $this->getHangarPlatformOptions()[$platform] ?? $this->catalogAllFilterPlaceholder();
+    }
+
     /** @return array<string, string> */
     protected function getCatalogLoaderFilterOptions(): array
     {
@@ -3479,7 +3597,8 @@ class ModManagerPage extends Page implements HasTable
      */
     protected function catalogFilterValues(array $state, string $name): array
     {
-        $values = $state[$name]['values'] ?? [];
+        $values = $state[$name]['values'] ?? ($state[$name]['value'] ?? []);
+        $values = is_array($values) ? $values : [$values];
 
         return array_values(array_filter(array_map(
             static fn (mixed $value): string => is_scalar($value) ? trim((string) $value) : '',
@@ -3487,14 +3606,54 @@ class ModManagerPage extends Page implements HasTable
         )));
     }
 
+    /**
+     * Filament stored single-select table filters under `value` before the
+     * catalog compatibility filters became multi-select fields. Normalize
+     * those old URL snapshots at the boundary so the form, indicators, and
+     * provider query all observe the same `values` shape.
+     */
+    protected function normalizeCatalogMultiSelectState(): void
+    {
+        if (!is_array($this->tableFilters)) {
+            return;
+        }
+
+        foreach ([
+            'catalog_version',
+            'catalog_loader',
+            'catalog_platform',
+            'catalog_category',
+            'catalog_feature',
+            'catalog_resolution',
+        ] as $name) {
+            $filter = $this->tableFilters[$name] ?? null;
+            if (!is_array($filter) || array_key_exists('values', $filter) || !array_key_exists('value', $filter)) {
+                continue;
+            }
+
+            $value = $filter['value'];
+            $filter['values'] = is_array($value)
+                ? $value
+                : (filled($value) ? [$value] : []);
+            unset($filter['value']);
+            $this->tableFilters[$name] = $filter;
+        }
+    }
+
     /** @return array<int, Indicator> */
-    protected function catalogSelectionIndicators(SelectFilter $filter, array $state): array
+    /** @param array<int, string> $excludedValues */
+    protected function catalogSelectionIndicators(SelectFilter $filter, array $state, array $excludedValues = []): array
     {
         $options = collect($filter->getOptions())
             ->mapWithKeys(fn (string|array $label, string $value): array => is_array($label) ? $label : [$value => $label]);
 
-        return collect((array) ($state['values'] ?? []))
+        $values = array_key_exists('values', $state)
+            ? $state['values']
+            : (array_key_exists('value', $state) ? [$state['value']] : []);
+
+        return collect((array) $values)
             ->filter(fn (mixed $value): bool => is_scalar($value) && $options->has((string) $value))
+            ->reject(fn (mixed $value): bool => in_array((string) $value, $excludedValues, true))
             ->map(fn (mixed $value): Indicator => Indicator::make((string) $options->get((string) $value))
                 ->removeField('value__'.(string) $value))
             ->values()
@@ -3508,7 +3667,7 @@ class ModManagerPage extends Page implements HasTable
 
         return [
             'sort' => $this->catalogSort,
-            'version' => $this->catalogFilterValue($state, 'catalog_version'),
+            'versions' => $this->catalogFilterValues($state, 'catalog_version'),
             'loaders' => $this->catalogFilterValues($state, 'catalog_loader'),
             'platforms' => $this->catalogFilterValues($state, 'catalog_platform'),
             'categories' => $this->catalogFilterValues($state, 'catalog_category'),
@@ -3532,7 +3691,40 @@ class ModManagerPage extends Page implements HasTable
     {
         $value = $state['catalog_advanced'][$name] ?? null;
 
-        return is_scalar($value) && trim((string) $value) !== '' ? trim((string) $value) : null;
+        if (!is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        $value = trim((string) $value);
+        if (!in_array($name, ['created_after', 'updated_after'], true)) {
+            return $value;
+        }
+
+        try {
+            return Carbon::parse($value)->format('Y-m-d');
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    protected function catalogDateDisplayFormat(): ?string
+    {
+        return app()->getLocale() === 'ja' ? 'Y年n月j日以降' : null;
+    }
+
+    protected function formatCatalogDateFilter(mixed $value): string
+    {
+        try {
+            $date = Carbon::parse((string) $value)->locale(app()->getLocale());
+        } catch (Throwable) {
+            return (string) $value;
+        }
+
+        if (app()->getLocale() === 'ja') {
+            return $date->format('Y年n月j日').'以降';
+        }
+
+        return $date->isoFormat('LL');
     }
 
     /** @param array<string, mixed> $state

@@ -211,6 +211,26 @@ class ModrinthSourceSearchCacheTest extends TestCase
             ]);
     }
 
+    public function test_multiple_versions_are_an_or_facet_group(): void
+    {
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                $facets = json_decode($spec->arguments['query']['facets'], true, 512, JSON_THROW_ON_ERROR);
+
+                self::assertContains(['versions:1.21.1', 'versions:1.21'], $facets);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new ModrinthSource($this->sourceCache($this->cache(), $executor)))
+            ->search($this->server(), ProjectType::Datapack, filters: [
+                'versions' => ['1.21.1', '1.21'],
+            ]);
+    }
+
     public function test_modrinth_advanced_facets_and_official_sort_are_mapped_server_side(): void
     {
         $executor = Mockery::mock(SourceFetchExecutorInterface::class);

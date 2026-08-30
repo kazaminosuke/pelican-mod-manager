@@ -136,6 +136,26 @@ class CurseForgeSourceSearchCacheTest extends TestCase
             ]);
     }
 
+    public function test_search_maps_multiple_game_versions_to_the_official_or_parameter(): void
+    {
+        $this->bindApiKey('test-key');
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function (SourceFetchSpec $spec): bool {
+                self::assertSame('["1.20.6","1.21.1"]', $spec->arguments['params']['gameVersions']);
+                self::assertArrayNotHasKey('gameVersion', $spec->arguments['params']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        (new CurseForgeSource($this->sourceCache($this->cache(), $executor)))
+            ->search($this->server(), ProjectType::ResourcePack, filters: [
+                'versions' => ['1.20.6', '1.21.1'],
+            ]);
+    }
+
     public function test_category_filter_keeps_automatic_mod_version_and_loader_params(): void
     {
         $this->bindApiKey('test-key');

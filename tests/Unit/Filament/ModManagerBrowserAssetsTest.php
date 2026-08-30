@@ -106,6 +106,38 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString('[data-mmr-view-toggle]{order:', $css);
         self::assertStringContainsString('data-mmr-active-filters', $page);
         self::assertStringContainsString('[data-mmr-active-filters="0"] .fi-icon-btn-badge-ctn{display:none;}', $css);
+        self::assertStringContainsString("CatalogSelectFilter::make('catalog_version')", $page);
+        self::assertStringContainsString("CatalogSelectFilter::make('catalog_loader')", $page);
+        self::assertStringContainsString('->activeCountExcludedValues(fn (): array => $this->catalogDefaultVersionValues())', $page);
+        self::assertStringContainsString('->activeCountExcludedValues(fn (): array => $this->catalogDefaultLoaderValues())', $page);
+    }
+
+    public function test_catalog_filters_are_compact_and_reuse_compatibility_as_placeholders(): void
+    {
+        $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+
+        self::assertStringContainsString("->filtersFormColumns(['default' => 1, 'md' => 2])", $page);
+        self::assertStringContainsString("->filtersFormMaxHeight('calc(100dvh - 8rem)')", $page);
+        self::assertStringContainsString('->placeholder(fn (): string => $this->catalogVersionFilterPlaceholder())', $page);
+        self::assertStringContainsString("SelectFilter::make('catalog_version')", $page);
+        self::assertStringContainsString('->default(fn (): array => $this->catalogDefaultVersionValues())', $page);
+        self::assertStringContainsString('->default(fn (): array => $this->catalogDefaultLoaderValues())', $page);
+        self::assertStringContainsString('->displayFormat(fn (): ?string => $this->catalogDateDisplayFormat())', $page);
+        self::assertStringContainsString("return app()->getLocale() === 'ja' ? 'Y年n月j日以降' : null;", $page);
+        self::assertStringContainsString("return \$date->format('Y年n月j日').'以降';", $page);
+        self::assertStringNotContainsString("->placeholder(trans('pelican-mod-manager::strings.table.filters.date_placeholder'))", $page);
+        self::assertStringNotContainsString("'date_placeholder'", (string) file_get_contents(dirname(__DIR__, 3).'/lang/ja/strings.php'));
+        self::assertStringContainsString("'versions' => \$this->catalogFilterValues(\$state, 'catalog_version')", $page);
+        self::assertStringContainsString("'exclude_disclosures' => '除外'", (string) file_get_contents(dirname(__DIR__, 3).'/lang/ja/strings.php'));
+        self::assertStringContainsString("->placeholder(trans('pelican-mod-manager::strings.table.filters.none'))", $page);
+        self::assertStringContainsString('->placeholder(fn (): string => $this->catalogLoaderFilterPlaceholder())', $page);
+        self::assertStringContainsString('return MinecraftVersionResolver::resolve($server) ?? $this->catalogAllFilterPlaceholder();', $page);
+        self::assertStringContainsString('$loader = MinecraftLoader::fromServer($server);', $page);
+        self::assertStringContainsString("Filter::make('catalog_advanced')", $page);
+        self::assertStringContainsString("->columns(['default' => 1, 'md' => 2])", $page);
+        self::assertStringContainsString('->columnSpanFull()', $page);
+        self::assertStringContainsString('protected function normalizeCatalogMultiSelectState(): void', $page);
+        self::assertStringNotContainsString("Section::make(trans('pelican-mod-manager::strings.table.filters.advanced'))", $page);
     }
 
     public function test_catalog_list_keeps_the_original_table_columns_and_panel_is_css_scoped(): void

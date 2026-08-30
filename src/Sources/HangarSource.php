@@ -169,24 +169,35 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             return null;
         }
 
-        $requestedVersion = trim((string) ($filters['version'] ?? ''));
-        $explicitVersion = preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $requestedVersion) === 1
-            ? $requestedVersion
-            : null;
+        $hasVersionList = array_key_exists('versions', $filters);
+        $requestedVersions = $this->versionFilterValues(
+            $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []),
+        );
+        $explicitVersion = $hasVersionList
+            ? (count($requestedVersions) === 1 ? $requestedVersions[0] : null)
+            : ($requestedVersions[0] ?? null);
         // An automatically detected version belongs to the automatically
         // detected platform. Hangar's proxy platforms use their own version
         // domains (for example Velocity 3.x/4.x), so carrying a Paper
         // Minecraft version across an explicit platform change creates a
         // contradictory query. An explicitly selected version remains
         // authoritative for the selected platform.
-        $automaticVersion = $selectedPlatform === '' || $selectedPlatform === $automaticPlatform
+        $automaticVersion = !$hasVersionList || $requestedVersions === []
+            ? (($selectedPlatform === '' || $selectedPlatform === $automaticPlatform)
             ? MinecraftVersionResolver::resolve($server)
+            : null)
             : null;
         $params = ['platform' => $platform];
 
         if (($version = $explicitVersion ?? $automaticVersion) !== null) {
             $params['version'] = $version;
         }
+
+        // Hangar's documented project-search contract has one scalar
+        // `version` parameter (unlike Modrinth facets and CurseForge's
+        // gameVersions list). When more than one version is selected, leave
+        // it out rather than serializing an array as the literal "Array" or
+        // guessing an undocumented OR syntax.
 
         $params += [
             // The table paginator renders 20 records per page. Hangar accepts
@@ -927,6 +938,17 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             MinecraftLoader::Velocity => 'VELOCITY',
             default => null,
         };
+    }
+
+    /** @return array<int, string> */
+    private function versionFilterValues(mixed $value): array
+    {
+        $values = is_array($value) ? $value : [$value];
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn (mixed $item): string => is_scalar($item) ? trim((string) $item) : '',
+            $values,
+        ), static fn (string $version): bool => preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $version) === 1)));
     }
 
     /** @param array<string, mixed> $project */
