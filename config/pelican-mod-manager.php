@@ -17,7 +17,7 @@ return [
     // not registered unless this is true.
     'debug_timing' => env('MOD_MANAGER_DEBUG_TIMING', false),
 
-    // Operator kill switch for the catalog warm system (Stage 5): the
+    // Operator kill switch for catalog warming (Stage 5): the
     // per-visit dispatch from ModManagerPage::mount() and the scheduled
     // mod-manager:warm-catalog command both check this before dispatching
     // anything.

@@ -293,8 +293,7 @@ class InstalledArchiveTransactionTest extends TestCase
         bool $saved,
         array $installedMods = [],
         bool $expectMetadataRead = true,
-    ): InstalledProjectService
-    {
+    ): InstalledProjectService {
         $document = InstalledMetadataDocument::empty();
         $status = InstalledMetadataReadStatus::Missing;
 
@@ -438,7 +437,7 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
         return ['name' => $filename, 'size' => $this->pulledSize];
     }
 
-    public function rename(
+    public function move(
         DaemonFileRepository $fileRepository,
         Server $server,
         string $directory,

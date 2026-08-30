@@ -100,7 +100,7 @@
             }
         };
 
-        const copy = async (text) => {
+        const writeClipboard = async (text) => {
             try {
                 await navigator.clipboard.writeText(text);
             } catch (_error) {
@@ -114,10 +114,10 @@
         };
 
         document.getElementById('mmr-perf-copy')?.addEventListener('click', () => {
-            copy(JSON.stringify(history, null, 2));
+            writeClipboard(JSON.stringify(history, null, 2));
         });
         document.getElementById('mmr-perf-copy-text')?.addEventListener('click', () => {
-            copy(history.map((entry) => summary(entry)).join('\n\n---\n\n'));
+            writeClipboard(history.map((entry) => summary(entry)).join('\n\n---\n\n'));
         });
         document.getElementById('mmr-perf-clear')?.addEventListener('click', () => {
             history = [];

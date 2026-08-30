@@ -2,6 +2,8 @@
 
 namespace Kazaminosuke\ModManager\Support;
 
+use Symfony\Component\Filesystem\Filesystem;
+
 /**
  * Computes CurseForge's file "fingerprint": a MurmurHash2 (32-bit, seed 1) over
  * the file's bytes with whitespace bytes (tab, LF, CR, space) stripped out first.
@@ -30,18 +32,18 @@ class CurseForgeFingerprint
      * Computes a fingerprint with one read of the source stream.
      *
      * MurmurHash2 needs the filtered length before hashing. Filtered bytes are
-     * therefore spooled to php://temp, which stays in memory only up to 2 MiB
-     * and transparently spills larger JARs to disk for the local second pass.
-     * The optional callback receives each raw chunk during the single source
-     * read so callers can calculate cryptographic hashes at the same time.
+     * therefore spooled to a Symfony-managed temporary file for the local
+     * second pass instead of buffering a complete JAR in PHP memory. The
+     * optional callback receives each raw chunk during the single source read
+     * so callers can calculate cryptographic hashes at the same time.
      */
     public static function hashStream(callable $openStream, ?callable $consumeRawChunk = null): int
     {
-        $filteredStream = fopen('php://temp/maxmemory:2097152', 'w+b');
-
-        if ($filteredStream === false) {
-            throw new \RuntimeException('Unable to create temporary stream for CurseForge fingerprint');
-        }
+        $filesystem = new Filesystem();
+        $filteredPath = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+            .DIRECTORY_SEPARATOR.'mmr-cf-fingerprint-'.bin2hex(random_bytes(16));
+        $filesystem->dumpFile($filteredPath, '');
+        $filteredStream = null;
 
         try {
             $length = 0;
@@ -61,10 +63,19 @@ class CurseForgeFingerprint
 
                     $filtered = str_replace(["\x09", "\x0A", "\x0D", "\x20"], '', $chunk);
                     $length += strlen($filtered);
-                    self::writeAll($filteredStream, $filtered);
+
+                    if ($filtered !== '') {
+                        $filesystem->appendToFile($filteredPath, $filtered);
+                    }
                 }
             } finally {
                 $sourceStream->close();
+            }
+
+            $filteredStream = fopen($filteredPath, 'rb');
+
+            if ($filteredStream === false) {
+                throw new \RuntimeException('Unable to open temporary stream for CurseForge fingerprint');
             }
 
             if (!rewind($filteredStream)) {
@@ -73,24 +84,11 @@ class CurseForgeFingerprint
 
             return self::murmurHash2Stream($filteredStream, $length);
         } finally {
-            fclose($filteredStream);
-        }
-    }
-
-    /** @param resource $stream */
-    private static function writeAll($stream, string $data): void
-    {
-        $length = strlen($data);
-        $offset = 0;
-
-        while ($offset < $length) {
-            $written = fwrite($stream, substr($data, $offset));
-
-            if ($written === false || $written === 0) {
-                throw new \RuntimeException('Unable to spool CurseForge fingerprint data');
+            if (is_resource($filteredStream)) {
+                fclose($filteredStream);
             }
 
-            $offset += $written;
+            $filesystem->remove($filteredPath);
         }
     }
 

@@ -85,14 +85,14 @@ class InstalledArchiveTransaction
 
             if ($destinationExists) {
                 $backupFilename = $this->uniqueHiddenName('prev');
-                $this->wings->rename($fileRepository, $server, $folder, $newFilename, $backupFilename);
+                $this->wings->move($fileRepository, $server, $folder, $newFilename, $backupFilename);
             }
 
             try {
-                $this->wings->rename($fileRepository, $server, $folder, $tempFilename, $newFilename);
+                $this->wings->move($fileRepository, $server, $folder, $tempFilename, $newFilename);
             } catch (Throwable $renameException) {
                 if ($backupFilename !== null) {
-                    $this->wings->rename($fileRepository, $server, $folder, $backupFilename, $newFilename);
+                    $this->wings->move($fileRepository, $server, $folder, $backupFilename, $newFilename);
                     $backupFilename = null;
                 }
 
@@ -157,7 +157,7 @@ class InstalledArchiveTransaction
 
             if (!$activated && $backupFilename !== null) {
                 try {
-                    $this->wings->rename($fileRepository, $server, $folder, $backupFilename, $newFilename);
+                    $this->wings->move($fileRepository, $server, $folder, $backupFilename, $newFilename);
                 } catch (Throwable $restoreException) {
                     report($restoreException);
                 }
@@ -209,7 +209,7 @@ class InstalledArchiveTransaction
         }
 
         try {
-            $this->wings->rename($fileRepository, $server, $folder, $backupFilename, $newFilename);
+            $this->wings->move($fileRepository, $server, $folder, $backupFilename, $newFilename);
         } catch (Throwable $exception) {
             report($exception);
         }
@@ -249,8 +249,6 @@ class InstalledArchiveTransaction
         }
     }
 
-    /**
-     */
     private function commitMetadataEntry(
         Server $server,
         DaemonFileRepository $fileRepository,

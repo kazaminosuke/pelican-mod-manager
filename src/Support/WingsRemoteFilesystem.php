@@ -56,7 +56,7 @@ class WingsRemoteFilesystem
         return is_array($stat) ? $stat : [];
     }
 
-    public function rename(
+    public function move(
         DaemonFileRepository $fileRepository,
         Server $server,
         string $directory,
