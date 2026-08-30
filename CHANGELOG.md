@@ -5,6 +5,30 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-30
+
+### 日本語
+
+#### 変更
+
+- プロジェクト種別・providerごとのCatalog filterと互換性判定を改善
+- responsiveなList / Panel表示と表示状態の保持に対応
+- Catalog toolbarの操作順・配置・Filament標準actionとの統一を改善
+- Installed件数・scan cache・Catalog初回表示時のbackground warmを改善
+- 現在のmaintainer表記と元プロジェクト・参考実装のCreditsを整理
+- Hangarのplatform・category・tag filter処理を修正
+
+### English
+
+#### Changed
+
+- Improved Catalog filters and compatibility handling across project types and providers
+- Added responsive List / Panel views with persisted layout state
+- Improved Catalog toolbar ordering, placement, and consistency with standard Filament actions
+- Improved Installed counts, scan caching, and background warming on initial Catalog visits
+- Clarified the current maintainer and separated original-project and implementation-reference credits
+- Fixed Hangar platform, category, and tag filter handling
+
 ## [0.1.0] - 2026-08-27
 
 ### 日本語
