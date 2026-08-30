@@ -5,6 +5,22 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-30
+
+### 日本語
+
+#### 変更
+
+- Marketplaceの禁止ファイル・プロセス操作検出に対応
+- 挙動を変更せず、既存のFilesystem・Wings API抽象化へ置換
+
+### English
+
+#### Changed
+
+- Addressed Marketplace detections for prohibited file and process operations
+- Preserved behavior while using the existing Filesystem and Wings API abstractions
+
 ## [0.1.2] - 2026-08-30
 
 ### 日本語
