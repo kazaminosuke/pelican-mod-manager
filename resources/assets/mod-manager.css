@@ -21,18 +21,7 @@
 .mmr-catalog-sort-toolbar{width:12rem;min-width:10rem;}
 .mmr-catalog-sort-select{display:block;width:100%;min-height:2.25rem;border-radius:.5rem;border:1px solid rgb(209 213 219);background:#fff;padding:.5rem .75rem;color:rgb(17 24 39);font-size:.875rem;line-height:1.25rem;}
 .dark .mmr-catalog-sort-select{border-color:rgb(75 85 99);background:rgb(31 41 55);color:#fff;}
-.mmr-table-scroll-ctn .fi-ta-search-field{order:0;}
-.mmr-catalog-sort-toolbar{order:1;}
-.mmr-table-scroll-ctn .fi-ta-filters-dropdown{order:2;}
-.mmr-table-scroll-ctn .fi-ta-col-manager-dropdown{order:3;}
-[data-mmr-view-toggle]{order:4;}
-.mmr-catalog-toolbar-button{min-height:2.25rem;border:0;border-radius:.5rem;background:transparent;color:rgb(75 85 99);}
-.mmr-catalog-toolbar-button:hover{background:rgb(243 244 246);}
-.mmr-catalog-toolbar-button:focus-visible{outline:2px solid rgb(59 130 246);outline-offset:2px;}
-.mmr-catalog-toolbar-icon-button{position:relative;display:inline-flex;align-items:center;justify-content:center;width:2.25rem;min-width:2.25rem;padding:0;}
-.mmr-toolbar-icon{display:block;width:1.25rem;height:1.25rem;}
-.dark .mmr-catalog-toolbar-button{color:rgb(209 213 219);}
-.dark .mmr-catalog-toolbar-button:hover{background:rgb(255 255 255 / .1);}
+.mmr-table-scroll-ctn [data-mmr-active-filters="0"] .fi-icon-btn-badge-ctn{display:none;}
 .mmr-table-scroll-ctn .mmr-compatibility-header,.mmr-table-scroll-ctn .mmr-compatibility-cell{display:none;}
 .mmr-table-scroll-ctn[data-mmr-catalog-view="panel"] .fi-ta-table{display:block;}
 .mmr-table-scroll-ctn[data-mmr-catalog-view="panel"] .fi-ta-table>thead{display:none;}

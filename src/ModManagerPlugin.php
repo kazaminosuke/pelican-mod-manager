@@ -86,10 +86,32 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // concrete page class it needs to appear on.
         $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
         $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
-        $switchToListLabel = e(trans('pelican-mod-manager::strings.table.view.switch_to_list'));
-        $switchToPanelLabel = e(trans('pelican-mod-manager::strings.table.view.switch_to_panel'));
-        $listIcon = app(BladeIconsFactory::class)->svg('tabler-list', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
-        $panelIcon = app(BladeIconsFactory::class)->svg('tabler-layout-grid', 'mmr-toolbar-icon', ['aria-hidden' => 'true'])->toHtml();
+        $switchToListLabel = trans('pelican-mod-manager::strings.table.view.switch_to_list');
+        $switchToPanelLabel = trans('pelican-mod-manager::strings.table.view.switch_to_panel');
+        $viewToggle = fn (): string => Action::make('catalogViewToggle')
+            ->iconButton()
+            ->color('gray')
+            ->label($switchToPanelLabel)
+            // Use the same Action/icon-button rendering path as Filament's
+            // filter and column-manager triggers. The runtime only swaps the
+            // SVG paths when the client-only view state changes; it never
+            // replaces or repositions the button/icon DOM.
+            ->icon('tabler-layout-grid')
+            // The actual view change is handled by the external runtime so it
+            // can remain client-only and preserve localStorage without a
+            // Livewire request. A non-empty Alpine handler disables the
+            // default mountAction wire click on this standalone Action.
+            ->alpineClickHandler('null')
+            ->extraAttributes([
+                'class' => 'fi-force-enabled',
+                'data-mmr-view-toggle' => true,
+                'data-mmr-view-list-label' => $switchToListLabel,
+                'data-mmr-view-panel-label' => $switchToPanelLabel,
+                'title' => $switchToPanelLabel,
+                'x-cloak' => true,
+                'x-show' => '$wire.activeTab !== \'installed\'',
+            ])
+            ->toHtml();
 
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
@@ -100,13 +122,16 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 .'<template x-for="([value, label]) in Object.entries($wire.catalogSortOptions || {})" :key="value">'
                 .'<option :value="value" x-text="label"></option>'
                 .'</template>'
-                .'</select></div>'
-                .'<button type="button" class="mmr-catalog-toolbar-button mmr-catalog-toolbar-icon-button" data-mmr-view-toggle x-cloak x-show="$wire.activeTab !== \'installed\'"'
-                .' data-mmr-view-list-label="'.$switchToListLabel.'" data-mmr-view-panel-label="'.$switchToPanelLabel.'"'
-                .' aria-label="'.$switchToPanelLabel.'" title="'.$switchToPanelLabel.'">'
-                .'<span data-mmr-view-icon="panel">'.$panelIcon.'</span>'
-                .'<span data-mmr-view-icon="list" hidden>'.$listIcon.'</span></button>',
+                .'</select></div>',
             ),
+            $pageClasses,
+        );
+        // Filament renders this hook inside the same toolbar group, directly
+        // after its column-manager trigger. This gives us the required DOM
+        // order without CSS ordering or client-side node movement.
+        $panel->renderHook(
+            TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER,
+            fn () => new HtmlString($viewToggle()),
             $pageClasses,
         );
         $panel->renderHook(
@@ -494,7 +519,8 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
      * synchronously from this one request - doing that for every server,
      * each potentially hundreds of mods, in a single web request risks a
      * real timeout. Re-scanning instead happens lazily, the normal way, the
-     * next time an applicable Mod/Plugin/Datapack Installed tab is opened.
+     * next time an applicable Mod/Plugin/Datapack Catalog or Installed view
+     * is opened.
      */
     private static function clearAllServers(
         InstalledMetadataResetService $resets,

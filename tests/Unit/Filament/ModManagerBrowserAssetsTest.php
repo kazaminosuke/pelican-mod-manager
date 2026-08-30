@@ -89,13 +89,22 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString('mmr-catalog-toolbar-actions', $plugin);
         self::assertStringNotContainsString('mmr-catalog-view-toggle', $plugin);
         self::assertStringNotContainsString('data-mmr-view-mode=', $plugin);
+        self::assertStringContainsString("Action::make('catalogViewToggle')", $plugin);
+        self::assertStringContainsString('->iconButton()', $plugin);
+        self::assertStringContainsString("->icon('tabler-layout-grid')", $plugin);
+        self::assertStringContainsString("->alpineClickHandler('null')", $plugin);
+        self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
         self::assertStringContainsString("document.querySelector('[data-mmr-view-toggle]')", $runtime);
         self::assertStringContainsString("const target = view === 'panel' ? 'list' : 'panel'", $runtime);
-        self::assertStringContainsString('.mmr-catalog-toolbar-button{min-height:2.25rem;border:0;', $css);
-        self::assertStringContainsString('.mmr-catalog-toolbar-button:focus-visible{outline:2px solid', $css);
+        self::assertStringContainsString("toggle.querySelector(':scope > svg.fi-icon')", $runtime);
+        self::assertStringNotContainsString("querySelectorAll('[data-mmr-view-icon]')", $runtime);
+        self::assertStringNotContainsString('.mmr-catalog-toolbar-button', $css);
+        self::assertStringNotContainsString('.mmr-catalog-toolbar-icon-button', $css);
         self::assertStringNotContainsString('[data-mmr-override-active="true"]{border-color:', $css);
-        self::assertStringContainsString('.fi-ta-col-manager-dropdown{order:3;}', $css);
-        self::assertStringContainsString('[data-mmr-view-toggle]{order:4;}', $css);
+        self::assertStringNotContainsString('.fi-ta-col-manager-dropdown{order:', $css);
+        self::assertStringNotContainsString('[data-mmr-view-toggle]{order:', $css);
+        self::assertStringContainsString('data-mmr-active-filters', $page);
+        self::assertStringContainsString('[data-mmr-active-filters="0"] .fi-icon-btn-badge-ctn{display:none;}', $css);
     }
 
     public function test_catalog_list_keeps_the_original_table_columns_and_panel_is_css_scoped(): void

@@ -9,6 +9,10 @@
 
     const projectIconPlaceholder = document.currentScript?.dataset.mmrProjectIconPlaceholder ?? '';
     const catalogViewStorageKey = 'pelican-mod-manager.catalog-view';
+    const catalogViewIconPaths = {
+        panel: '<path stroke="none" d="M0 0h24v24H0z" fill="none"></path><path d="M4 4m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path><path d="M4 15m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path><path d="M15 4m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path><path d="M15 15m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path>',
+        list: '<path stroke="none" d="M0 0h24v24H0z" fill="none"></path><path d="M9 6h11"></path><path d="M9 12h11"></path><path d="M9 18h11"></path><path d="M5 6v.01"></path><path d="M5 12v.01"></path><path d="M5 18v.01"></path>',
+    };
     let headerScrollFrame = null;
     let catalogViewFrame = null;
 
@@ -38,9 +42,11 @@
         toggle.dataset.mmrViewTarget = target;
         toggle.setAttribute('aria-label', label || '');
         toggle.setAttribute('title', label || '');
-        toggle.querySelectorAll('[data-mmr-view-icon]').forEach((icon) => {
-            icon.hidden = icon.dataset.mmrViewIcon !== target;
-        });
+        const icon = toggle.querySelector(':scope > svg.fi-icon');
+        if (icon && icon.dataset.mmrViewIcon !== target) {
+            icon.innerHTML = catalogViewIconPaths[target];
+            icon.dataset.mmrViewIcon = target;
+        }
     };
 
     const queueCatalogView = () => {
