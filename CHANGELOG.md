@@ -5,6 +5,30 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-30
+
+### 日本語
+
+#### 変更
+
+- Catalog Filter UIをcompactなresponsiveレイアウトに改善
+- Minecraft Versionの複数選択に対応
+- server / Eggから自動検出したMinecraft Version・Loaderを初期選択に適用
+- 自動検出値を除外したactive filter countを修正
+- 日本語環境の日付表示を自然な年月日順に改善
+- Filter dropdownのoverflow clippingをFilamentのfixed positioningで修正
+
+### English
+
+#### Changed
+
+- Improved the Catalog filter UI with a compact responsive layout
+- Added multiple Minecraft version selection
+- Applied server/Egg-detected Minecraft version and loader as the initial selections
+- Corrected the active filter count to ignore automatic defaults
+- Improved Japanese date display with a natural year-month-day order
+- Fixed Filter dropdown overflow clipping with Filament fixed positioning
+
 ## [0.1.1] - 2026-08-30
 
 ### 日本語
