@@ -14,6 +14,7 @@ final class PluginIdentityTest extends TestCase
         $updates = $this->json('update.json');
 
         self::assertSame(self::PLUGIN_ID, $manifest['id']);
+        self::assertSame('kazaminosuke', $manifest['author']);
         self::assertSame('Kazaminosuke\\ModManager', $manifest['namespace']);
         self::assertSame(
             'https://github.com/kazaminosuke/'.self::PLUGIN_ID,
@@ -32,6 +33,20 @@ final class PluginIdentityTest extends TestCase
                 .$tag.'/'.self::PLUGIN_ID.'.zip',
             $updates['*']['download_url'],
         );
+    }
+
+    public function test_readmes_separate_current_author_from_project_and_ui_research_credits(): void
+    {
+        foreach (['README.md', 'README.ja.md'] as $readme) {
+            $contents = $this->contents($readme);
+
+            self::assertStringContainsString('kazaminosuke', $contents);
+            foreach (['Boy132', 'H1ghSyst3m', 'Yonn', 'JoanFo1456/resources', 'GPL-3.0'] as $credit) {
+                self::assertStringContainsString($credit, $contents);
+            }
+            self::assertStringNotContainsString('adapted from JoanFo1456/resources', $contents);
+            self::assertStringNotContainsString('contains code from JoanFo1456/resources', $contents);
+        }
     }
 
     public function test_runtime_configuration_uses_only_namespaced_environment_keys(): void

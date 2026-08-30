@@ -1,7 +1,7 @@
 {
     "id": "pelican-mod-manager",
     "name": "Minecraft Mod Manager",
-    "author": "Boy132 & H1ghSyst3m & Yonn & kazaminosuke",
+    "author": "kazaminosuke",
     "version": "0.1.0",
     "description": "Search, install, update, and manage Minecraft mods, plugins, datapacks, and resource packs from supported sources.",
     "category": "plugin",

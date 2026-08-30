@@ -108,8 +108,8 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
 同じ画面には**キャッシュをクリア**アクションもあり、対象範囲によって挙動が異なります。
 
 - **全サーバー** - 全サーバーの追跡済みファイルMetadataと共有キャッシュをクリアしますが、即座には
-  再スキャンしません。各サーバーは次回、該当するMod/Plugin/Datapack管理ページのInstalledタブを
-  開いたときに自動的に再スキャンされます。
+  再スキャンしません。各サーバーは次回、該当するMod/Plugin/Datapack管理ページのCatalogまたは
+  Installedを開いたときに自動的に再スキャンされます。
 - **単一サーバー** - そのサーバーのMetadataをクリアし、即座に強制再スキャンをキューに投入します
   (稼働中のキューが必要です。[要件](#要件)を参照)。
 
@@ -121,6 +121,9 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
   設定するproviderのバージョン、direct URL、SHA-1を既存のMetadataインデックスとは別に保存します。
 - **インクリメンタルなハッシュスキャン**により、サイズ/更新日時のシグネチャに変化があった
   ファイルのみを再ハッシュ化します(毎回全ファイルを再ハッシュ化しません)。
+- **Installed状態キャッシュ**は、server/project type単位のscan結果をInstalled件数に、generation単位の
+  MetadataインデックスをCatalog行の状態判定に再利用します。coldなCatalogではバックグラウンドscanを
+  1件だけキューへ投入し、operation state・lease・unique jobで同時リクエストを集約します。
 - **バックグラウンドジョブ・ステータスバッジ**により、スキャンと一括更新がUIをブロックせずに
   実行されます。スキャンはInstalledタブを開いている間だけ進行・短時間の完了結果を表示し、
   一括更新の進行状況はページ内に表示します。
@@ -152,6 +155,14 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
 ## リポジトリ
 
 <https://github.com/kazaminosuke/pelican-mod-manager>
+
+## クレジット・謝辞
+
+- 現在のmaintainer: **kazaminosuke**
+- 元プロジェクト / contributors: **Boy132**、**H1ghSyst3m**、**Yonn**
+- UI実装の調査・参考:
+  [JoanFo1456/resources](https://github.com/JoanFo1456/resources) (GPL-3.0)。Catalog UIと
+  Filament構造の調査・参考に使用しましたが、このrepositoryからコードは流用していません。
 
 ## フォークの系譜とライセンス
 

@@ -116,7 +116,7 @@ The same screen has a **Clear cache** action, which behaves differently by scope
 
 - **All servers** - clears every server's tracked-file metadata and the shared caches, but does
   **not** force an immediate re-scan; each server re-scans lazily the next time its applicable
-  Mod/Plugin/Datapack **Installed** tab is opened.
+  Mod/Plugin/Datapack Catalog or Installed view is opened.
 - **A single server** - clears that server's metadata and immediately queues a forced re-scan
   (needs a working queue - see [Requirements](#requirements)).
 
@@ -129,6 +129,9 @@ The same screen has a **Clear cache** action, which behaves differently by scope
   Mod/Plugin/Datapack metadata index.
 - **Incremental hash scanning** re-hashes a file only when its size/modified-time signature has
   changed, instead of every file on every scan.
+- **Installed-state caching** reuses the per-server/project-type scan result for the Installed
+  count and the generation-scoped metadata index for Catalog row state. A cold Catalog view queues
+  one background scan; operation state, a lease, and a unique job coalesce concurrent requests.
 - **Background jobs and status badges** handle scans and bulk updates without blocking the UI:
   scans show progress and a brief completion outcome only while the Installed tab is open, while
   bulk-update progress remains inline.
@@ -159,6 +162,14 @@ including the detection order and how to configure an egg manually.
 ## Repository
 
 <https://github.com/kazaminosuke/pelican-mod-manager>
+
+## Credits & acknowledgements
+
+- Current maintainer: **kazaminosuke**
+- Original project / contributors: **Boy132**, **H1ghSyst3m**, and **Yonn**
+- UI implementation research/reference:
+  [JoanFo1456/resources](https://github.com/JoanFo1456/resources) (GPL-3.0). Its Catalog UI and
+  Filament structure were reviewed as a reference; no code was copied from that repository.
 
 ## Fork lineage & license
 
