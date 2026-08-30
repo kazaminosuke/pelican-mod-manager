@@ -522,9 +522,7 @@ class ModManagerPage extends Page implements HasTable
         $this->rejectUnauthorizedInstalledTab();
         $this->normalizeCatalogCompatibilityOverrides();
         $this->configureCatalogCompatibilityOverride();
-        if ($this->activeTab === 'installed') {
-            $this->dispatchInstalledScanIfMissing();
-        }
+        $this->warmInstalledStateIfMissing();
         $this->catalogPage = $this->normalizeCatalogPage($this->catalogPage, $this->source);
         $this->paginators[self::TABLE_PAGINATOR_NAME] = $this->catalogPage;
         $this->refreshInstalledOperationState();
@@ -761,16 +759,17 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /**
-     * Start the first Installed scan when the Installed tab is opened. Catalog
-     * visitors should not incur a server-wide Wings scan merely to render
-     * catalog rows; the tab-switch path remains the explicit lazy entry point.
-     *
-     * The durable scan cache is the normal ten-minute cooldown. On a cache
-     * miss, InstalledOperationManager's per-server/type active state prevents
-     * repeat dispatches during a running scan; ScanInstalledProjects is also a
-     * unique queued job, which closes the simultaneous-page-load race before
-     * it can result in duplicate Wings scans.
+     * Warm installed state from any Catalog entry point, not only after the
+     * Installed tab is opened. The durable scan cache makes this a cheap no-op
+     * while fresh. On a cold miss, the existing per-server/type operation
+     * state, lease, and unique queued job coalesce concurrent page loads into
+     * one background Wings scan.
      */
+    protected function warmInstalledStateIfMissing(): void
+    {
+        $this->dispatchInstalledScanIfMissing();
+    }
+
     protected function dispatchInstalledScanIfMissing(): void
     {
         if ($this->installedScanDataReady || !$this->canScanInstalledProjects()) {
@@ -945,11 +944,7 @@ class ModManagerPage extends Page implements HasTable
         unset($this->paginators[self::TABLE_PAGINATOR_NAME]);
         $this->catalogPage = 1;
         $this->refreshInstalledScanDataReady();
-        // A tab switch into Installed is the explicit lazy entry point for a
-        // missing scan. Catalog visits do not dispatch server-wide work.
-        if ($activeTab === 'installed') {
-            $this->dispatchInstalledScanIfMissing();
-        }
+        $this->warmInstalledStateIfMissing();
         $this->refreshInstalledOperationState();
 
         // Category IDs and the Modrinth-only environment filter are scoped to
@@ -2006,6 +2001,7 @@ class ModManagerPage extends Page implements HasTable
 
         Cache::forget(ModManager::getHashScanCacheKey($server, $type));
         $this->setInstalledScanResult(null);
+        $this->warmInstalledStateIfMissing();
         $this->unknownFiles = array_values(
             array_filter($this->unknownFiles, fn (string $filename) => strtolower($filename) !== strtolower($safeNewFilename))
         );
@@ -2646,6 +2642,15 @@ class ModManagerPage extends Page implements HasTable
             ->deferLoading(fn (): bool => !$this->hasWarmRecordsCache())
             ->paginated([self::TABLE_PAGE_SIZE])
             ->filtersFormWidth(Width::Large)
+            ->filtersTriggerAction(fn (Action $action): Action => $action->extraAttributes(
+                fn (): array => [
+                    // Filament renders an integer zero as a filled badge. Add
+                    // the server-computed count to its standard icon button so
+                    // CSS can suppress only that empty-state badge without any
+                    // client-side DOM post-processing.
+                    'data-mmr-active-filters' => (string) $this->getTable()->getActiveFiltersCount(),
+                ],
+            ))
             ->filters([
                 SelectFilter::make('catalog_version')
                     ->label(trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
@@ -3266,6 +3271,7 @@ class ModManagerPage extends Page implements HasTable
                                     $this->performUninstall($server, $fileRepository, $record, $type);
                                 },
                             );
+                            $this->warmInstalledStateIfMissing();
 
                             Notification::make()
                                 ->title(trans('pelican-mod-manager::strings.notifications.uninstall_success'))
@@ -4306,6 +4312,11 @@ class ModManagerPage extends Page implements HasTable
         $this->notifyInstalledOperationFinished($state);
 
         $this->forgetTerminalInstalledOperation($state);
+
+        if ($state->operation === InstalledOperationManager::OPERATION_BULK_UPDATE
+            && $state->status === InstalledOperationState::STATUS_COMPLETED) {
+            $this->warmInstalledStateIfMissing();
+        }
     }
 
     /** @param array<string, mixed>|null $previousOperation */
