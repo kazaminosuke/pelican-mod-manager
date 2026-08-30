@@ -5,6 +5,22 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-31
+
+### 日本語
+
+#### 変更
+
+- `.codex`をplugin release filesから除外
+- Pelican Hub review compatibility fixを適用
+
+### English
+
+#### Changed
+
+- Excluded `.codex` from plugin release files
+- Applied the Pelican Hub review compatibility fix
+
 ## [0.1.3] - 2026-08-30
 
 ### 日本語
