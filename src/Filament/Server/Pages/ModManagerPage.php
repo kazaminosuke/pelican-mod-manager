@@ -2643,6 +2643,11 @@ class ModManagerPage extends Page implements HasTable
             // the Installed tab is deliberately excluded from this check.
             ->deferLoading(fn (): bool => !$this->hasWarmRecordsCache())
             ->paginated([self::TABLE_PAGE_SIZE])
+            // Filament's Select uses a fixed Floating UI strategy inside this
+            // positioning context, so its option panel can escape the
+            // overflow-constrained filters form without custom coordinates or
+            // client-side DOM movement.
+            ->extraAttributes(['class' => 'fi-fixed-positioning-context'])
             ->filtersFormWidth(Width::Large)
             ->filtersFormColumns(['default' => 1, 'md' => 2])
             ->filtersFormMaxHeight('calc(100dvh - 8rem)')

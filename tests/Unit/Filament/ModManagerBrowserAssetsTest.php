@@ -118,6 +118,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
 
         self::assertStringContainsString("->filtersFormColumns(['default' => 1, 'md' => 2])", $page);
         self::assertStringContainsString("->filtersFormMaxHeight('calc(100dvh - 8rem)')", $page);
+        self::assertStringContainsString("->extraAttributes(['class' => 'fi-fixed-positioning-context'])", $page);
         self::assertStringContainsString('->placeholder(fn (): string => $this->catalogVersionFilterPlaceholder())', $page);
         self::assertStringContainsString("SelectFilter::make('catalog_version')", $page);
         self::assertStringContainsString('->default(fn (): array => $this->catalogDefaultVersionValues())', $page);
