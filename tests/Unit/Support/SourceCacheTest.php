@@ -19,6 +19,7 @@ use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchHandlerInterface;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
+use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Jobs\RevalidateSourceCache;
 use Kazaminosuke\ModManager\Jobs\WarmProjectMetadata;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -435,6 +436,67 @@ class SourceCacheTest extends TestCase
         self::assertSame($fallback, $result);
         self::assertNull($cache->get($spec->cacheKey()));
         self::assertIsArray($cache->get($spec->cacheKey().':failure:v1'));
+    }
+
+    public function test_not_found_fetch_returns_empty_without_marking_failure_or_dispatching(): void
+    {
+        $cache = $this->cache();
+        $spec = $this->spec();
+        $empty = ['hits' => [], 'total_hits' => 0];
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->with($spec, CacheProfile::Search->inlineBudgetSeconds())
+            ->andThrow(new SourceFetchNotFoundException('gone'));
+        $executor->shouldReceive('emptyResult')->once()->with($spec)->andReturn($empty);
+        $dispatcher = $this->prepareDispatchContainer($cache);
+        $dispatcher->shouldNotReceive('dispatch');
+
+        $result = $this->sourceCache($cache, 'database', $executor)
+            ->swr($spec, CacheProfile::Search);
+
+        self::assertSame($empty, $result);
+        self::assertNull($cache->get($spec->cacheKey()));
+        self::assertNull($cache->get($spec->cacheKey().':failure:v1'));
+    }
+
+    public function test_required_fetch_returns_empty_for_a_definitive_not_found(): void
+    {
+        $cache = $this->cache();
+        $spec = $this->spec();
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->with($spec, CacheProfile::Search->backgroundTimeoutSeconds())
+            ->andThrow(new SourceFetchNotFoundException('gone'));
+        $executor->shouldReceive('emptyResult')->once()->with($spec)->andReturn(null);
+        $dispatcher = $this->prepareDispatchContainer($cache);
+        $dispatcher->shouldNotReceive('dispatch');
+
+        self::assertNull(
+            $this->sourceCache($cache, 'database', $executor)
+                ->swrRequired($spec, CacheProfile::Search),
+        );
+        self::assertNull($cache->get($spec->cacheKey()));
+        self::assertNull($cache->get($spec->cacheKey().':failure:v1'));
+    }
+
+    public function test_revalidation_treats_a_definitive_not_found_as_completed(): void
+    {
+        $cache = $this->cache();
+        $spec = $this->spec();
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->with($spec, CacheProfile::Search->backgroundTimeoutSeconds())
+            ->andThrow(new SourceFetchNotFoundException('gone'));
+
+        self::assertTrue(
+            $this->sourceCache($cache, 'database', $executor)
+                ->revalidate($spec, CacheProfile::Search),
+        );
+        self::assertNull($cache->get($spec->cacheKey()));
+        self::assertNull($cache->get($spec->cacheKey().':failure:v1'));
     }
 
     public function test_required_fetch_propagates_a_cold_failure_instead_of_returning_empty(): void

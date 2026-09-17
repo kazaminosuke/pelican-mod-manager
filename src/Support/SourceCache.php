@@ -8,6 +8,7 @@ use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Http\Request;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
+use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Jobs\RevalidateSourceCache;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Psr\Log\LoggerInterface;
@@ -63,6 +64,12 @@ final class SourceCache
                 $status = 'MISS';
 
                 return $this->fetchAndStore($spec, $profile, $profile->inlineBudgetSeconds());
+            } catch (SourceFetchNotFoundException) {
+                // A definitive upstream "not found" is a normal miss, not an
+                // outage: no failure marker, and the negative is not cached.
+                $status = $entry !== null ? 'STALE' : 'MISS';
+
+                return $entry !== null ? $entry['data'] : $this->emptyResult($spec);
             } catch (Throwable $exception) {
                 $this->markFailure($spec, $profile, $exception);
                 $status = $entry !== null ? 'STALE' : 'MISS';
@@ -111,6 +118,8 @@ final class SourceCache
 
         try {
             return $this->fetchAndStore($spec, $profile, $profile->backgroundTimeoutSeconds());
+        } catch (SourceFetchNotFoundException) {
+            return $this->emptyResult($spec);
         } catch (Throwable $exception) {
             $this->markFailure($spec, $profile, $exception);
 
@@ -145,6 +154,8 @@ final class SourceCache
 
         try {
             return $this->fetchAndStore($spec, $profile, $profile->backgroundTimeoutSeconds());
+        } catch (SourceFetchNotFoundException) {
+            return $this->emptyResult($spec);
         } catch (Throwable $exception) {
             $this->markFailure($spec, $profile, $exception);
 
@@ -168,6 +179,10 @@ final class SourceCache
         try {
             $this->fetchAndStore($spec, $profile, $profile->backgroundTimeoutSeconds());
 
+            return true;
+        } catch (SourceFetchNotFoundException) {
+            // A definitive miss stores nothing, but the upstream answered
+            // normally - there is no failure to cool down from.
             return true;
         } catch (Throwable $exception) {
             $this->markFailure($spec, $profile, $exception);

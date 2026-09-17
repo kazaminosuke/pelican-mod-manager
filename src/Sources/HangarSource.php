@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Sources;
 use App\Models\Server;
 use Exception;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -17,6 +18,7 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
+use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
 use Kazaminosuke\ModManager\Support\CachedSearchOperations;
 use Kazaminosuke\ModManager\Support\CacheProfile;
@@ -865,7 +867,23 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         }
 
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
-        $project = $this->getJson("/versions/hash/$hash", [], $this->remainingTimeout($deadline));
+
+        try {
+            $project = $this->getJson("/versions/hash/$hash", [], $this->remainingTimeout($deadline));
+        } catch (RequestException $exception) {
+            // Hangar answers a hash belonging to no project (SpigotMC-only
+            // uploads and other files it does not host) with a 404. That is
+            // a definitive miss, not a source outage.
+            if ($exception->response->status() === 404) {
+                throw new SourceFetchNotFoundException(
+                    "No Hangar project matched hash [$hash].",
+                    previous: $exception,
+                );
+            }
+
+            throw $exception;
+        }
+
         if (!isset($project['id'])) {
             throw new Exception("No Hangar project matched hash [$hash].");
         }
@@ -873,8 +891,9 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         $entry = $this->fetchVersionEntryByHash((string) $project['id'], $hash, $deadline);
         if ($entry === null) {
             // Do not persist a negative match indefinitely: the matching
-            // release may be published after this scan.
-            throw new Exception("No Hangar version matched hash [$hash].");
+            // release may be published after this scan. The miss is still a
+            // normal result, not an outage.
+            throw new SourceFetchNotFoundException("No Hangar version matched hash [$hash].");
         }
 
         return $entry;
