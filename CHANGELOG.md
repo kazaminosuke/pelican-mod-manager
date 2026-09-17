@@ -5,6 +5,24 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-17
+
+### 日本語
+
+#### 変更
+
+- Hangar の hash lookup が返す 404 / project not found を source 障害ではなく正常な unmatched として扱うよう修正
+- SpigotMC-only など Hangar に存在しない Plugin JAR でも installed-file scan が失敗しないよう修正
+- 429 / 5xx / timeout / connection error など本当の障害は従来どおり failure 扱いを維持
+
+### English
+
+#### Changed
+
+- Fixed Hangar hash lookup treating a 404 / project not found as a source outage instead of a normal unmatched result
+- Fixed installed-file scans failing on Plugin JARs that Hangar does not host, such as SpigotMC-only uploads
+- Preserved existing failure handling for real outages such as 429, 5xx, timeouts, and connection errors
+
 ## [0.1.4] - 2026-08-31
 
 ### 日本語
