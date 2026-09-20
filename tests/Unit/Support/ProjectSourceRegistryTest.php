@@ -8,24 +8,21 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\Capsule\Manager as Capsule;
-use Illuminate\Log\Context\Repository as ContextRepository;
 use Illuminate\Support\Facades\Facade;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
-use Kazaminosuke\ModManager\Jobs\WarmProjectMetadata;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
+use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
-use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Support\EggProfileRegistry;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
+use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Mockery;
@@ -39,6 +36,8 @@ class ProjectSourceRegistryTest extends TestCase
     private mixed $previousFacadeApplication = null;
 
     private static ?Capsule $capsule = null;
+
+    private ?PluginBackgroundRunner $backgroundRunner = null;
 
     protected function setUp(): void
     {
@@ -146,8 +145,6 @@ class ProjectSourceRegistryTest extends TestCase
             ->andReturn(['gone' => ['data' => null, 'pending' => false]]);
 
         $registry = $this->registryWith(modrinth: $modrinth, supportsAsyncDispatch: true);
-        $dispatcher = $this->bindDispatcher();
-        $dispatcher->shouldNotReceive('dispatch');
 
         $rows = $registry->peekInstalled([
             ['source' => 'modrinth', 'project_id' => 'gone', 'project_title' => 'Removed Project'],
@@ -156,6 +153,7 @@ class ProjectSourceRegistryTest extends TestCase
         self::assertCount(1, $rows);
         self::assertTrue($rows[0]['unavailable']);
         self::assertArrayNotHasKey('enrichment_pending', $rows[0]);
+        self::assertSame([], $this->backgroundRunner?->spawned ?? []);
     }
 
     public function test_peek_installed_keeps_known_metadata_without_polling_or_dispatching_during_a_retry_cooldown(): void
@@ -167,8 +165,6 @@ class ProjectSourceRegistryTest extends TestCase
             ->andReturn(['offline' => ['data' => null, 'pending' => false, 'retry_delayed' => true]]);
 
         $registry = $this->registryWith(modrinth: $modrinth, supportsAsyncDispatch: true);
-        $dispatcher = $this->bindDispatcher();
-        $dispatcher->shouldNotReceive('dispatch');
 
         $rows = $registry->peekInstalled([
             ['source' => 'modrinth', 'project_id' => 'offline', 'project_title' => 'Stored Project', 'project_slug' => 'stored-project'],
@@ -179,6 +175,7 @@ class ProjectSourceRegistryTest extends TestCase
         self::assertSame('stored-project', $rows[0]['slug']);
         self::assertArrayNotHasKey('enrichment_pending', $rows[0]);
         self::assertArrayNotHasKey('unavailable', $rows[0]);
+        self::assertSame([], $this->backgroundRunner?->spawned ?? []);
     }
 
     public function test_peek_installed_returns_an_unavailable_placeholder_for_an_unrecognized_source(): void
@@ -206,12 +203,6 @@ class ProjectSourceRegistryTest extends TestCase
             ]);
 
         $registry = $this->registryWith(modrinth: $modrinth, supportsAsyncDispatch: true);
-        $dispatcher = $this->bindDispatcher();
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(fn (WarmProjectMetadata $job): bool => $job->sourceKey === 'modrinth'
-                && $job->projectIds === ['a', 'b'])
-            ->andReturnNull();
 
         $rows = $registry->peekInstalled([
             ['source' => 'modrinth', 'project_id' => 'a', 'project_title' => 'A'],
@@ -220,6 +211,10 @@ class ProjectSourceRegistryTest extends TestCase
 
         self::assertTrue($rows[0]['enrichment_pending']);
         self::assertTrue($rows[1]['enrichment_pending']);
+        self::assertCount(1, $this->backgroundRunner?->spawned ?? []);
+        self::assertSame(BackgroundJob::WARM_PROJECT_METADATA, $this->backgroundRunner->spawned[0]['type']);
+        self::assertSame('modrinth', $this->backgroundRunner->spawned[0]['payload']['source_key']);
+        self::assertSame(['a', 'b'], $this->backgroundRunner->spawned[0]['payload']['project_ids']);
     }
 
     public function test_peek_installed_does_not_dispatch_when_async_dispatch_is_unsupported(): void
@@ -232,14 +227,14 @@ class ProjectSourceRegistryTest extends TestCase
 
         $registry = $this->registryWith(modrinth: $modrinth, supportsAsyncDispatch: false);
 
-        // No dispatcher bound at all: this only passes if peekInstalled()
-        // never attempts a dispatch when async isn't supported, since any
-        // attempt would throw resolving an unbound Dispatcher.
+        // The disabled runner never records a spawn; this only passes if
+        // peekInstalled() never starts a process when async isn't supported.
         $rows = $registry->peekInstalled([
             ['source' => 'modrinth', 'project_id' => 'a', 'project_title' => 'A'],
         ], $this->server());
 
         self::assertTrue($rows[0]['enrichment_pending']);
+        self::assertSame([], $this->backgroundRunner?->spawned ?? []);
     }
 
     public function test_fetch_projects_map_uses_one_cache_entry_per_project_instead_of_a_shared_chunk(): void
@@ -481,14 +476,15 @@ class ProjectSourceRegistryTest extends TestCase
 
         // InstalledOperationManager is final, so it can't be Mockery-mocked
         // directly - construct a real instance and drive
-        // supportsAsyncDispatch() through its queue.default config, same
-        // as SourceCacheTest's sourceCache() helper.
-        $config = new LaravelConfigRepository([
-            'queue' => ['default' => $supportsAsyncDispatch ? 'database' : 'sync'],
-        ]);
+        // supportsAsyncDispatch() through PluginBackgroundRunner.
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $this->backgroundRunner = $supportsAsyncDispatch
+            ? PluginBackgroundRunner::fake($cache)
+            : PluginBackgroundRunner::disabled();
         $operations = new InstalledOperationManager(
-            new LaravelCacheRepository(new ArrayStore()),
-            $config,
+            $cache,
+            new LaravelConfigRepository(),
+            runner: $this->backgroundRunner,
         );
 
         return new ProjectSourceRegistry(
@@ -499,36 +495,6 @@ class ProjectSourceRegistryTest extends TestCase
             $operations,
             $settings ?? new ServerModManagerSettings(new ServerModManagerSettingRepository()),
         );
-    }
-
-    /**
-     * Binds a mocked Dispatcher into a fresh container so
-     * WarmProjectMetadata::dispatch() resolves it instead of a real queue
-     * connection - mirrors SourceCacheTest's prepareDispatchContainer().
-     */
-    protected function bindDispatcher(): Dispatcher
-    {
-        $config = new LaravelConfigRepository([
-            'cache' => ['default' => 'array'],
-            'queue' => ['default' => 'database'],
-        ]);
-        $dispatcher = Mockery::mock(Dispatcher::class);
-        $context = Mockery::mock(ContextRepository::class);
-        $translator = Mockery::mock(Translator::class);
-        $context->shouldReceive('addHidden')->zeroOrMoreTimes();
-        $context->shouldReceive('forgetHidden')->zeroOrMoreTimes();
-        $translator->shouldReceive('get')->andReturnUsing(fn (string $key) => $key);
-        $container = new Container();
-        $container->instance(CacheRepository::class, new LaravelCacheRepository(new ArrayStore()));
-        $container->instance(ConfigRepository::class, $config);
-        $container->instance('config', $config);
-        $container->instance('translator', $translator);
-        $container->instance(Dispatcher::class, $dispatcher);
-        $container->instance(ContextRepository::class, $context);
-        Container::setInstance($container);
-        Facade::setFacadeApplication($container);
-
-        return $dispatcher;
     }
 
     protected function server(): Server

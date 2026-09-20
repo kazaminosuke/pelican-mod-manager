@@ -5,27 +5,14 @@ namespace Kazaminosuke\ModManager\Jobs;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectUpdateService;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Throwable;
 
-final class BulkUpdateInstalledProjects implements ShouldBeUnique, ShouldQueue
+final class BulkUpdateInstalledProjects
 {
-    use Dispatchable;
-    use Queueable;
-
-    public int $tries = 1;
-
-    public int $timeout = 900;
-
-    public bool $failOnTimeout = true;
-
     public int $uniqueFor = 1200;
 
     public function __construct(

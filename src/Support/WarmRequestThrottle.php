@@ -12,9 +12,9 @@ use Illuminate\Cache\RateLimiter;
  * add latency to a real visitor.
  *
  * Cache-backed via Laravel's RateLimiter (itself backed by the app's
- * default cache store), so the limit holds across multiple queue workers
- * rather than being tracked per-process - a single in-memory counter would
- * only cap one worker's traffic, not the fleet's.
+ * default cache store), so the limit holds across overlapping warm
+ * processes rather than being tracked per-process - a single in-memory
+ * counter would only cap one process's traffic, not the fleet's.
  *
  * See config/pelican-mod-manager.php's warm_rate_limit block for
  * where the per-source default numbers come from and which ones are

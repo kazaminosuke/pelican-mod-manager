@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Providers;
 
+use Illuminate\Container\Container;
 use Illuminate\Foundation\Application;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
@@ -18,6 +19,7 @@ use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
+use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
@@ -30,32 +32,39 @@ class ModManagerServiceProviderTest extends TestCase
 {
     public function test_expensive_services_are_registered_as_singletons(): void
     {
+        $previous = Container::getInstance();
         $application = new Application();
-        (new ModManagerServiceProvider($application))->register();
 
-        foreach ([
-            SourceFetchExecutorInterface::class,
-            SourceCache::class,
-            ProjectSourceRegistry::class,
-            ModrinthSource::class,
-            CurseForgeSource::class,
-            HangarSource::class,
-            GitHubReleasesSource::class,
-            VersionLookupCoordinator::class,
-            InstalledProjectService::class,
-            InstalledArchiveTransaction::class,
-            InstalledMetadataIndex::class,
-            InstalledMetadataResetService::class,
-            InstalledProjectMutationService::class,
-            InstalledOperationLease::class,
-            WingsRemoteFilesystem::class,
-            InstalledOperationManager::class,
-            ProjectOperationAuthorizer::class,
-            ServerModManagerSettingRepository::class,
-            ServerModManagerSettings::class,
-            WarmRequestThrottle::class,
-        ] as $service) {
-            self::assertTrue($application->isShared($service), "{$service} was not registered as a singleton.");
+        try {
+            (new ModManagerServiceProvider($application))->register();
+
+            foreach ([
+                SourceFetchExecutorInterface::class,
+                SourceCache::class,
+                ProjectSourceRegistry::class,
+                ModrinthSource::class,
+                CurseForgeSource::class,
+                HangarSource::class,
+                GitHubReleasesSource::class,
+                VersionLookupCoordinator::class,
+                InstalledProjectService::class,
+                InstalledArchiveTransaction::class,
+                InstalledMetadataIndex::class,
+                InstalledMetadataResetService::class,
+                InstalledProjectMutationService::class,
+                InstalledOperationLease::class,
+                WingsRemoteFilesystem::class,
+                InstalledOperationManager::class,
+                PluginBackgroundRunner::class,
+                ProjectOperationAuthorizer::class,
+                ServerModManagerSettingRepository::class,
+                ServerModManagerSettings::class,
+                WarmRequestThrottle::class,
+            ] as $service) {
+                self::assertTrue($application->isShared($service), "{$service} was not registered as a singleton.");
+            }
+        } finally {
+            Container::setInstance($previous);
         }
     }
 }

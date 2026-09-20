@@ -231,8 +231,8 @@ return [
         'failed' => ':operation failed.',
         'dispatched' => 'The background operation has been queued.',
         'already_active' => 'Another installed-file operation is already running.',
-        'queue_required' => 'Background operations require an asynchronous Laravel queue and a running queue worker.',
-        'dispatch_failed' => 'The background operation could not be queued.',
+        'queue_required' => 'Background operations need PHP CLI access so the plugin can start a short-lived artisan process. A Laravel queue worker is not required for this plugin.',
+        'dispatch_failed' => 'The background operation could not be started.',
     ],
 
     'notifications' => [

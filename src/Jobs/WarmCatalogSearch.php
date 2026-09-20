@@ -3,10 +3,6 @@
 namespace Kazaminosuke\ModManager\Jobs;
 
 use App\Models\Server;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
@@ -27,15 +23,8 @@ use Throwable;
  * resolve the loader/Minecraft version through search()'s normal
  * signature; it never becomes part of the cached data or its key.
  */
-final class WarmCatalogSearch implements ShouldBeUnique, ShouldQueue
+final class WarmCatalogSearch
 {
-    use Dispatchable;
-    use Queueable;
-
-    public int $tries = 1;
-
-    public int $timeout = 15;
-
     /**
      * Roughly the search fresh TTL (CacheProfile::Search, 10 minutes): once
      * a warm succeeds, a duplicate warm for the same combination is
@@ -68,8 +57,7 @@ final class WarmCatalogSearch implements ShouldBeUnique, ShouldQueue
         ProjectSourceRegistry $registry,
         WarmRequestThrottle $throttle,
         ?ServerModManagerSettings $settings = null,
-    ): void
-    {
+    ): void {
         if (!$throttle->tryAcquire($this->sourceKey)) {
             // Skip rather than retry: nobody is waiting on this result, and
             // the next per-visit dispatch (deduplicated by uniqueId() once

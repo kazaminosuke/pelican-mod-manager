@@ -5,10 +5,6 @@ namespace Kazaminosuke\ModManager\Jobs;
 use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Contracts\AuthoritativeBatchProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
@@ -16,14 +12,14 @@ use Throwable;
 
 /**
  * Fills many projects' cache entries for one source from a single upstream
- * call, instead of each project's own SourceCache miss queuing its own
- * individual revalidation job (see ProjectSourceRegistry::peekInstalled(),
- * which collects a render pass's misses and dispatches this once per
+ * call, instead of each project's own SourceCache miss starting its own
+ * individual revalidation process (see ProjectSourceRegistry::peekInstalled(),
+ * which collects a render pass's misses and starts this once per
  * source rather than once per project).
  *
  * getProjectsByIds() already fetches in bulk where the source actually has
  * a bulk endpoint (Modrinth, CurseForge) and uses a bounded HTTP pool where
- * it doesn't (Hangar, GitHub Releases) - either way, this reduces N queued
+ * it doesn't (Hangar, GitHub Releases) - either way, this reduces N background
  * jobs down to one. Overlapping cold-start jobs also take a per-project
  * fetch lock so shared IDs are requested once.
  *
@@ -35,14 +31,13 @@ use Throwable;
  * unthrottled, and the same treatment Stage 4's original per-project
  * dispatch already gave this work before this batching existed.
  */
-final class WarmProjectMetadata implements ShouldBeUnique, ShouldQueue
+final class WarmProjectMetadata
 {
-    use Dispatchable;
-    use Queueable;
-
-    public int $tries = 1;
-
-    public int $timeout = 30;
+    /**
+     * Lock TTL for overlapping exact-set jobs that share some ids without
+     * sharing a uniqueId(). Must cover one upstream batch.
+     */
+    public int $timeout = 90;
 
     /**
      * Short: this exact set of misses is only meaningful until the next
@@ -81,14 +76,14 @@ final class WarmProjectMetadata implements ShouldBeUnique, ShouldQueue
         }
 
         // Configuration may have changed between the browser's miss and this
-        // queued job. An unavailable source is not evidence that its projects
+        // background job. An unavailable source is not evidence that its projects
         // were removed, so retain the previous positive-only no-op behavior.
         if (!$source->isConfigured()) {
             return;
         }
 
         // Overlapping exact-set jobs can share some ids without sharing a
-        // ShouldBeUnique key. Re-peek after leaving the queue so a preceding
+        // uniqueId(). Re-peek after the process starts so a preceding
         // job's completed entries (and retry-delayed failures) are removed
         // before any upstream call.
         if ($source instanceof ProjectMetadataPeekManyInterface) {

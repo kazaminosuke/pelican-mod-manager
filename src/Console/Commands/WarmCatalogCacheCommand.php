@@ -8,24 +8,28 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
-use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
-use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
+use Throwable;
 
 /**
  * Discovers the (loader, Minecraft version, project type) combinations
- * actually in use across every server and dispatches a WarmCatalogSearch
- * for each one's page 1, across every source that server has enabled. This is
- * what actually prevents a cold first visit to the catalog tab - the
- * per-visit dispatch in ModManagerPage::mount() only ever helps a later
- * visit, since it can't land before the request that triggered it finishes.
+ * actually in use across every server and warms page 1 for each source
+ * that server has enabled. This is what actually prevents a cold first
+ * visit to the catalog tab - the per-visit spawn in ModManagerPage::mount()
+ * only ever helps a later visit, since it can't land before the request
+ * that triggered it finishes.
  *
  * Registered on the Laravel scheduler (see ModManagerServiceProvider::
  * boot()) rather than run ad hoc; can also be run manually
  * (php artisan mod-manager:warm-catalog), which is the quickest way to
  * warm the cache before a manual "clear cache, then load the page" check.
+ *
+ * The scheduler process is already short-lived and boots the current
+ * Plugin from disk, so warming runs inline here instead of being handed
+ * to a long-running queue worker.
  */
 final class WarmCatalogCacheCommand extends Command
 {
@@ -39,18 +43,11 @@ final class WarmCatalogCacheCommand extends Command
     protected $description = 'Warm the mod-manager catalog cache for every (loader, Minecraft version, project type) combination actually in use.';
 
     public function handle(
-        InstalledOperationManager $operations,
         ProjectSourceRegistry $registry,
         ServerModManagerSettings $settings,
     ): int {
         if (!(bool) config('pelican-mod-manager.warm_catalog_enabled', true)) {
             $this->comment('Catalog warming is disabled (pelican-mod-manager.warm_catalog_enabled).');
-
-            return self::SUCCESS;
-        }
-
-        if (!$operations->supportsAsyncDispatch()) {
-            $this->comment('Skipping: no async queue driver is configured. Dispatching warm jobs here would run them inline on the scheduler instead of in the background.');
 
             return self::SUCCESS;
         }
@@ -74,7 +71,7 @@ final class WarmCatalogCacheCommand extends Command
         $selected = array_slice($combos, 0, $maxTargets);
         $skipped = count($combos) - count($selected);
 
-        $dispatched = 0;
+        $warmed = 0;
 
         foreach ($selected as $combo) {
             $type = ProjectType::from($combo['project_type']);
@@ -105,15 +102,20 @@ final class WarmCatalogCacheCommand extends Command
                     continue;
                 }
 
-                WarmCatalogSearch::dispatch(
-                    $server->id,
-                    $source->getKey()->value,
-                    $type->value,
-                    1,
-                    $combo['loader'],
-                    $combo['mc_version'],
-                );
-                $dispatched++;
+                try {
+                    BackgroundJob::execute(BackgroundJob::WARM_SEARCH, [
+                        'server_id' => $server->id,
+                        'source_key' => $source->getKey()->value,
+                        'project_type' => $type->value,
+                        'page' => 1,
+                        'loader' => $combo['loader'],
+                        'mc_version' => $combo['mc_version'],
+                    ]);
+                    $warmed++;
+                } catch (Throwable $exception) {
+                    report($exception);
+                    $this->error($exception->getMessage());
+                }
             }
         }
 
@@ -122,8 +124,8 @@ final class WarmCatalogCacheCommand extends Command
         }
 
         $this->info(sprintf(
-            'Dispatched %d catalog warm job(s) across %d combination(s).',
-            $dispatched,
+            'Warmed %d catalog search(es) across %d combination(s).',
+            $warmed,
             count($selected),
         ));
 

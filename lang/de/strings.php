@@ -231,8 +231,8 @@ return [
         'failed' => ':operation ist fehlgeschlagen.',
         'dispatched' => 'Der Hintergrundvorgang wurde eingereiht.',
         'already_active' => 'Ein anderer Vorgang für installierte Dateien läuft bereits.',
-        'queue_required' => 'Hintergrundvorgänge benötigen eine asynchrone Laravel-Queue und einen laufenden Queue-Worker.',
-        'dispatch_failed' => 'Der Hintergrundvorgang konnte nicht eingereiht werden.',
+        'queue_required' => 'Hintergrundvorgänge benötigen PHP-CLI-Zugriff, damit das Plugin einen kurzlebigen Artisan-Prozess starten kann. Ein Laravel-Queue-Worker ist für dieses Plugin nicht erforderlich.',
+        'dispatch_failed' => 'Der Hintergrundvorgang konnte nicht gestartet werden.',
     ],
 
     'notifications' => [

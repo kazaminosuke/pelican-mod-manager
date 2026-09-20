@@ -51,6 +51,7 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
 use Kazaminosuke\ModManager\Filament\Filters\CatalogSelectFilter;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -558,10 +559,10 @@ class ModManagerPage extends Page implements HasTable
 
     /**
      * Warm likely-next catalog pages in the background. Hangar's
-     * /projects call is ~1s, so its jobs are dispatched first instead of
-     * waiting behind Modrinth on a single queue worker. Other sources stay
-     * queued so this request never blocks on their APIs. The active
-     * source's current page is fetched by records()/loadTable itself.
+     * /projects call is ~1s, so its jobs are started first instead of
+     * waiting behind Modrinth. Other sources still run in short-lived
+     * artisan processes so this request never blocks on their APIs. The
+     * active source's current page is fetched by records()/loadTable itself.
      */
     protected function dispatchCatalogWarm(bool $includeOtherSources = true): void
     {
@@ -569,10 +570,11 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
-        // A sync/null queue driver would run this inline, during mount(),
+        // A missing artisan runner would run this inline, during mount(),
         // defeating the entire point (and potentially blocking this
         // request on a throttled or slow upstream call).
-        if (!app(InstalledOperationManager::class)->supportsAsyncDispatch()) {
+        $operations = app(InstalledOperationManager::class);
+        if (!$operations->supportsAsyncDispatch()) {
             return;
         }
 
@@ -605,7 +607,7 @@ class ModManagerPage extends Page implements HasTable
                 continue;
             }
 
-            WarmCatalogSearch::dispatch(
+            $job = new WarmCatalogSearch(
                 $server->id,
                 $page['sourceKey'],
                 $type->value,
@@ -614,6 +616,21 @@ class ModManagerPage extends Page implements HasTable
                 $mcVersion,
                 $this->catalogSort,
                 $this->hasCatalogCompatibilityOverride(),
+            );
+            $operations->startBackgroundJob(
+                BackgroundJob::WARM_SEARCH,
+                [
+                    'server_id' => $server->id,
+                    'source_key' => $page['sourceKey'],
+                    'project_type' => $type->value,
+                    'page' => $page['page'],
+                    'loader' => $loader,
+                    'mc_version' => $mcVersion,
+                    'sort' => $this->catalogSort,
+                    'uses_compatibility_override' => $this->hasCatalogCompatibilityOverride(),
+                ],
+                $job->uniqueId(),
+                $job->uniqueFor,
             );
         }
     }
@@ -2114,11 +2131,11 @@ class ModManagerPage extends Page implements HasTable
      *
      * Deliberately always false for the Installed tab: unlike the catalog
      * tab, records()'s installed branch can still discover a missing scan
-     * cache and dispatch a job (or show the queue-configuration warning).
+     * cache and start a background scan (or show the configuration warning).
      * hasWarmRecordsCache() can only see the longer-lived metadata display
      * cache, not that separate scan-result cache. Keeping the Installed tab
      * unconditionally deferred gives that state transition its own request;
-     * the manager rejects sync/null queues, and the render itself remains
+     * the manager rejects a missing PHP CLI runner, and the render itself remains
      * non-blocking through peekVisibleLatestVersions()/peekInstalled() and
      * pollEnrichment().
      */
@@ -2537,9 +2554,9 @@ class ModManagerPage extends Page implements HasTable
                         }
                     }
 
-                    // A sync/null queue cannot complete a deferred metadata
-                    // fill, so polling it would only repeat the same cache
-                    // reads and table render indefinitely.
+                    // A missing PHP CLI runner cannot complete a deferred
+                    // metadata fill, so polling it would only repeat the same
+                    // cache reads and table render indefinitely.
                     $this->pollEnrichment = $enrichmentPending && $operations->supportsAsyncDispatch();
                     $this->installedEnrichmentSignature = $this->enrichmentSignatureFromProjects(
                         $projects,

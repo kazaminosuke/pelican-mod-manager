@@ -5,8 +5,6 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Console\Commands;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Console\OutputStyle;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Support\Facades\Facade;
 use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
@@ -14,7 +12,6 @@ use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
-use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Support\EggProfileRegistry;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
@@ -165,13 +162,6 @@ class WarmCatalogCacheCommandTest extends TestCase
         $container->make('config')->set('pelican-mod-manager.warm_catalog_enabled', true);
         $container->make('config')->set('pelican-mod-manager.warm_max_targets', 50);
 
-        $queueConfig = Mockery::mock(ConfigRepository::class);
-        $queueConfig->shouldReceive('get')->with('queue.default', 'sync')->andReturn('database');
-        $operations = new InstalledOperationManager(
-            Mockery::mock(CacheRepository::class),
-            $queueConfig,
-        );
-
         $source = Mockery::mock(ProjectSourceInterface::class);
         $source->shouldReceive('isConfigured')->once()->andReturnTrue();
         $source->shouldReceive('supportsSearch')->once()->andReturnTrue();
@@ -197,7 +187,6 @@ class WarmCatalogCacheCommandTest extends TestCase
         ));
 
         self::assertSame(0, $command->handle(
-            $operations,
             $registry,
             new ServerModManagerSettings(new ServerModManagerSettingRepository()),
         ));

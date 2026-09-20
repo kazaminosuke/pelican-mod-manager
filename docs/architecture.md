@@ -48,13 +48,29 @@ a fresh hash, since the persisted index cannot safely disambiguate them.
 
 ## Background jobs, notifications & status badges
 
-Scans and bulk updates run as queued jobs (`InstalledOperationManager`, statuses `queued` →
-`running` → `completed`/`failed`) so a slow Wings directory listing or a batch of upstream update
-checks never blocks a Livewire request. Any applicable Mod/Plugin/Datapack manager page dispatches
-a missing installed-file scan, and active operations are polled every two seconds. Scan lifecycle is
-reported through Filament notifications, while bulk-update progress remains inline. `supportsAsyncDispatch()`
-is checked before dispatching anything; the `sync`/`null` queue drivers are rejected with a warning
-instead of running a Wings scan in a Livewire request.
+Scans, bulk updates, catalog warming, and source-cache revalidation run in
+short-lived `php artisan mod-manager:run-job` processes (`PluginBackgroundRunner`,
+statuses `queued` → `running` → `completed`/`failed`) so a slow Wings directory
+listing or a batch of upstream update checks never blocks a Livewire request.
+Each process boots the Panel and loads the Plugin from disk, so a Plugin update
+takes effect on the next job without `queue:restart`. Payloads are JSON, not
+PHP-serialized Plugin job classes, which avoids Laravel queue workers holding
+stale Plugin classes after an update.
+
+Any applicable Mod/Plugin/Datapack manager page starts a missing installed-file
+scan, and active operations are polled every two seconds. Scan lifecycle is
+reported through Filament notifications, while bulk-update progress remains
+inline. `supportsAsyncDispatch()` is checked before starting anything; it means
+"PHP CLI can be spawned", not "Laravel `queue.default` is redis/database". If
+the runner cannot start a process, the UI shows a warning instead of running a
+Wings scan in a Livewire request.
+
+Scheduled catalog warming (`mod-manager:warm-catalog`) already runs in Pelican's
+short-lived `schedule:run` process, so it executes the warmer inline rather than
+handing work to a long-running queue worker.
+
+Pelican's own queue worker remains for Panel jobs such as plugin
+install/update. This Plugin does not serialize its job classes onto that worker.
 
 ## Stale-while-revalidate cache layer
 
@@ -121,9 +137,10 @@ Filament's table `deferLoading()` accepts a closure. `ModManagerPage::hasWarmRec
 when it isn't - a cached view renders synchronously instead of paying for the extra
 `wire:init="loadTable"` round trip every deferred table costs. The Installed tab is deliberately
 excluded: a render can discover a missing installed-scan cache and must update operation state or
-show a queue-configuration warning, while the metadata cache `hasWarmRecordsCache()` can see is not
+show a configuration warning, while the metadata cache `hasWarmRecordsCache()` can see is not
 the same, shorter-lived cache that guards that work. A "warm" verdict would therefore not reliably
-describe that render's behavior; the manager rejects sync/null queues, so this remains non-blocking.
+describe that render's behavior; the manager rejects a missing PHP CLI runner, so this remains
+non-blocking.
 
 ## Client-side SWR table preview
 

@@ -7,10 +7,6 @@ use App\Models\User;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Foundation\Queue\Queueable;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -19,18 +15,15 @@ use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Throwable;
 
-final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
+final class ScanInstalledProjects
 {
-    use Dispatchable;
-    use Queueable;
-
     public int $tries = 5;
 
-    public int $timeout = 240;
-
-    public bool $failOnTimeout = true;
-
     public int $uniqueFor = 600;
+
+    private int $attemptNumber = 1;
+
+    private bool $retryRequested = false;
 
     public function __construct(
         public readonly int $serverId,
@@ -39,6 +32,22 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
         public readonly bool $force = false,
         public readonly ?int $actorUserId = null,
     ) {}
+
+    public function setAttemptNumber(int $attempt): void
+    {
+        $this->attemptNumber = max(1, $attempt);
+        $this->retryRequested = false;
+    }
+
+    public function attempts(): int
+    {
+        return $this->attemptNumber;
+    }
+
+    public function retryRequested(): bool
+    {
+        return $this->retryRequested;
+    }
 
     /** @return array<int, int> */
     public function backoff(): array
@@ -65,7 +74,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        // A lease can expire while a job waits in the queue. An older job
+        // A lease can expire while a retry sleeps. An older job
         // must never perform work under a replacement owner's lease.
         if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
             return;
@@ -136,7 +145,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
                     InstalledOperationManager::OPERATION_SCAN,
                     ['reason' => 'scan_in_progress'],
                 );
-                $this->release($this->retryDelay());
+                $this->retryRequested = true;
 
                 return;
             }
@@ -211,7 +220,7 @@ final class ScanInstalledProjects implements ShouldBeUnique, ShouldQueue
         );
     }
 
-    private function retryDelay(): int
+    public function retryDelaySeconds(): int
     {
         $backoff = $this->backoff();
 

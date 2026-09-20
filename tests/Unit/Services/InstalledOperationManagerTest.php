@@ -6,19 +6,15 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Contracts\Debug\ExceptionHandler;
-use Illuminate\Log\Context\Repository as ContextRepository;
 use Illuminate\Support\Facades\Facade;
 use Kazaminosuke\ModManager\Enums\ProjectType;
-use Kazaminosuke\ModManager\Jobs\BulkUpdateInstalledProjects;
-use Kazaminosuke\ModManager\Jobs\ResetInstalledMetadata;
-use Kazaminosuke\ModManager\Jobs\ScanInstalledProjects;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
+use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Mockery;
 use PHPUnit\Framework\TestCase;
 
@@ -58,7 +54,6 @@ class InstalledOperationManagerTest extends TestCase
         $cache = Mockery::mock(CacheRepository::class);
         $cache->shouldReceive('get')->twice()->andReturnNull();
         $config = Mockery::mock(ConfigRepository::class);
-        $config->shouldReceive('get')->once()->with('queue.default', 'sync')->andReturn('sync');
         $result = (new InstalledOperationManager($cache, $config))
             ->dispatchScan(42, ProjectType::Mod, actorUserId: 7);
 
@@ -99,7 +94,7 @@ class InstalledOperationManagerTest extends TestCase
         self::assertNull($result['state']);
     }
 
-    public function test_async_queue_persists_queued_state_and_dispatches_job(): void
+    public function test_async_runner_persists_queued_state_and_starts_a_scan_process(): void
     {
         $leaseToken = null;
         $cache = Mockery::mock(CacheRepository::class);
@@ -122,29 +117,25 @@ class InstalledOperationManagerTest extends TestCase
                 && $payload['result']['force'] === true
                 && $payload['result']['actor_user_id'] === 7);
         $config = Mockery::mock(ConfigRepository::class);
-        $config->shouldReceive('get')->once()->with('queue.default', 'sync')->andReturn('database');
-        $dispatcher = $this->bindDispatcher($cache);
-        $this->expectUniqueLock($cache, 'mod-manager:scan:42:mod', 600);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(function (ScanInstalledProjects $job) use (&$leaseToken): bool {
-                return $job->serverId === 42
-                    && $job->projectType === ProjectType::Mod->value
-                    && $job->leaseToken === $leaseToken
-                    && $job->force
-                    && $job->actorUserId === 7;
-            })
-            ->andReturn(1);
+        $runner = PluginBackgroundRunner::fake();
 
-        $result = (new InstalledOperationManager($cache, $config))
+        $result = (new InstalledOperationManager($cache, $config, runner: $runner))
             ->dispatchScan(42, ProjectType::Mod, force: true, actorUserId: 7);
 
         self::assertTrue($result['dispatched']);
         self::assertNull($result['reason']);
         self::assertSame(InstalledOperationState::STATUS_QUEUED, $result['state']->status);
+        self::assertCount(1, $runner->spawned);
+        self::assertSame(BackgroundJob::SCAN, $runner->spawned[0]['type']);
+        self::assertSame(42, $runner->spawned[0]['payload']['server_id']);
+        self::assertSame(ProjectType::Mod->value, $runner->spawned[0]['payload']['project_type']);
+        self::assertSame($leaseToken, $runner->spawned[0]['payload']['lease_token']);
+        self::assertTrue($runner->spawned[0]['payload']['force']);
+        self::assertSame(7, $runner->spawned[0]['payload']['actor_user_id']);
+        self::assertStringStartsNotWith('O:', PluginBackgroundRunner::encodePayload($runner->spawned[0]['payload']));
     }
 
-    public function test_async_bulk_update_persists_queued_state_and_dispatches_job(): void
+    public function test_async_bulk_update_persists_queued_state_and_starts_a_process(): void
     {
         $leaseToken = null;
         $cache = Mockery::mock(CacheRepository::class);
@@ -166,25 +157,17 @@ class InstalledOperationManagerTest extends TestCase
                 && $payload['operation'] === InstalledOperationManager::OPERATION_BULK_UPDATE
                 && $payload['status'] === InstalledOperationState::STATUS_QUEUED);
         $config = Mockery::mock(ConfigRepository::class);
-        $config->shouldReceive('get')->once()->with('queue.default', 'sync')->andReturn('database');
-        $dispatcher = $this->bindDispatcher($cache);
-        $this->expectUniqueLock($cache, 'mod-manager:bulk-update:42:mod', 1200);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(function (BulkUpdateInstalledProjects $job) use (&$leaseToken): bool {
-                return $job->serverId === 42
-                    && $job->projectType === ProjectType::Mod->value
-                    && $job->leaseToken === $leaseToken;
-            })
-            ->andReturn(1);
+        $runner = PluginBackgroundRunner::fake();
 
-        $result = (new InstalledOperationManager($cache, $config))
+        $result = (new InstalledOperationManager($cache, $config, runner: $runner))
             ->dispatchBulkUpdate(42, ProjectType::Mod);
 
         self::assertTrue($result['dispatched']);
         self::assertNull($result['reason']);
         self::assertSame(InstalledOperationManager::OPERATION_BULK_UPDATE, $result['state']->operation);
         self::assertSame(InstalledOperationState::STATUS_QUEUED, $result['state']->status);
+        self::assertSame(BackgroundJob::BULK_UPDATE, $runner->spawned[0]['type']);
+        self::assertSame($leaseToken, $runner->spawned[0]['payload']['lease_token']);
     }
 
     public function test_active_bulk_update_is_not_dispatched_twice(): void
@@ -234,11 +217,11 @@ class InstalledOperationManagerTest extends TestCase
         $store = new ArrayStore();
         $cache = new Repository($store);
         $config = Mockery::mock(ConfigRepository::class);
-        $config->shouldReceive('get')->once()->with('queue.default', 'sync')->andReturn('database');
+        $config->shouldNotReceive('get');
         $leases = new InstalledOperationLease($cache);
         self::assertNotNull($leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_INSTALL));
 
-        $result = (new InstalledOperationManager($cache, $config, $leases))
+        $result = (new InstalledOperationManager($cache, $config, $leases, PluginBackgroundRunner::fake()))
             ->dispatchBulkUpdate(42, ProjectType::Mod);
 
         self::assertFalse($result['dispatched']);
@@ -329,12 +312,12 @@ class InstalledOperationManagerTest extends TestCase
     public function test_metadata_reset_acquires_all_type_leases_or_rolls_back_every_new_claim(): void
     {
         $cache = new Repository(new ArrayStore());
-        $config = new LaravelConfigRepository(['queue' => ['default' => 'database']]);
+        $config = new LaravelConfigRepository();
         $leases = new InstalledOperationLease($cache);
         $existingModToken = $leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_INSTALL);
         self::assertNotNull($existingModToken);
 
-        $result = (new InstalledOperationManager($cache, $config, $leases))->dispatchMetadataReset(
+        $result = (new InstalledOperationManager($cache, $config, $leases, PluginBackgroundRunner::fake()))->dispatchMetadataReset(
             42,
             [ProjectType::Mod, ProjectType::Datapack],
             actorUserId: 7,
@@ -347,24 +330,14 @@ class InstalledOperationManagerTest extends TestCase
         self::assertTrue($leases->owns(42, ProjectType::Mod, $existingModToken));
     }
 
-    public function test_metadata_reset_dispatches_one_job_with_every_exact_lease_token(): void
+    public function test_metadata_reset_starts_one_process_with_every_exact_lease_token(): void
     {
         $cache = new Repository(new ArrayStore());
-        $config = new LaravelConfigRepository(['queue' => ['default' => 'database']]);
+        $config = new LaravelConfigRepository();
         $leases = new InstalledOperationLease($cache);
-        $dispatcher = $this->bindDispatcher($cache);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(function (ResetInstalledMetadata $job) use ($leases): bool {
-                return $job->serverId === 42
-                    && $job->projectTypes === ['datapack', 'mod']
-                    && $job->actorUserId === 7
-                    && $leases->owns(42, ProjectType::Datapack, $job->leaseTokens['datapack'])
-                    && $leases->owns(42, ProjectType::Mod, $job->leaseTokens['mod']);
-            })
-            ->andReturn(1);
+        $runner = PluginBackgroundRunner::fake();
 
-        $result = (new InstalledOperationManager($cache, $config, $leases))->dispatchMetadataReset(
+        $result = (new InstalledOperationManager($cache, $config, $leases, $runner))->dispatchMetadataReset(
             42,
             [ProjectType::Mod, ProjectType::Datapack],
             actorUserId: 7,
@@ -373,6 +346,21 @@ class InstalledOperationManagerTest extends TestCase
         self::assertTrue($result['dispatched']);
         self::assertNull($result['reason']);
         self::assertSame(['datapack', 'mod'], array_keys($result['states']));
+        self::assertCount(1, $runner->spawned);
+        self::assertSame(BackgroundJob::RESET_METADATA, $runner->spawned[0]['type']);
+        self::assertSame(42, $runner->spawned[0]['payload']['server_id']);
+        self::assertSame(['datapack', 'mod'], $runner->spawned[0]['payload']['project_types']);
+        self::assertSame(7, $runner->spawned[0]['payload']['actor_user_id']);
+        self::assertTrue($leases->owns(
+            42,
+            ProjectType::Datapack,
+            $runner->spawned[0]['payload']['lease_tokens']['datapack'],
+        ));
+        self::assertTrue($leases->owns(
+            42,
+            ProjectType::Mod,
+            $runner->spawned[0]['payload']['lease_tokens']['mod'],
+        ));
     }
 
     public function test_progress_persists_the_running_state_in_one_cache_write(): void
@@ -568,47 +556,5 @@ class InstalledOperationManagerTest extends TestCase
 
         self::assertNull($snapshot['scan']);
         self::assertSame(InstalledOperationManager::OPERATION_BULK_UPDATE, $snapshot['bulk']?->operation);
-    }
-
-    private function bindDispatcher(CacheRepository $cache): Dispatcher
-    {
-        $dispatcher = Mockery::mock(Dispatcher::class);
-        $context = Mockery::mock(ContextRepository::class);
-        $exceptionHandler = Mockery::mock(ExceptionHandler::class);
-        $context->shouldReceive('addHidden')->zeroOrMoreTimes();
-        $context->shouldReceive('forgetHidden')->zeroOrMoreTimes();
-        $exceptionHandler->shouldReceive('report')->zeroOrMoreTimes();
-        $dispatchConfig = new LaravelConfigRepository([
-            'cache' => ['default' => 'array'],
-        ]);
-        $container = new Container();
-        $container->instance(CacheRepository::class, $cache);
-        $container->instance(ConfigRepository::class, $dispatchConfig);
-        $container->instance('config', $dispatchConfig);
-        $container->instance(Dispatcher::class, $dispatcher);
-        $container->instance(ContextRepository::class, $context);
-        $container->instance(ExceptionHandler::class, $exceptionHandler);
-        Container::setInstance($container);
-        Facade::setFacadeApplication($container);
-
-        return $dispatcher;
-    }
-
-    private function expectUniqueLock(CacheRepository $cache, string $uniqueId, int $uniqueFor): void
-    {
-        $lock = Mockery::mock();
-        $lock->shouldReceive('get')->once()->andReturnTrue();
-        $cache->shouldReceive('lock')
-            ->once()
-            ->withArgs(static fn (mixed $key, mixed $seconds): bool => is_string($key)
-                && str_ends_with($key, ':'.$uniqueId)
-                && $seconds === $uniqueFor)
-            ->andReturn($lock);
-        // Laravel 13 UniqueLock::acquire() calls getStore() after the lock
-        // is taken so it can record uniqueLockOwner on LockProvider stores.
-        // A Mockery repository is not a LockProvider; returning null keeps
-        // dispatch on the mocked Dispatcher instead of throwing into the
-        // manager's dispatch_failed path.
-        $cache->shouldReceive('getStore')->zeroOrMoreTimes()->andReturnNull();
     }
 }

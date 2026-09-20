@@ -2,25 +2,16 @@
 
 namespace Kazaminosuke\ModManager\Jobs;
 
-use Illuminate\Contracts\Queue\ShouldBeUnique;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Container\Container;
 use Kazaminosuke\ModManager\Contracts\AuthoritativeBatchProjectSourceInterface;
 use Kazaminosuke\ModManager\Support\CacheProfile;
+use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 
-final class RevalidateSourceCache implements ShouldBeUnique, ShouldQueue
+final class RevalidateSourceCache
 {
-    use Dispatchable;
-    use Queueable;
-
-    public int $tries = 1;
-
-    public int $timeout = 30;
-
     public int $uniqueFor = 300;
 
     public function __construct(
@@ -55,7 +46,28 @@ final class RevalidateSourceCache implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        WarmProjectMetadata::dispatch($this->spec->sourceKey, $projectIds);
+        $payload = [
+            'source_key' => $this->spec->sourceKey,
+            'project_ids' => $projectIds,
+        ];
+        $warm = new WarmProjectMetadata($this->spec->sourceKey, $projectIds);
+        $container = Container::getInstance();
+
+        if ($container->bound(PluginBackgroundRunner::class)) {
+            $runner = $container->make(PluginBackgroundRunner::class);
+            if ($runner->canSpawn()) {
+                $runner->run(
+                    BackgroundJob::WARM_PROJECT_METADATA,
+                    $payload,
+                    $warm->uniqueId(),
+                    $warm->uniqueFor,
+                );
+
+                return;
+            }
+        }
+
+        BackgroundJob::execute(BackgroundJob::WARM_PROJECT_METADATA, $payload);
     }
 
     /** @return array<int, string> */

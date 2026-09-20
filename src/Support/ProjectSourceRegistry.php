@@ -8,6 +8,7 @@ use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Jobs\WarmProjectMetadata;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
@@ -197,7 +198,7 @@ class ProjectSourceRegistry
                 }
             }
 
-            // A sync/null queue driver would run this inline, blocking the
+            // A missing artisan runner would run this inline, blocking the
             // very render path peekInstalled() exists to keep non-blocking
             // - see SourceCache::revalidateAsync(), which individual
             // peekProject() misses respect via the same check. Left
@@ -206,7 +207,17 @@ class ProjectSourceRegistry
             // user is actively looking at their Installed tab, not as
             // speculative background warming.
             if ($source !== null && $missingIds !== [] && $this->operations->supportsAsyncDispatch()) {
-                WarmProjectMetadata::dispatch($sourceKey, array_values(array_unique($missingIds)));
+                $ids = array_values(array_unique($missingIds));
+                $job = new WarmProjectMetadata($sourceKey, $ids);
+                $this->operations->startBackgroundJob(
+                    BackgroundJob::WARM_PROJECT_METADATA,
+                    [
+                        'source_key' => $sourceKey,
+                        'project_ids' => $ids,
+                    ],
+                    $job->uniqueId(),
+                    $job->uniqueFor,
+                );
             }
 
             foreach ($mods as $mod) {

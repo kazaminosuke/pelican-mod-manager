@@ -34,13 +34,15 @@ server's `resourcepacks/` directory: the provider's direct URL and SHA-1 are wri
 - PHP 8.3 - 8.5
 - A request-isolated HTTP runtime such as PHP-FPM. Laravel Octane and other
   long-lived HTTP workers are not currently supported.
-- **An asynchronous queue worker.** Installed-file scans, bulk updates, and cache warming all run as queued jobs so Livewire requests stay responsive. Configure a real driver (for example `QUEUE_CONNECTION=database`) and keep a worker running:
+- **PHP CLI.** Installed-file scans, bulk updates, and cache warming never run
+  inside a Livewire request. They start a short-lived `php artisan mod-manager:run-job`
+  process so each job boots the current Plugin from disk. The Panel PHP process
+  must be able to start the CLI `php` binary (`proc_open` on Linux, `popen` on
+  Windows). Laravel's `queue:work` is not used for this Plugin, and Plugin
+  updates do not require `queue:restart`.
 
-  ```sh
-  php artisan queue:work
-  ```
-
-  The `sync` and `null` drivers are intentionally rejected for scans/bulk updates - the plugin shows a queue-configuration warning instead of blocking the browser request on them.
+  If PHP CLI cannot be started, the plugin shows a configuration warning instead
+  of blocking the browser request.
 
 ## Installation
 
@@ -117,8 +119,8 @@ The same screen has a **Clear cache** action, which behaves differently by scope
 - **All servers** - clears every server's tracked-file metadata and the shared caches, but does
   **not** force an immediate re-scan; each server re-scans lazily the next time its applicable
   Mod/Plugin/Datapack Catalog or Installed view is opened.
-- **A single server** - clears that server's metadata and immediately queues a forced re-scan
-  (needs a working queue - see [Requirements](#requirements)).
+- **A single server** - clears that server's metadata and immediately starts a forced re-scan
+  (needs PHP CLI - see [Requirements](#requirements)).
 
 ## How it works
 
@@ -130,8 +132,8 @@ The same screen has a **Clear cache** action, which behaves differently by scope
 - **Incremental hash scanning** re-hashes a file only when its size/modified-time signature has
   changed, instead of every file on every scan.
 - **Installed-state caching** reuses the per-server/project-type scan result for the Installed
-  count and the generation-scoped metadata index for Catalog row state. A cold Catalog view queues
-  one background scan; operation state, a lease, and a unique job coalesce concurrent requests.
+  count and the generation-scoped metadata index for Catalog row state. A cold Catalog view starts
+  one background scan; operation state and a lease coalesce concurrent requests.
 - **Background jobs and status badges** handle scans and bulk updates without blocking the UI:
   scans show progress and a brief completion outcome only while the Installed tab is open, while
   bulk-update progress remains inline.
@@ -151,7 +153,7 @@ including the detection order and how to configure an egg manually.
 
 ## Troubleshooting
 
-- **"An asynchronous queue worker is required" warning** - see [Requirements](#requirements).
+- **"Background operations could not be started" warning** - see [Requirements](#requirements).
 - **A row shows "Not tracked"** - a file exists in the mod/plugin/datapack folder that isn't (yet)
   recorded in the metadata index. Use the Rescan action.
 - **The CurseForge tab is not shown** - configure a CurseForge API key in [Settings](#settings), and

@@ -6,13 +6,10 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Cache\Lock as CacheLock;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
-use Illuminate\Log\Context\Repository as ContextRepository;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Facades\Facade;
 use InvalidArgumentException;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
@@ -20,11 +17,12 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchHandlerInterface;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Jobs\RevalidateSourceCache;
-use Kazaminosuke\ModManager\Jobs\WarmProjectMetadata;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Support\CacheProfile;
+use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchExecutor;
@@ -38,6 +36,8 @@ class SourceCacheTest extends TestCase
     private ?Container $previousContainer = null;
 
     private mixed $previousFacadeApplication = null;
+
+    private ?PluginBackgroundRunner $backgroundRunner = null;
 
     protected function setUp(): void
     {
@@ -274,16 +274,13 @@ class SourceCacheTest extends TestCase
         $executor = Mockery::mock(SourceFetchExecutorInterface::class);
         $executor->shouldNotReceive('fetch');
         $executor->shouldNotReceive('emptyResult');
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(fn (RevalidateSourceCache $job): bool => $job->uniqueId() === $spec->cacheKey())
-            ->andReturnNull();
-
         $sourceCache = $this->sourceCache($cache, 'database', $executor);
 
         self::assertSame($stale, $sourceCache->swr($spec, CacheProfile::Search));
         self::assertSame($stale, $sourceCache->swr($spec, CacheProfile::Search));
+        self::assertCount(1, $this->backgroundRunner?->spawned ?? []);
+        self::assertSame(BackgroundJob::REVALIDATE, $this->backgroundRunner->spawned[0]['type']);
+        self::assertSame($spec->cacheKey(), $this->backgroundRunner->spawned[0]['unique_id']);
 
         $peeked = $sourceCache->peek($spec);
         self::assertTrue($peeked['hit']);
@@ -404,18 +401,14 @@ class SourceCacheTest extends TestCase
             ->with($spec, CacheProfile::Search->inlineBudgetSeconds())
             ->andThrow(new RuntimeException('offline'));
         $executor->shouldReceive('emptyResult')->twice()->with($spec)->andReturn($empty);
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(fn (RevalidateSourceCache $job): bool => $job->uniqueId() === $spec->cacheKey())
-            ->andReturnNull();
         $sourceCache = $this->sourceCache($cache, 'database', $executor);
 
         self::assertSame($empty, $sourceCache->swr($spec, CacheProfile::Search));
         self::assertIsArray($cache->get($spec->cacheKey().':failure:v1'));
 
-        // The marker suppresses another inline call and another queued job.
+        // The marker suppresses another inline call and another background job.
         self::assertSame($empty, $sourceCache->swr($spec, CacheProfile::Search));
+        self::assertCount(1, $this->backgroundRunner?->spawned ?? []);
     }
 
     public function test_partial_fetch_returns_uncached_fallback_and_marks_failure(): void
@@ -449,8 +442,6 @@ class SourceCacheTest extends TestCase
             ->with($spec, CacheProfile::Search->inlineBudgetSeconds())
             ->andThrow(new SourceFetchNotFoundException('gone'));
         $executor->shouldReceive('emptyResult')->once()->with($spec)->andReturn($empty);
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldNotReceive('dispatch');
 
         $result = $this->sourceCache($cache, 'database', $executor)
             ->swr($spec, CacheProfile::Search);
@@ -458,6 +449,7 @@ class SourceCacheTest extends TestCase
         self::assertSame($empty, $result);
         self::assertNull($cache->get($spec->cacheKey()));
         self::assertNull($cache->get($spec->cacheKey().':failure:v1'));
+        self::assertSame([], $this->backgroundRunner?->spawned ?? []);
     }
 
     public function test_required_fetch_returns_empty_for_a_definitive_not_found(): void
@@ -470,8 +462,6 @@ class SourceCacheTest extends TestCase
             ->with($spec, CacheProfile::Search->backgroundTimeoutSeconds())
             ->andThrow(new SourceFetchNotFoundException('gone'));
         $executor->shouldReceive('emptyResult')->once()->with($spec)->andReturn(null);
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldNotReceive('dispatch');
 
         self::assertNull(
             $this->sourceCache($cache, 'database', $executor)
@@ -479,6 +469,7 @@ class SourceCacheTest extends TestCase
         );
         self::assertNull($cache->get($spec->cacheKey()));
         self::assertNull($cache->get($spec->cacheKey().':failure:v1'));
+        self::assertSame([], $this->backgroundRunner?->spawned ?? []);
     }
 
     public function test_revalidation_treats_a_definitive_not_found_as_completed(): void
@@ -578,17 +569,15 @@ class SourceCacheTest extends TestCase
         $executor = Mockery::mock(SourceFetchExecutorInterface::class);
         $executor->shouldNotReceive('fetch');
         $executor->shouldNotReceive('emptyResult');
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(fn (RevalidateSourceCache $job): bool => $job->uniqueId() === $spec->cacheKey())
-            ->andReturnNull();
 
         $result = $this->sourceCache($cache, 'database', $executor)
             ->swrDeferred($spec, CacheProfile::Search);
 
         self::assertSame($stale, $result['data']);
         self::assertFalse($result['pending']);
+        self::assertCount(1, $this->backgroundRunner?->spawned ?? []);
+        self::assertSame(BackgroundJob::REVALIDATE, $this->backgroundRunner->spawned[0]['type']);
+        self::assertSame($spec->cacheKey(), $this->backgroundRunner->spawned[0]['unique_id']);
     }
 
     public function test_deferred_miss_never_fetches_inline_and_queues_one_revalidation(): void
@@ -599,17 +588,14 @@ class SourceCacheTest extends TestCase
         $executor = Mockery::mock(SourceFetchExecutorInterface::class);
         $executor->shouldNotReceive('fetch');
         $executor->shouldReceive('emptyResult')->once()->with($spec)->andReturn($empty);
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(fn (RevalidateSourceCache $job): bool => $job->uniqueId() === $spec->cacheKey())
-            ->andReturnNull();
 
         $result = $this->sourceCache($cache, 'database', $executor)
             ->swrDeferred($spec, CacheProfile::Search);
 
         self::assertSame($empty, $result['data']);
         self::assertTrue($result['pending']);
+        self::assertCount(1, $this->backgroundRunner?->spawned ?? []);
+        self::assertSame(BackgroundJob::REVALIDATE, $this->backgroundRunner->spawned[0]['type']);
     }
 
     public function test_deferred_miss_on_sync_queue_never_fetches_inline_or_reports_an_unresolvable_pending_state(): void
@@ -638,8 +624,6 @@ class SourceCacheTest extends TestCase
         $executor = Mockery::mock(SourceFetchExecutorInterface::class);
         $executor->shouldNotReceive('fetch');
         $executor->shouldReceive('emptyResult')->once()->with($spec)->andReturn($empty);
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldNotReceive('dispatch');
 
         $result = $this->sourceCache($cache, 'database', $executor)
             ->swrDeferred($spec, CacheProfile::Search);
@@ -647,6 +631,7 @@ class SourceCacheTest extends TestCase
         self::assertSame($empty, $result['data']);
         self::assertFalse($result['pending']);
         self::assertTrue($result['retry_delayed']);
+        self::assertSame([], $this->backgroundRunner?->spawned ?? []);
     }
 
     public function test_revalidation_failure_preserves_existing_stale_entry(): void
@@ -680,15 +665,14 @@ class SourceCacheTest extends TestCase
         $source = Mockery::mock(ModrinthSource::class);
         $registry = Mockery::mock(ProjectSourceRegistry::class);
         $registry->shouldReceive('getByValue')->once()->with('modrinth')->andReturn($source);
-        $dispatcher = $this->prepareDispatchContainer($cache);
-        $dispatcher->shouldReceive('dispatch')
-            ->once()
-            ->withArgs(fn (WarmProjectMetadata $job): bool => $job->sourceKey === 'modrinth' && $job->projectIds === ['b', 'a'])
-            ->andReturnNull();
+        $this->bindBackgroundRunner($cache);
 
         (new RevalidateSourceCache($spec, CacheProfile::ProjectMetadata))->handle($sourceCache, $registry);
 
-        self::assertTrue(true);
+        self::assertCount(1, $this->backgroundRunner?->spawned ?? []);
+        self::assertSame(BackgroundJob::WARM_PROJECT_METADATA, $this->backgroundRunner->spawned[0]['type']);
+        self::assertSame('modrinth', $this->backgroundRunner->spawned[0]['payload']['source_key']);
+        self::assertSame(['b', 'a'], $this->backgroundRunner->spawned[0]['payload']['project_ids']);
     }
 
     public function test_cache_profiles_match_the_stage_three_policy(): void
@@ -731,9 +715,12 @@ class SourceCacheTest extends TestCase
         $spec = $this->spec();
         $job = new RevalidateSourceCache($spec, CacheProfile::Search);
 
-        self::assertInstanceOf(ShouldBeUnique::class, $job);
         self::assertSame($spec->cacheKey(), $job->uniqueId());
         self::assertSame($job->uniqueId(), (new RevalidateSourceCache($spec, CacheProfile::Search))->uniqueId());
+        self::assertNotContains(
+            ShouldQueue::class,
+            class_implements(RevalidateSourceCache::class) ?: [],
+        );
     }
 
     public function test_executor_resolves_registry_lazily_and_delegates_to_source_handler(): void
@@ -762,32 +749,26 @@ class SourceCacheTest extends TestCase
         string $queueDriver,
         SourceFetchExecutorInterface $executor,
     ): SourceCache {
+        $async = !in_array($queueDriver, ['sync', 'null'], true);
+        $this->backgroundRunner = $async
+            ? PluginBackgroundRunner::fake($cache instanceof LaravelCacheRepository ? $cache : null)
+            : PluginBackgroundRunner::disabled();
         $config = new LaravelConfigRepository(['queue' => ['default' => $queueDriver]]);
-        $operations = new InstalledOperationManager($cache, $config);
+        $operations = new InstalledOperationManager($cache, $config, runner: $this->backgroundRunner);
 
         return new SourceCache($cache, $operations, $executor);
     }
 
-    private function prepareDispatchContainer(CacheRepository $cache): Dispatcher
+    private function bindBackgroundRunner(CacheRepository $cache): void
     {
-        $config = new LaravelConfigRepository([
-            'cache' => ['default' => 'array'],
-            'queue' => ['default' => 'database'],
-        ]);
-        $dispatcher = Mockery::mock(Dispatcher::class);
-        $context = Mockery::mock(ContextRepository::class);
-        $context->shouldReceive('addHidden')->zeroOrMoreTimes();
-        $context->shouldReceive('forgetHidden')->zeroOrMoreTimes();
+        $runner = $this->backgroundRunner ?? PluginBackgroundRunner::fake(
+            $cache instanceof LaravelCacheRepository ? $cache : null,
+        );
         $container = new Container();
+        $container->instance(PluginBackgroundRunner::class, $runner);
         $container->instance(CacheRepository::class, $cache);
-        $container->instance(ConfigRepository::class, $config);
-        $container->instance('config', $config);
-        $container->instance(Dispatcher::class, $dispatcher);
-        $container->instance(ContextRepository::class, $context);
         Container::setInstance($container);
         Facade::setFacadeApplication($container);
-
-        return $dispatcher;
     }
 
     /** @return array{v: int, data: mixed, fresh_until: int} */

@@ -9,7 +9,7 @@ use Illuminate\Http\Request;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
-use Kazaminosuke\ModManager\Jobs\RevalidateSourceCache;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
@@ -264,7 +264,7 @@ final class SourceCache
     }
 
     /**
-     * Queue a refresh without performing an inline fetch.
+     * Start a background refresh without performing an inline fetch.
      */
     public function revalidateAsync(SourceFetchSpec $spec, CacheProfile $profile): bool
     {
@@ -275,7 +275,7 @@ final class SourceCache
         return $this->dispatchRevalidation($spec, $profile);
     }
 
-    /** Clear the queue-worker memo between jobs. */
+    /** Clear per-process memos between independent background jobs. */
     public function clearRuntimeCaches(): void
     {
         $this->processMemos = null;
@@ -285,9 +285,9 @@ final class SourceCache
      * Non-blocking counterpart to swr(): never performs an inline fetch.
      *
      * A fresh hit returns immediately. A stale hit also returns
-     * immediately, and queues a background revalidation exactly like
-     * swr() does. A miss queues a background fetch (when the queue
-     * supports it - see revalidateAsync()) and returns the operation's
+     * immediately, and starts a background revalidation exactly like
+     * swr() does. A miss starts a background fetch (when a short-lived
+     * artisan process can be spawned - see revalidateAsync()) and returns the operation's
      * empty result instead of waiting for one, so a render path can show
      * a placeholder rather than block on a cold cache. Callers that need
      * to tell "genuinely empty" apart from "not checked yet" should use
@@ -307,10 +307,10 @@ final class SourceCache
             return ['data' => $peeked['data'], 'pending' => false, 'retry_delayed' => false];
         }
 
-        // A failure marker (or a sync/null queue) means no background fetch
-        // was actually scheduled. Reporting this as pending keeps callers
-        // polling forever for a value that cannot change until the marker
-        // expires or queue configuration is fixed.
+        // A failure marker (or no spawnable artisan process) means no
+        // background fetch was actually scheduled. Reporting this as pending
+        // keeps callers polling forever for a value that cannot change until
+        // the marker expires or background execution is available.
         $pending = $this->revalidateAsync($spec, $profile);
 
         return [
@@ -559,12 +559,17 @@ final class SourceCache
         }
 
         try {
-            // Dispatchable's PendingDispatch acquires Laravel's ShouldBeUnique
-            // lock. Calling Bus\Dispatcher::dispatch() directly would bypass
-            // that acquisition path.
-            RevalidateSourceCache::dispatch($spec, $profile);
-
-            return true;
+            return $this->operations->startBackgroundJob(
+                BackgroundJob::REVALIDATE,
+                [
+                    'source_key' => $spec->sourceKey,
+                    'operation' => $spec->operation,
+                    'arguments' => $spec->arguments,
+                    'profile' => $profile->value,
+                ],
+                $spec->cacheKey(),
+                300,
+            );
         } catch (Throwable $exception) {
             $this->logFailure('Unable to dispatch source-cache revalidation.', $spec, $exception);
 
@@ -632,7 +637,7 @@ final class SourceCache
     /**
      * Request-scoped probe memo. SourceCache is a singleton, so the bag lives
      * on the current HTTP request when one exists and otherwise on this
-     * instance (queue workers / unit tests).
+     * instance (background artisan processes / unit tests).
      */
     private ?\ArrayObject $processMemos = null;
 

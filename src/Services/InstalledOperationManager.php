@@ -4,14 +4,14 @@ namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
 use DateTimeImmutable;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Kazaminosuke\ModManager\Enums\ProjectType;
-use Kazaminosuke\ModManager\Jobs\BulkUpdateInstalledProjects;
-use Kazaminosuke\ModManager\Jobs\ResetInstalledMetadata;
-use Kazaminosuke\ModManager\Jobs\ScanInstalledProjects;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
+use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Throwable;
 
 final class InstalledOperationManager
@@ -40,21 +40,65 @@ final class InstalledOperationManager
 
     private readonly InstalledOperationLease $leases;
 
+    private readonly PluginBackgroundRunner $runner;
+
     public function __construct(
         private readonly CacheRepository $cache,
-        private readonly ConfigRepository $config,
+        ConfigRepository $config,
         ?InstalledOperationLease $leases = null,
+        ?PluginBackgroundRunner $runner = null,
     ) {
+        unset($config);
         $this->leases = $leases ?? new InstalledOperationLease($cache);
+        $this->runner = $runner ?? self::resolveRunner();
     }
 
+    /**
+     * Whether a short-lived artisan process can be started for heavy work.
+     *
+     * This is independent of Laravel's queue driver. Mod Manager no longer
+     * serializes Plugin job classes onto a long-running worker, and it
+     * never falls back to running a Wings scan inside the HTTP request.
+     */
     public function supportsAsyncDispatch(): bool
     {
-        return !in_array(
-            (string) $this->config->get('queue.default', 'sync'),
-            ['sync', 'null'],
-            true,
-        );
+        return $this->runner->canSpawn();
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public function startBackgroundJob(
+        string $type,
+        array $payload,
+        ?string $uniqueId = null,
+        int $uniqueFor = 0,
+    ): bool {
+        return $this->runner->run($type, $payload, $uniqueId, $uniqueFor);
+    }
+
+    public function backgroundRunner(): PluginBackgroundRunner
+    {
+        return $this->runner;
+    }
+
+    private static function resolveRunner(): PluginBackgroundRunner
+    {
+        $app = Container::getInstance();
+
+        if (!is_object($app) || !method_exists($app, 'bound') || !$app->bound(PluginBackgroundRunner::class)) {
+            return PluginBackgroundRunner::disabled();
+        }
+
+        try {
+            $runner = $app->make(PluginBackgroundRunner::class);
+        } catch (Throwable) {
+            return PluginBackgroundRunner::disabled();
+        }
+
+        return $runner instanceof PluginBackgroundRunner
+            ? $runner
+            : PluginBackgroundRunner::disabled();
     }
 
     /**
@@ -126,16 +170,18 @@ final class InstalledOperationManager
                 'force' => $force,
                 'actor_user_id' => $actorUserId,
             ]);
-            // PendingDispatch acquires the ShouldBeUnique lock before the
-            // dispatcher sees the job. Calling Dispatcher::dispatch() here
-            // would queue duplicate scan jobs under concurrent requests.
-            ScanInstalledProjects::dispatch(
-                serverId: $serverId,
-                projectType: $projectType->value,
-                leaseToken: $leaseToken,
-                force: $force,
-                actorUserId: $actorUserId,
-            );
+            if (!$this->runner->run(
+                BackgroundJob::SCAN,
+                [
+                    'server_id' => $serverId,
+                    'project_type' => $projectType->value,
+                    'lease_token' => $leaseToken,
+                    'force' => $force,
+                    'actor_user_id' => $actorUserId,
+                ],
+            )) {
+                throw new \RuntimeException('Unable to start the installed-file scan process.');
+            }
         } catch (Throwable $exception) {
             report($exception);
 
@@ -551,13 +597,16 @@ final class InstalledOperationManager
 
         try {
             $state = $this->queue($serverId, $projectType, self::OPERATION_BULK_UPDATE);
-            // See dispatchScan(): the static Dispatchable path is required
-            // for Laravel to acquire this job's ShouldBeUnique lock.
-            BulkUpdateInstalledProjects::dispatch(
-                serverId: $serverId,
-                projectType: $projectType->value,
-                leaseToken: $leaseToken,
-            );
+            if (!$this->runner->run(
+                BackgroundJob::BULK_UPDATE,
+                [
+                    'server_id' => $serverId,
+                    'project_type' => $projectType->value,
+                    'lease_token' => $leaseToken,
+                ],
+            )) {
+                throw new \RuntimeException('Unable to start the bulk-update process.');
+            }
         } catch (Throwable $exception) {
             report($exception);
 
@@ -676,12 +725,17 @@ final class InstalledOperationManager
                 ]);
             }
 
-            ResetInstalledMetadata::dispatch(
-                serverId: $serverId,
-                projectTypes: array_keys($types),
-                leaseTokens: $leaseTokens,
-                actorUserId: $actorUserId,
-            );
+            if (!$this->runner->run(
+                BackgroundJob::RESET_METADATA,
+                [
+                    'server_id' => $serverId,
+                    'project_types' => array_keys($types),
+                    'lease_tokens' => $leaseTokens,
+                    'actor_user_id' => $actorUserId,
+                ],
+            )) {
+                throw new \RuntimeException('Unable to start the metadata-reset process.');
+            }
         } catch (Throwable $exception) {
             report($exception);
 
