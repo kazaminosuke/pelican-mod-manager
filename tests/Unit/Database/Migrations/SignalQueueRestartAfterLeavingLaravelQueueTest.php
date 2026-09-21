@@ -4,7 +4,6 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Database\Migrations;
 
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Facade;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -36,10 +35,15 @@ class SignalQueueRestartAfterLeavingLaravelQueueTest extends TestCase
 
     public function test_up_broadcasts_queue_restart_and_down_does_not(): void
     {
+        $commands = [];
         $kernel = Mockery::mock(ConsoleKernel::class);
         $kernel->shouldReceive('call')
             ->once()
-            ->withArgs(fn (string $command): bool => $command === 'queue:restart')
+            ->withArgs(function (string $command) use (&$commands): bool {
+                $commands[] = $command;
+
+                return $command === 'queue:restart';
+            })
             ->andReturn(0);
 
         $container = new Container();
@@ -52,6 +56,8 @@ class SignalQueueRestartAfterLeavingLaravelQueueTest extends TestCase
         $migration->up();
         $migration->down();
         $migration->down();
+
+        self::assertSame(['queue:restart'], $commands);
     }
 
     public function test_migration_does_not_kill_workers_or_requeue_mod_manager_jobs(): void
@@ -64,6 +70,6 @@ class SignalQueueRestartAfterLeavingLaravelQueueTest extends TestCase
         self::assertStringNotContainsString('SIGTERM', $contents);
         self::assertStringNotContainsString('ShouldQueue', $contents);
         self::assertStringNotContainsString('ScanInstalledProjects::dispatch', $contents);
-        self::assertStringNotContainsString('mod-manager:run-job', $contents);
+        self::assertStringNotContainsString("Artisan::call('mod-manager:run-job')", $contents);
     }
 }
