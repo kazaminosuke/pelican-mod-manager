@@ -5,12 +5,15 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+## [0.1.6-rc.1] - 2026-09-21
+
 ### 日本語
 
 #### 変更
 
 - Installed scan / catalog warm / bulk update などの Plugin 固有処理を Laravel Queue から外し、毎回最新 Plugin コードを読み込む短命な `php artisan mod-manager:run-job` プロセスで実行するよう変更
 - Plugin 更新後に `queue:restart` しなくても Hangar 404 hotfix や scan / warm が新しいコードで動くように修正
+- Queue 脱却版への移行時だけ、旧 `queue:work` を掃除する一回限りの migration を追加（`queue:restart` を一度発行し、以後の Plugin 更新では再実行しない）
 - 既存の operation lease・重複防止・Hangar 404 を failure marker にしない挙動は維持
 
 ### English
@@ -19,6 +22,7 @@ the complete matching version section and adds the comparison information to the
 
 - Moved Installed scan, catalog warm, bulk update, and related Plugin work off Laravel Queue into short-lived `php artisan mod-manager:run-job` processes that load the current Plugin from disk
 - Plugin updates now take effect without `queue:restart`, including Hangar 404 handling, scans, and catalog warming
+- Added a one-time migration that issues `queue:restart` only when updating to this Queue-exit release, so stale long-running workers are recycled once
 - Preserved operation leases, duplicate prevention, and Hangar 404s that must not write a failure marker
 
 ## [0.1.5] - 2026-09-17
