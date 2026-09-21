@@ -5,6 +5,28 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-21
+
+### 日本語
+
+#### 変更
+
+- Installed scan / catalog warm / bulk update などの Plugin 固有処理を Laravel Queue から外し、毎回最新 Plugin コードを読み込む短命な `php artisan mod-manager:run-job` プロセスで実行するよう変更
+- Plugin 更新後に `queue:restart` しなくても Hangar 404 hotfix や scan / warm が新しいコードで動くように修正
+- Queue 脱却版への移行時だけ、旧 `queue:work` を掃除する一回限りの migration を追加（`queue:restart` を一度発行し、以後の Plugin 更新では再実行しない）
+- CurseForge の Resource Pack Catalog から、API が `allowModDistribution === false` と明示している project を除外するよう修正（`null` / 未設定は除外しない。Mod / Plugin / Datapack は変更なし）
+- 既存の operation lease・重複防止・Hangar 404 を failure marker にしない挙動は維持
+
+### English
+
+#### Changed
+
+- Moved Installed scan, catalog warm, bulk update, and related Plugin work off Laravel Queue into short-lived `php artisan mod-manager:run-job` processes that load the current Plugin from disk
+- Plugin updates now take effect without `queue:restart`, including Hangar 404 handling, scans, and catalog warming
+- Added a one-time migration that issues `queue:restart` only when updating to this Queue-exit release, so stale long-running workers are recycled once
+- Filtered CurseForge Resource Pack catalog hits that explicitly set `allowModDistribution` to `false`, without dropping null/absent values or changing Mod, Plugin, or Datapack catalogs
+- Preserved operation leases, duplicate prevention, and Hangar 404s that must not write a failure marker
+
 ## [0.1.6-rc.1] - 2026-09-21
 
 ### 日本語
