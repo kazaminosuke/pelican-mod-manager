@@ -30,6 +30,19 @@ class ProjectPrimaryFileTest extends TestCase
         self::assertSame('sodium.jar', $file['filename'] ?? null);
     }
 
+    public function test_null_or_empty_download_url_is_not_downloadable(): void
+    {
+        self::assertNull(ProjectPrimaryFile::fromFiles([
+            ['primary' => true, 'filename' => 'pack.zip', 'url' => null],
+            ['filename' => 'also.zip', 'url' => ''],
+        ]));
+        self::assertFalse(ProjectPrimaryFile::isDownloadable([
+            'primary' => true,
+            'filename' => 'pack.zip',
+            'url' => null,
+        ]));
+    }
+
     public function test_first_downloadable_file_is_used_when_primary_flag_is_missing(): void
     {
         $file = ProjectPrimaryFile::fromFiles([

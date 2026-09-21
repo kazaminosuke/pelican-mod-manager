@@ -280,7 +280,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return $this->normalizeSearchResult([
                 'hits' => collect($payload['data'] ?? [])
                     ->filter(fn ($mod) => is_array($mod))
-                    ->filter(fn (array $mod) => $type !== ProjectType::ResourcePack || $this->isResourcePackProject($mod))
+                    ->filter(fn (array $mod) => $this->includeSearchHit($mod, $type))
                     ->map(fn (array $mod) => $this->normalizeProject($mod, $type))
                     ->values()
                     ->all(),
@@ -1287,6 +1287,22 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     {
         return !in_array($type, [ProjectType::Datapack, ProjectType::ResourcePack], true)
             || str_ends_with(strtolower((string) ($file['fileName'] ?? '')), '.zip');
+    }
+
+    /** @param array<string, mixed> $mod */
+    protected function includeSearchHit(array $mod, ProjectType $type): bool
+    {
+        if ($type !== ProjectType::ResourcePack) {
+            return true;
+        }
+
+        if (!$this->isResourcePackProject($mod)) {
+            return false;
+        }
+
+        // Search already returns this field on each hit. Only drop projects
+        // CurseForge explicitly marks as undistributable; null/absent stays.
+        return ($mod['allowModDistribution'] ?? null) !== false;
     }
 
     /** @param array<string, mixed> $mod */
