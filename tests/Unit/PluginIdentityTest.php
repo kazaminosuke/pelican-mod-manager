@@ -82,7 +82,7 @@ final class PluginIdentityTest extends TestCase
         $migrations = glob($this->path('database/migrations/*.php'));
 
         self::assertIsArray($migrations);
-        self::assertCount(4, $migrations);
+        self::assertCount(5, $migrations);
 
         $restart = $this->contents(
             'database/migrations/2026_09_21_000003_signal_queue_restart_after_leaving_laravel_queue.php',
@@ -111,6 +111,12 @@ final class PluginIdentityTest extends TestCase
         ] as $column) {
             self::assertStringContainsString("'{$column}'", $serverSettings);
         }
+
+        $spigotSource = $this->contents(
+            'database/migrations/2026_09_21_000005_add_spigot_source_and_file_index.php',
+        );
+        self::assertStringContainsString('spigot_enabled', $spigotSource);
+        self::assertStringContainsString('mod_manager_spigot_file_index', $spigotSource);
     }
 
     public function test_runtime_php_does_not_spawn_processes(): void

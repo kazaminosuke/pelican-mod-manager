@@ -81,6 +81,7 @@ class WarmCatalogCacheCommandTest extends TestCase
             $table->boolean('modrinth_enabled')->default(true);
             $table->boolean('curseforge_enabled')->default(true);
             $table->boolean('hangar_enabled')->default(true);
+            $table->boolean('spigot_enabled')->default(true);
             $table->boolean('github_releases_enabled')->default(false);
             $table->integer('mod_navigation_sort')->nullable();
             $table->integer('plugin_navigation_sort')->nullable();
@@ -315,6 +316,7 @@ class WarmCatalogCacheCommandTest extends TestCase
                 'modrinth_enabled' => false,
                 'curseforge_enabled' => true,
                 'hangar_enabled' => false,
+                'spigot_enabled' => false,
                 'github_releases_enabled' => false,
             ],
             [
@@ -324,6 +326,7 @@ class WarmCatalogCacheCommandTest extends TestCase
                 'modrinth_enabled' => true,
                 'curseforge_enabled' => false,
                 'hangar_enabled' => false,
+                'spigot_enabled' => false,
                 'github_releases_enabled' => false,
             ],
         ]);
@@ -343,6 +346,7 @@ class WarmCatalogCacheCommandTest extends TestCase
         self::assertSame(1, (int) $representatives['curseforge']->getKey());
         self::assertSame(2, (int) $representatives['modrinth']->getKey());
         self::assertArrayNotHasKey('hangar', $representatives);
+        self::assertArrayNotHasKey('spigot', $representatives);
         self::assertArrayNotHasKey('github_releases', $representatives);
     }
 }

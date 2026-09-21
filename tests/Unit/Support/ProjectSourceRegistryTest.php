@@ -20,6 +20,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\EggProfileRegistry;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
@@ -72,6 +73,7 @@ class ProjectSourceRegistryTest extends TestCase
             $table->boolean('modrinth_enabled')->default(true);
             $table->boolean('curseforge_enabled')->default(true);
             $table->boolean('hangar_enabled')->default(true);
+            $table->boolean('spigot_enabled')->default(true);
             $table->boolean('github_releases_enabled')->default(false);
             $table->timestamps();
         });
@@ -452,10 +454,48 @@ class ProjectSourceRegistryTest extends TestCase
         );
     }
 
+    public function test_spigot_is_available_for_plugins_by_default(): void
+    {
+        $server = $this->serverWithEgg();
+        $modrinth = Mockery::mock(ModrinthSource::class);
+        $curseForge = Mockery::mock(CurseForgeSource::class);
+        $hangar = Mockery::mock(HangarSource::class);
+        $spigot = Mockery::mock(SpigotSource::class);
+        $modrinth->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
+        $curseForge->shouldReceive('isConfigured')->once()->andReturnFalse();
+        $hangar->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
+        $spigot->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
+
+        self::assertSame(
+            [$modrinth, $hangar, $spigot],
+            $this->registryWith(modrinth: $modrinth, curseForge: $curseForge, hangar: $hangar, spigot: $spigot)->availableFor($server, ProjectType::Plugin),
+        );
+    }
+
+    public function test_spigot_server_setting_hides_spigot_for_plugins(): void
+    {
+        $server = $this->serverWithEgg();
+        (new ServerModManagerSettingRepository())->save($server, ['spigot_enabled' => false]);
+        $modrinth = Mockery::mock(ModrinthSource::class);
+        $curseForge = Mockery::mock(CurseForgeSource::class);
+        $hangar = Mockery::mock(HangarSource::class);
+        $spigot = Mockery::mock(SpigotSource::class);
+        $modrinth->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
+        $curseForge->shouldReceive('isConfigured')->once()->andReturnFalse();
+        $hangar->shouldReceive('supportsProjectType')->once()->with(ProjectType::Plugin)->andReturnTrue();
+        $spigot->shouldNotReceive('supportsProjectType');
+
+        self::assertSame(
+            [$modrinth, $hangar],
+            $this->registryWith(modrinth: $modrinth, curseForge: $curseForge, hangar: $hangar, spigot: $spigot)->availableFor($server, ProjectType::Plugin),
+        );
+    }
+
     protected function registryWith(
         ?ProjectSourceInterface $modrinth = null,
         ?CurseForgeSource $curseForge = null,
         ?HangarSource $hangar = null,
+        ?SpigotSource $spigot = null,
         ?GitHubReleasesSource $github = null,
         bool $supportsAsyncDispatch = false,
         ?ServerModManagerSettings $settings = null,
@@ -463,6 +503,7 @@ class ProjectSourceRegistryTest extends TestCase
         $modrinth ??= Mockery::mock(ModrinthSource::class);
         $curseForge ??= Mockery::mock(CurseForgeSource::class);
         $hangar ??= Mockery::mock(HangarSource::class);
+        $spigot ??= Mockery::mock(SpigotSource::class);
         $github ??= Mockery::mock(GitHubReleasesSource::class);
 
         // Registry availability is deliberately source-agnostic: every
@@ -472,6 +513,8 @@ class ProjectSourceRegistryTest extends TestCase
         $modrinth->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
         $curseForge->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
         $hangar->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
+        $spigot->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
+        $spigot->shouldReceive('supportsProjectType')->byDefault()->andReturnFalse();
         $github->shouldReceive('isConfigured')->byDefault()->andReturnTrue();
 
         // InstalledOperationManager is final, so it can't be Mockery-mocked
@@ -491,6 +534,7 @@ class ProjectSourceRegistryTest extends TestCase
             $modrinth,
             $curseForge,
             $hangar,
+            $spigot,
             $github,
             $operations,
             $settings ?? new ServerModManagerSettings(new ServerModManagerSettingRepository()),

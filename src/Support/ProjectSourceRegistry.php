@@ -15,6 +15,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\SpigotSource;
 
 class ProjectSourceRegistry
 {
@@ -25,16 +26,20 @@ class ProjectSourceRegistry
         ModrinthSource $modrinth,
         CurseForgeSource $curseForge,
         HangarSource $hangar,
+        SpigotSource $spigot,
         GitHubReleasesSource $githubReleases,
         protected readonly InstalledOperationManager $operations,
         protected readonly ServerModManagerSettings $settings,
     ) {
         // Preserve the established catalog/hash priority while keeping the
-        // availability filter source-agnostic below.
+        // availability filter source-agnostic below. Spigot's hash lookup is
+        // a local high-confidence index, so it runs after upstream hash
+        // reverse lookups.
         $this->sources = [
             ProjectSourceKey::CurseForge->value => $curseForge,
             ProjectSourceKey::Modrinth->value => $modrinth,
             ProjectSourceKey::Hangar->value => $hangar,
+            ProjectSourceKey::Spigot->value => $spigot,
             ProjectSourceKey::GitHubReleases->value => $githubReleases,
         ];
     }
@@ -198,7 +203,7 @@ class ProjectSourceRegistry
                 }
             }
 
-            // A missing artisan runner would run this inline, blocking the
+            // A missing background dispatcher would run this inline, blocking the
             // very render path peekInstalled() exists to keep non-blocking
             // - see SourceCache::revalidateAsync(), which individual
             // peekProject() misses respect via the same check. Left

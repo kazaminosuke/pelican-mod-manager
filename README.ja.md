@@ -2,7 +2,7 @@
 
 *[English](README.md)*
 
-[Pelican Panel](https://pelican.dev) 用のプラグインです。**Modrinth、CurseForge、Hangar、GitHub Releases** のMod・Plugin・Datapack・Resource Packを、サーバーパネル上で検索・インストール・更新・管理できます。
+[Pelican Panel](https://pelican.dev) 用のプラグインです。**Modrinth、CurseForge、Hangar、Spigot、GitHub Releases** のMod・Plugin・Datapack・Resource Packを、サーバーパネル上で検索・インストール・更新・管理できます。
 
 ## Screenshots
 
@@ -18,9 +18,10 @@
 | [Modrinth](https://modrinth.com) | 不要 | ✅ | ✅(`sha512`) | Mod, Plugin, Datapack, Resource Pack |
 | [CurseForge](https://www.curseforge.com/minecraft) | **必須** | ✅ | ✅(`murmur2`) | Mod, Plugin, Datapack, Resource Pack |
 | [Hangar](https://hangar.papermc.io) | 不要 | ✅ | ✅(`sha256`) | Plugin |
+| [Spigot](https://www.spigotmc.org) | 不要 | ✅ | 高信頼で識別できたJARのローカルSHA-256索引(`plugin.yml` / `paper-plugin.yml`。Spigotには完全なハッシュ逆引きがない) | Plugin |
 | [GitHub Releases](https://github.com) | 任意(推奨) | ❌(`owner/repo`を1件ずつ追跡) | ❌ | Mod, Plugin |
 
-各サーバーの Admin → Server → Edit → Mod Manager に **Mod Managerの利用設定**があります。Modrinth・CurseForge・Hangarは既定でON(CurseForgeはAPIキーも必要)、GitHub Releasesは既定でOFFで、ここでONにします。sourceの切り替えはeggとは独立しており、各providerが対応するプロジェクトtypeの範囲に対して適用されます。
+各サーバーの Admin → Server → Edit → Mod Manager に **Mod Managerの利用設定**があります。Modrinth・CurseForge・Hangar・Spigotは既定でON(CurseForgeはAPIキーも必要)、GitHub Releasesは既定でOFFで、ここでONにします。sourceの切り替えはeggとは独立しており、各providerが対応するプロジェクトtypeの範囲に対して適用されます。
 GitHub Releasesはトークンなしでも動作しますが、未認証時のレート制限(60リクエスト/時)は乏しいため、直接リポジトリを追跡する場合はトークンの設定を推奨します。GitHub Releasesにはカタログのキャッシュウォーミング経路はありません。
 
 Resource Packには専用ページがあり、同じサーバー単位の利用設定で有効化します。Modrinthと
@@ -34,13 +35,13 @@ CurseForgeに対応しています。インストール時にアーカイブを�
 - PHP 8.3〜8.5
 - PHP-FPMなど、HTTPリクエストごとに状態が分離されるruntime。Laravel Octaneなどの
   long-lived HTTP workerは現在サポート対象外です。
-- **PHP CLI。** インストール済みファイルのスキャン、一括更新、キャッシュのウォーミングは
-  HTTPリクエスト内では実行せず、短命な `php artisan mod-manager:run-job` プロセスとして起動します。
-  `proc_open`(Linux) または `popen`(Windows) が使え、CLI の `php` が Panel から起動できる必要があります。
-  Laravel の `queue:work` はこの Plugin の処理には使いません。Plugin 更新後に
-  `queue:restart` する必要もありません。
+- **Pelican のスケジューラ。** インストール済みファイルのスキャン、一括更新、キャッシュのウォーミングは
+  HTTPリクエスト内では実行せず、JSON payload として永続化し、Panel 既存の短命な
+  `php artisan schedule:run`（`mod-manager:process-jobs`）で処理します。このプロセスは
+  毎回ディスク上の最新 Plugin を読み込むため、Laravel の `queue:work` はこの Plugin の
+  処理には使いません。Plugin 更新後に `queue:restart` する必要もありません。
 
-  PHP CLI を起動できない環境では、ブラウザのリクエストをブロックする代わりに警告が表示されます。
+  pending work を保存できない環境では、ブラウザのリクエストをブロックする代わりに警告が表示されます。
 
 ## インストール
 
@@ -76,7 +77,7 @@ eggの自動認識はMod/Pluginのtypeとローダー情報にのみ使用され
 グローバルな`.env`キーに対応しています。
 
 サーバーごとの Admin → Server → Edit → Mod Manager では、各プロジェクトtypeのページと各sourceを
-個別に切り替えられます。GitHub Releasesは既定OFF、Modrinth・CurseForge・Hangarは既定ONです。
+個別に切り替えられます。GitHub Releasesは既定OFF、Modrinth・CurseForge・Hangar・Spigotは既定ONです。
 CurseForgeはグローバルAPIキーが設定されるまで表示されません。
 
 | 項目 | `.env`キー |
@@ -111,7 +112,7 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
   再スキャンしません。各サーバーは次回、該当するMod/Plugin/Datapack管理ページのCatalogまたは
   Installedを開いたときに自動的に再スキャンされます。
 - **単一サーバー** - そのサーバーのMetadataをクリアし、即座に強制再スキャンを開始します
-  (PHP CLIが必要です。[要件](#要件)を参照)。
+  (Pelicanのスケジューラで処理されます。[要件](#要件)を参照)。
 
 ## 内部の仕組み
 
@@ -120,7 +121,10 @@ datapack対応を手動設定する**Egg profiles**アクションもありま�
 - **Resource Packの状態**(`.pelican-mod-manager-resource-pack.json`)は、`server.properties`へ
   設定するproviderのバージョン、direct URL、SHA-1を既存のMetadataインデックスとは別に保存します。
 - **インクリメンタルなハッシュスキャン**により、サイズ/更新日時のシグネチャに変化があった
-  ファイルのみを再ハッシュ化します(毎回全ファイルを再ハッシュ化しません)。
+  ファイルのみを再ハッシュ化します(毎回全ファイルを再ハッシュ化しません)。上流に完全な
+  ハッシュ逆引きがない Spigot の Plugin JAR は、`plugin.yml` / `paper-plugin.yml` から一意に
+  識別できた場合のみ対応付け、その SHA-256 をローカルに保存します。曖昧な候補や
+  premium 専用ファイルは推測せず、未追跡のまま一覧に残します。
 - **Installed状態キャッシュ**は、server/project type単位のscan結果をInstalled件数に、generation単位の
   MetadataインデックスをCatalog行の状態判定に再利用します。coldなCatalogではバックグラウンドscanを
   1件開始し、operation stateとleaseで同時リクエストを集約します。

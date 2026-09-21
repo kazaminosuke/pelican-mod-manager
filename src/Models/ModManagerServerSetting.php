@@ -12,7 +12,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * A missing row is intentionally equivalent to the pre-server-settings
  * behaviour: every project type is enabled and every nullable permission
  * falls back to the corresponding global plugin setting.
- *
  */
 class ModManagerServerSetting extends Model
 {
@@ -28,6 +27,7 @@ class ModManagerServerSetting extends Model
         'modrinth_enabled',
         'curseforge_enabled',
         'hangar_enabled',
+        'spigot_enabled',
         'github_releases_enabled',
         'mod_navigation_sort',
         'plugin_navigation_sort',
@@ -50,6 +50,7 @@ class ModManagerServerSetting extends Model
             'modrinth_enabled' => 'boolean',
             'curseforge_enabled' => 'boolean',
             'hangar_enabled' => 'boolean',
+            'spigot_enabled' => 'boolean',
             'github_releases_enabled' => 'boolean',
             'mod_navigation_sort' => 'integer',
             'plugin_navigation_sort' => 'integer',

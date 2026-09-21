@@ -21,6 +21,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\DatabaseBackgroundJobQueue;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
@@ -69,6 +70,7 @@ class ModManagerServiceProvider extends ServiceProvider
             ModrinthSource::class,
             CurseForgeSource::class,
             HangarSource::class,
+            SpigotSource::class,
             GitHubReleasesSource::class,
             ProjectSourceRegistry::class,
             VersionLookupCoordinator::class,

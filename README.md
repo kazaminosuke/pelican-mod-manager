@@ -2,7 +2,7 @@
 
 *[日本語](README.ja.md)*
 
-A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, update, and manage Minecraft mods, plugins, datapacks, and resource packs from **Modrinth, CurseForge, Hangar, and GitHub Releases** directly in the server panel.
+A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, update, and manage Minecraft mods, plugins, datapacks, and resource packs from **Modrinth, CurseForge, Hangar, Spigot, and GitHub Releases** directly in the server panel.
 
 ## Screenshots
 
@@ -18,9 +18,10 @@ A [Pelican Panel](https://pelican.dev) plugin that lets you search, install, upd
 | [Modrinth](https://modrinth.com) | Not required | ✅ | ✅ (`sha512`) | Mod, Plugin, Datapack, Resource Pack |
 | [CurseForge](https://www.curseforge.com/minecraft) | **Required** | ✅ | ✅ (`murmur2`) | Mod, Plugin, Datapack, Resource Pack |
 | [Hangar](https://hangar.papermc.io) | Not required | ✅ | ✅ (`sha256`) | Plugin |
+| [Spigot](https://www.spigotmc.org) | Not required | ✅ | Local SHA-256 index after a high-confidence identify (`plugin.yml` / `paper-plugin.yml`; Spigot has no complete hash reverse lookup) | Plugin |
 | [GitHub Releases](https://github.com) | Optional, recommended | ❌ (tracks one `owner/repo` at a time) | ❌ | Mod, Plugin |
 
-Each server has its own **Mod Manager usage settings** under Admin → Server → Edit → Mod Manager. Modrinth, CurseForge, and Hangar are enabled by default (CurseForge still requires its API key); GitHub Releases is disabled by default and must be enabled there. The source switches are independent of the egg and apply on top of each provider's supported project types.
+Each server has its own **Mod Manager usage settings** under Admin → Server → Edit → Mod Manager. Modrinth, CurseForge, Hangar, and Spigot are enabled by default (CurseForge still requires its API key); GitHub Releases is disabled by default and must be enabled there. The source switches are independent of the egg and apply on top of each provider's supported project types.
 GitHub Releases works without a token, but its unauthenticated rate limit (60 requests/hour) is scarce enough that configuring one is recommended for direct repository tracking. GitHub Releases has no catalog cache-warming path.
 
 Resource Packs have their own page and are enabled per server in the same usage settings. They are
@@ -34,15 +35,15 @@ server's `resourcepacks/` directory: the provider's direct URL and SHA-1 are wri
 - PHP 8.3 - 8.5
 - A request-isolated HTTP runtime such as PHP-FPM. Laravel Octane and other
   long-lived HTTP workers are not currently supported.
-- **PHP CLI.** Installed-file scans, bulk updates, and cache warming never run
-  inside a Livewire request. They start a short-lived `php artisan mod-manager:run-job`
-  process so each job boots the current Plugin from disk. The Panel PHP process
-  must be able to start the CLI `php` binary (`proc_open` on Linux, `popen` on
-  Windows). Laravel's `queue:work` is not used for this Plugin, and Plugin
-  updates do not require `queue:restart`.
+- **Pelican scheduler.** Installed-file scans, bulk updates, and cache warming
+  never run inside a Livewire request. They persist JSON payloads and are
+  processed by the Panel's existing short-lived `php artisan schedule:run`
+  cron (`mod-manager:process-jobs`). That process already boots the current
+  Plugin from disk, so Laravel's `queue:work` is not used for this Plugin and
+  Plugin updates do not require `queue:restart`.
 
-  If PHP CLI cannot be started, the plugin shows a configuration warning instead
-  of blocking the browser request.
+  If pending work cannot be persisted, the plugin shows a configuration warning
+  instead of blocking the browser request.
 
 ## Installation
 
@@ -79,7 +80,7 @@ key unless noted otherwise:
 
 The per-server Admin → Server → Edit → Mod Manager tab separately controls each project-type page and
 each source. These settings are server-specific; GitHub Releases defaults to off, while Modrinth,
-CurseForge, and Hangar default to on. CurseForge is still hidden until its global API key is configured.
+CurseForge, Hangar, and Spigot default to on. CurseForge is still hidden until its global API key is configured.
 
 | Field | `.env` key |
 |---|---|
@@ -120,7 +121,7 @@ The same screen has a **Clear cache** action, which behaves differently by scope
   **not** force an immediate re-scan; each server re-scans lazily the next time its applicable
   Mod/Plugin/Datapack Catalog or Installed view is opened.
 - **A single server** - clears that server's metadata and immediately starts a forced re-scan
-  (needs PHP CLI - see [Requirements](#requirements)).
+  (processed by Pelican's scheduler - see [Requirements](#requirements)).
 
 ## How it works
 
@@ -130,7 +131,10 @@ The same screen has a **Clear cache** action, which behaves differently by scope
   version, direct URL, and SHA-1 used by `server.properties`; it is separate from the existing
   Mod/Plugin/Datapack metadata index.
 - **Incremental hash scanning** re-hashes a file only when its size/modified-time signature has
-  changed, instead of every file on every scan.
+  changed, instead of every file on every scan. Spigot plugin JARs that no upstream hash API can
+  reverse-lookup are then identified from `plugin.yml` / `paper-plugin.yml` only when the match is
+  unique; the SHA-256 mapping is stored locally for later scans. Ambiguous or premium-only files
+  stay visible as untracked instead of being guessed or downloaded behind a paywall.
 - **Installed-state caching** reuses the per-server/project-type scan result for the Installed
   count and the generation-scoped metadata index for Catalog row state. A cold Catalog view starts
   one background scan; operation state and a lease coalesce concurrent requests.

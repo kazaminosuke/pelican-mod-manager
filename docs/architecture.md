@@ -28,8 +28,8 @@ existing `.pelican-mod-manager.json` schema and its persisted source values unch
 `Support\ServerModManagerSettings` resolves the server-specific usage switches stored in
 `mod_manager_server_settings`. The `mod_enabled`, `plugin_enabled`, `datapack_enabled`, and
 `resourcepack_enabled` fields control page access independently. The `modrinth_enabled`, `curseforge_enabled`,
-`hangar_enabled`, and `github_releases_enabled` fields control source visibility independently;
-GitHub Releases defaults to off because it was previously an explicit opt-in.
+`hangar_enabled`, `spigot_enabled`, and `github_releases_enabled` fields control source visibility independently;
+GitHub Releases defaults to off because it was previously an explicit opt-in. Spigot defaults to on, the same as Hangar.
 
 `Support\ProjectSourceRegistry::availableFor()` combines those server switches with each provider's
 `ProjectSourceInterface::supportsProjectType()` and `isConfigured()` capabilities. The server
@@ -46,24 +46,31 @@ signature has changed (or is absent). A case-insensitive filename collision on d
 that would map to the same tracked entry) deliberately discards any reusable signature and forces
 a fresh hash, since the persisted index cannot safely disambiguate them.
 
+Spigot has no complete upstream hash reverse lookup. After the Modrinth / CurseForge / Hangar hash
+APIs have run, remaining Plugin JARs are identified from `plugin.yml` / `paper-plugin.yml` only
+when the match is unique. High-confidence SHA-256 → resource/version rows are stored in
+`mod_manager_spigot_file_index` for later scans. Ambiguous files stay in the Installed list as
+untracked; premium and externally hosted resources are never downloaded.
+
 ## Background jobs, notifications & status badges
 
-Scans, bulk updates, catalog warming, and source-cache revalidation run in
-short-lived `php artisan mod-manager:run-job` processes (`PluginBackgroundRunner`,
-statuses `queued` → `running` → `completed`/`failed`) so a slow Wings directory
+Scans, bulk updates, catalog warming, and source-cache revalidation persist
+JSON payloads (`PluginBackgroundRunner`) and run inside Pelican's existing
+short-lived `php artisan schedule:run` process (`mod-manager:process-jobs`,
+statuses `queued` → `running` → `completed`/`failed`). A slow Wings directory
 listing or a batch of upstream update checks never blocks a Livewire request.
-Each process boots the Panel and loads the Plugin from disk, so a Plugin update
-takes effect on the next job without `queue:restart`. Payloads are JSON, not
-PHP-serialized Plugin job classes, which avoids Laravel queue workers holding
-stale Plugin classes after an update.
+Each scheduler run boots the Panel and loads the Plugin from disk, so a Plugin
+update takes effect on the next job without `queue:restart`. Payloads are JSON,
+not PHP-serialized Plugin job classes, which avoids Laravel queue workers
+holding stale Plugin classes after an update.
 
 Any applicable Mod/Plugin/Datapack manager page starts a missing installed-file
 scan, and active operations are polled every two seconds. Scan lifecycle is
 reported through Filament notifications, while bulk-update progress remains
 inline. `supportsAsyncDispatch()` is checked before starting anything; it means
-"PHP CLI can be spawned", not "Laravel `queue.default` is redis/database". If
-the runner cannot start a process, the UI shows a warning instead of running a
-Wings scan in a Livewire request.
+"pending work can be persisted for the scheduler", not "Laravel `queue.default`
+is redis/database". If the runner cannot enqueue, the UI shows a warning instead
+of running a Wings scan in a Livewire request.
 
 Scheduled catalog warming (`mod-manager:warm-catalog`) already runs in Pelican's
 short-lived `schedule:run` process, so it executes the warmer inline rather than
@@ -146,7 +153,8 @@ when it isn't - a cached view renders synchronously instead of paying for the ex
 excluded: a render can discover a missing installed-scan cache and must update operation state or
 show a configuration warning, while the metadata cache `hasWarmRecordsCache()` can see is not
 the same, shorter-lived cache that guards that work. A "warm" verdict would therefore not reliably
-describe that render's behavior; the manager rejects a missing PHP CLI runner, so this remains
+describe that render's behavior; the manager rejects a missing background
+dispatcher, so this remains
 non-blocking.
 
 ## Client-side SWR table preview

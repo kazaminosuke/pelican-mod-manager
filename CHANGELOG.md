@@ -12,6 +12,7 @@ the complete matching version section and adds the comparison information to the
 - Installed scan / catalog warm / bulk update などの Plugin 固有処理を、`popen` / `proc_open` によるプロセス起動から外し、pending work を永続化して Pelican 既存の短命な `schedule:run`（`mod-manager:process-jobs`）で処理するよう変更
 - Plugin 更新後も Laravel の長寿命 `queue:work` に Plugin クラスを載せない設計は維持（次の `schedule:run` がディスク上の新しい Plugin を読み込む）
 - 既存の one-time `queue:restart` migration（v0.1.6）は変更せず、以後の Plugin 更新でも再実行しない
+- Plugin の Catalog / Installed に Spigot ソースを追加（UI 名は常に Spigot。公式 Simple API を canonical metadata に使い、検索・バージョン・公開ファイルのダウンロードは不足分のみ Spiget を補助利用。premium / 外部ホストはダウンロードしない）
 
 ### English
 
@@ -20,6 +21,7 @@ the complete matching version section and adds the comparison information to the
 - Replaced subprocess spawning (`popen` / `proc_open`) with persisted pending work drained by Pelican's existing short-lived `schedule:run` (`mod-manager:process-jobs`)
 - Plugin updates still take effect without `queue:restart`; the next scheduler run loads the Plugin from disk instead of a long-running queue worker
 - Left the v0.1.6 one-time `queue:restart` migration unchanged so later Plugin updates do not recycle workers again
+- Added Spigot as a Plugin catalog source (UI label is always Spigot). Canonical metadata uses the official Simple API; Spiget fills search, versions, and public-file download gaps. Premium and externally hosted files are not downloaded.
 
 ## [0.1.6] - 2026-09-21
 

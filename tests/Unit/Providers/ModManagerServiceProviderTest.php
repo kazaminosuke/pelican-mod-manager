@@ -18,6 +18,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
@@ -46,6 +47,7 @@ class ModManagerServiceProviderTest extends TestCase
                 ModrinthSource::class,
                 CurseForgeSource::class,
                 HangarSource::class,
+                SpigotSource::class,
                 GitHubReleasesSource::class,
                 VersionLookupCoordinator::class,
                 InstalledProjectService::class,

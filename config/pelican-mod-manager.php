@@ -48,6 +48,9 @@ return [
         'modrinth' => env('MOD_MANAGER_WARM_RATE_LIMIT_MODRINTH', 210),
         'curseforge' => env('MOD_MANAGER_WARM_RATE_LIMIT_CURSEFORGE', 60),
         'hangar' => env('MOD_MANAGER_WARM_RATE_LIMIT_HANGAR', 30),
+        // Spiget does not publish a documented public limit; keep this
+        // conservative and in line with Hangar.
+        'spigot' => env('MOD_MANAGER_WARM_RATE_LIMIT_SPIGOT', 30),
         'github_releases' => env('MOD_MANAGER_WARM_RATE_LIMIT_GITHUB_RELEASES', 55),
     ],
 

@@ -41,6 +41,7 @@ final class ServerModManagerTab
         'modrinth' => 'mod_manager_modrinth_enabled',
         'curseforge' => 'mod_manager_curseforge_enabled',
         'hangar' => 'mod_manager_hangar_enabled',
+        'spigot' => 'mod_manager_spigot_enabled',
         'github_releases' => 'mod_manager_github_releases_enabled',
     ];
 
@@ -97,6 +98,7 @@ final class ServerModManagerTab
                         self::sourceToggle(ProjectSourceKey::Modrinth),
                         self::sourceToggle(ProjectSourceKey::CurseForge),
                         self::sourceToggle(ProjectSourceKey::Hangar),
+                        self::sourceToggle(ProjectSourceKey::Spigot),
                         self::sourceToggle(ProjectSourceKey::GitHubReleases),
                     ]),
                 Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.navigation'))

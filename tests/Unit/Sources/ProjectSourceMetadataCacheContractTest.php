@@ -13,6 +13,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Mockery;
@@ -133,6 +134,12 @@ class ProjectSourceMetadataCacheContractTest extends TestCase
             'Owner/Project',
             'hangar',
             ['project_id' => 'Owner/Project'],
+        ];
+        yield 'Spigot' => [
+            SpigotSource::class,
+            '12345',
+            'spigot',
+            ['project_id' => '12345'],
         ];
         yield 'GitHub Releases' => [
             GitHubReleasesSource::class,

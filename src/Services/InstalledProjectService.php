@@ -5,15 +5,18 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
-use InvalidArgumentException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
+use Kazaminosuke\ModManager\Contracts\ArchiveMetadataIdentificationInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Repositories\InstalledMetadataRepository;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\SpigotSource;
+use Kazaminosuke\ModManager\Support\BukkitPluginDescriptor;
 use Kazaminosuke\ModManager\Support\CurseForgeFingerprint;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
@@ -21,12 +24,15 @@ use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
+use Throwable;
 
 class InstalledProjectService
 {
     private const HASH_SCAN_CACHE_MINUTES = 10;
 
     private const HASH_SCAN_LOCK_SECONDS = 180;
+
+    private const ARCHIVE_IDENTIFICATION_MAX_FILES = 20;
 
     public function __construct(
         protected ProjectSourceRegistry $sourceRegistry,
@@ -529,6 +535,46 @@ class InstalledProjectService
             $remainingFilenames = array_values(array_diff($remainingFilenames, array_keys($matchedEntries)));
         }
 
+        if ($type === ProjectType::Plugin && $remainingFilenames !== []) {
+            $archiveStartedAt = $this->debugTimingEnabled ? microtime(true) : 0.0;
+            try {
+                $archiveMatches = $this->identifyRemainingFromArchiveMetadata(
+                    $server,
+                    $fileRepository,
+                    $folder,
+                    $type,
+                    $remainingFilenames,
+                    $filesToResolve,
+                    $hashesByFilename,
+                    $installedByFilename,
+                );
+            } catch (Exception $exception) {
+                report($exception);
+                $lookupFailures[] = ProjectSourceKey::Spigot->value;
+                $archiveMatches = [];
+            }
+
+            foreach ($archiveMatches as $filename => $entry) {
+                $matchedEntries[$filename] = $entry;
+            }
+            $remainingFilenames = array_values(array_diff($remainingFilenames, array_keys($matchedEntries)));
+
+            if ($this->debugTimingEnabled) {
+                $this->logModManagerTiming('archive_metadata_lookup', $archiveStartedAt, [
+                    'source' => ProjectSourceKey::Spigot->value,
+                    'remaining_files_count' => count($remainingFilenames) + count($archiveMatches),
+                    'matches_count' => count($archiveMatches),
+                ]);
+            }
+        }
+
+        foreach ($matchedEntries as $entry) {
+            $this->rememberSpigotIndex($entry);
+        }
+        foreach ($scannedInstalled as $entry) {
+            $this->rememberSpigotIndex($entry);
+        }
+
         $scannedInstalled = $this->upsertInstalledEntries($scannedInstalled, array_values($matchedEntries));
 
         $resolvedUnmatched = $this->resolveUnmatchedScanFiles(
@@ -936,6 +982,209 @@ class InstalledProjectService
     }
 
     /**
+     * Identify remaining Plugin JARs from plugin.yml / paper-plugin.yml when
+     * upstream sources have no hash reverse lookup. Ambiguous matches are
+     * left unresolved rather than guessed.
+     *
+     * @param  array<int, string>  $remainingFilenames
+     * @param  array<string, array<string, mixed>>  $filesToResolve
+     * @param  array<string, array{murmur2?: string, sha512?: string, sha256?: string}>  $hashesByFilename
+     * @param  array<string, array<string, mixed>>  $installedByFilename
+     * @return array<string, array<string, mixed>>
+     */
+    protected function identifyRemainingFromArchiveMetadata(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        string $folder,
+        ProjectType $type,
+        array $remainingFilenames,
+        array $filesToResolve,
+        array $hashesByFilename,
+        array $installedByFilename,
+    ): array {
+        $source = $this->sourceRegistry->get(ProjectSourceKey::Spigot);
+        if (!$source instanceof ArchiveMetadataIdentificationInterface
+            || !$source->isConfigured()
+            || !$source->supportsProjectType($type)
+            || !in_array($source, $this->sourceRegistry->availableFor($server, $type), true)) {
+            return [];
+        }
+
+        $matched = [];
+        $examined = 0;
+
+        foreach ($remainingFilenames as $filename) {
+            if (!str_ends_with(strtolower($filename), '.jar')) {
+                continue;
+            }
+
+            $existing = $installedByFilename[strtolower($filename)] ?? null;
+            if ($this->isReusableSpigotIdentity($existing)) {
+                $entry = $existing;
+                $entry['filename'] = $filename;
+                $entry['file_signature'] = $filesToResolve[$filename]['file_signature'] ?? ($existing['file_signature'] ?? null);
+                if (isset($hashesByFilename[$filename])) {
+                    $entry['hashes'] = $hashesByFilename[$filename];
+                }
+                $matched[$filename] = $entry;
+
+                continue;
+            }
+
+            if ($examined >= self::ARCHIVE_IDENTIFICATION_MAX_FILES) {
+                continue;
+            }
+
+            $examined++;
+            $descriptor = $this->extractBukkitPluginDescriptor(
+                $fileRepository,
+                $server,
+                "{$folder}/{$filename}",
+                $filename,
+            );
+            if ($descriptor === null) {
+                continue;
+            }
+
+            $metadata = $descriptor->toArray();
+            if (is_array($existing)
+                && ($existing['source'] ?? null) === ProjectSourceKey::Spigot->value
+                && is_string($existing['project_id'] ?? null)
+                && $existing['project_id'] !== '') {
+                $metadata['known_project_id'] = $existing['project_id'];
+                if (is_string($existing['version_id'] ?? null) && $existing['version_id'] !== '') {
+                    $metadata['known_version_id'] = $existing['version_id'];
+                }
+                if (is_string($existing['version_number'] ?? null) && $existing['version_number'] !== '') {
+                    $metadata['known_version_number'] = $existing['version_number'];
+                }
+            }
+
+            try {
+                $versionData = $source->identifyFromArchiveMetadata(
+                    $metadata,
+                    $hashesByFilename[$filename] ?? [],
+                );
+            } catch (Throwable $exception) {
+                report($exception);
+
+                throw $exception instanceof Exception
+                    ? $exception
+                    : new Exception($exception->getMessage(), 0, $exception);
+            }
+
+            if (!is_array($versionData) || !isset($versionData['project_id'], $versionData['id'], $versionData['version_number'])) {
+                continue;
+            }
+
+            $projectId = (string) $versionData['project_id'];
+            try {
+                $projectsMap = $source instanceof SourceFetchAuthoritativeInterface
+                    ? $source->getProjectsByIdsAuthoritatively([$projectId])
+                    : $source->getProjectsByIds([$projectId]);
+            } catch (Exception $exception) {
+                report($exception);
+                $projectsMap = [];
+            }
+
+            $project = $projectsMap[$projectId] ?? null;
+            $entry = [
+                'source' => $source->getKey()->value,
+                'project_id' => $projectId,
+                'project_slug' => $project['slug'] ?? $projectId,
+                'project_title' => $project['title'] ?? ($descriptor->name ?? $projectId),
+                'version_id' => (string) $versionData['id'],
+                'version_number' => (string) $versionData['version_number'],
+                'filename' => $filename,
+                'installed_at' => now()->toIso8601String(),
+                'file_signature' => $filesToResolve[$filename]['file_signature'] ?? null,
+                'hashes' => $hashesByFilename[$filename] ?? [],
+            ];
+            $author = $this->resolveMatchAuthor($source, $project, $versionData);
+            if ($author !== null) {
+                $entry['author'] = $author;
+            }
+
+            $matched[$filename] = $entry;
+        }
+
+        return $matched;
+    }
+
+    protected function extractBukkitPluginDescriptor(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $path,
+        string $filename,
+    ): ?BukkitPluginDescriptor {
+        $tmp = tempnam(sys_get_temp_dir(), 'pmm-plugin-');
+        if ($tmp === false) {
+            return null;
+        }
+
+        $jar = $tmp.'.jar';
+        @unlink($tmp);
+
+        try {
+            $body = $this->openDaemonFileStream($fileRepository, $server, $path);
+            $out = fopen($jar, 'wb');
+            if ($out === false) {
+                return null;
+            }
+
+            try {
+                while (!$body->eof()) {
+                    $chunk = $body->read(65536);
+                    if ($chunk === '') {
+                        break;
+                    }
+
+                    fwrite($out, $chunk);
+                }
+            } finally {
+                fclose($out);
+            }
+
+            return BukkitPluginDescriptor::fromJar($jar, $filename);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return null;
+        } finally {
+            @unlink($jar);
+        }
+    }
+
+    /**
+     * Saved Spigot provider/project/version metadata is authoritative.
+     * Reuse it instead of re-extracting JAR descriptors or guessing from
+     * an incomplete upstream hash reverse lookup.
+     *
+     * @param  array<string, mixed>|null  $existing
+     */
+    protected function isReusableSpigotIdentity(?array $existing): bool
+    {
+        return is_array($existing)
+            && ($existing['source'] ?? null) === ProjectSourceKey::Spigot->value
+            && is_string($existing['project_id'] ?? null) && $existing['project_id'] !== ''
+            && is_string($existing['version_id'] ?? null) && $existing['version_id'] !== ''
+            && is_string($existing['version_number'] ?? null) && $existing['version_number'] !== '';
+    }
+
+    /** @param array<string, mixed> $entry */
+    protected function rememberSpigotIndex(array $entry): void
+    {
+        if (($entry['source'] ?? null) !== ProjectSourceKey::Spigot->value) {
+            return;
+        }
+
+        $source = $this->sourceRegistry->get(ProjectSourceKey::Spigot);
+        if ($source instanceof SpigotSource) {
+            $source->rememberInstalledEntry($entry);
+        }
+    }
+
+    /**
      * Downloads a daemon file once and computes every hash needed by the
      * installed-source resolvers during that single streaming pass.
      *
@@ -1114,5 +1363,4 @@ class InstalledProjectService
             },
         );
     }
-
 }

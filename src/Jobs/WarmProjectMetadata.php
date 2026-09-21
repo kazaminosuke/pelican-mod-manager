@@ -19,7 +19,7 @@ use Throwable;
  *
  * getProjectsByIds() already fetches in bulk where the source actually has
  * a bulk endpoint (Modrinth, CurseForge) and uses a bounded HTTP pool where
- * it doesn't (Hangar, GitHub Releases) - either way, this reduces N background
+ * it doesn't (Hangar, Spigot, GitHub Releases) - either way, this reduces N background
  * jobs down to one. Overlapping cold-start jobs also take a per-project
  * fetch lock so shared IDs are requested once.
  *

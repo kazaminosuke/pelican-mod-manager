@@ -561,7 +561,7 @@ class ModManagerPage extends Page implements HasTable
      * Warm likely-next catalog pages in the background. Hangar's
      * /projects call is ~1s, so its jobs are started first instead of
      * waiting behind Modrinth. Other sources still run in short-lived
-     * artisan processes so this request never blocks on their APIs. The
+     * Other sources still run as persisted scheduler jobs so this request never blocks on their APIs. The
      * active source's current page is fetched by records()/loadTable itself.
      */
     protected function dispatchCatalogWarm(bool $includeOtherSources = true): void
@@ -570,7 +570,7 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
-        // A missing artisan runner would run this inline, during mount(),
+        // A missing background dispatcher would run this inline, during mount(),
         // defeating the entire point (and potentially blocking this
         // request on a throttled or slow upstream call).
         $operations = app(InstalledOperationManager::class);
@@ -875,6 +875,11 @@ class ModManagerPage extends Page implements HasTable
             ProjectSourceKey::Hangar => [
                 'stars' => trans('pelican-mod-manager::strings.table.sort.stars'),
                 'recent_downloads' => trans('pelican-mod-manager::strings.table.sort.recent_downloads'),
+                'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
+                'updated' => trans('pelican-mod-manager::strings.table.sort.updated'),
+                'newest' => trans('pelican-mod-manager::strings.table.sort.newest'),
+            ],
+            ProjectSourceKey::Spigot => [
                 'downloads' => trans('pelican-mod-manager::strings.table.sort.downloads'),
                 'updated' => trans('pelican-mod-manager::strings.table.sort.updated'),
                 'newest' => trans('pelican-mod-manager::strings.table.sort.newest'),
@@ -1889,6 +1894,7 @@ class ModManagerPage extends Page implements HasTable
                 default => 'mc-mods',
             }."/{$slug}",
             ProjectSourceKey::Hangar->value => empty($record['author']) ? null : "https://hangar.papermc.io/{$record['author']}/{$slug}",
+            ProjectSourceKey::Spigot->value => 'https://www.spigotmc.org/resources/'.($record['project_id'] ?? $slug).'/',
             ProjectSourceKey::GitHubReleases->value => "https://github.com/{$slug}",
             default => null,
         };
@@ -2135,7 +2141,7 @@ class ModManagerPage extends Page implements HasTable
      * hasWarmRecordsCache() can only see the longer-lived metadata display
      * cache, not that separate scan-result cache. Keeping the Installed tab
      * unconditionally deferred gives that state transition its own request;
-     * the manager rejects a missing PHP CLI runner, and the render itself remains
+     * the manager rejects a missing background dispatcher, and the render itself remains
      * non-blocking through peekVisibleLatestVersions()/peekInstalled() and
      * pollEnrichment().
      */
@@ -2554,7 +2560,7 @@ class ModManagerPage extends Page implements HasTable
                         }
                     }
 
-                    // A missing PHP CLI runner cannot complete a deferred
+                    // A missing background dispatcher cannot complete a deferred
                     // metadata fill, so polling it would only repeat the same
                     // cache reads and table render indefinitely.
                     $this->pollEnrichment = $enrichmentPending && $operations->supportsAsyncDispatch();
@@ -2893,6 +2899,7 @@ class ModManagerPage extends Page implements HasTable
                         'modrinth' => 'success',
                         'curseforge' => 'warning',
                         'hangar' => 'info',
+                        'spigot' => 'primary',
                         'github_releases' => 'gray',
                         default => 'gray',
                     })

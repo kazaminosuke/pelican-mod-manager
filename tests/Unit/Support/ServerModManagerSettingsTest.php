@@ -54,6 +54,7 @@ final class ServerModManagerSettingsTest extends TestCase
             $table->boolean('modrinth_enabled')->default(true);
             $table->boolean('curseforge_enabled')->default(true);
             $table->boolean('hangar_enabled')->default(true);
+            $table->boolean('spigot_enabled')->default(true);
             $table->boolean('github_releases_enabled')->default(false);
             $table->integer('mod_navigation_sort')->nullable();
             $table->integer('plugin_navigation_sort')->nullable();
@@ -86,6 +87,7 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::Modrinth));
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::CurseForge));
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::Hangar));
+        self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::Spigot));
         self::assertFalse($settings->isSourceEnabled($server, ProjectSourceKey::GitHubReleases));
         self::assertTrue($settings->allowsEggProfileEdit($server));
         self::assertTrue($settings->allowsProjectOperation($server, ProjectOperation::Install));
@@ -155,6 +157,7 @@ final class ServerModManagerSettingsTest extends TestCase
             'modrinth_enabled' => false,
             'curseforge_enabled' => true,
             'hangar_enabled' => false,
+            'spigot_enabled' => false,
             'github_releases_enabled' => true,
         ]);
 
@@ -163,6 +166,7 @@ final class ServerModManagerSettingsTest extends TestCase
         self::assertFalse($settings->isSourceEnabled($server, ProjectSourceKey::Modrinth));
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::CurseForge));
         self::assertFalse($settings->isSourceEnabled($server, ProjectSourceKey::Hangar));
+        self::assertFalse($settings->isSourceEnabled($server, ProjectSourceKey::Spigot));
         self::assertTrue($settings->isSourceEnabled($server, ProjectSourceKey::GitHubReleases));
     }
 
