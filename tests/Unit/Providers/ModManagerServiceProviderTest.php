@@ -4,6 +4,7 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Providers;
 
 use Illuminate\Container\Container;
 use Illuminate\Foundation\Application;
+use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
@@ -55,6 +56,7 @@ class ModManagerServiceProviderTest extends TestCase
                 InstalledOperationLease::class,
                 WingsRemoteFilesystem::class,
                 InstalledOperationManager::class,
+                BackgroundJobQueue::class,
                 PluginBackgroundRunner::class,
                 ProjectOperationAuthorizer::class,
                 ServerModManagerSettingRepository::class,

@@ -231,7 +231,7 @@ return [
         'failed' => ':operation ist fehlgeschlagen.',
         'dispatched' => 'Der Hintergrundvorgang wurde eingereiht.',
         'already_active' => 'Ein anderer Vorgang für installierte Dateien läuft bereits.',
-        'queue_required' => 'Hintergrundvorgänge benötigen PHP-CLI-Zugriff, damit das Plugin einen kurzlebigen Artisan-Prozess starten kann. Ein Laravel-Queue-Worker ist für dieses Plugin nicht erforderlich.',
+        'queue_required' => 'Hintergrundvorgänge werden gespeichert und vom Pelican-Scheduler (`php artisan schedule:run`) verarbeitet. Ein Laravel-Queue-Worker wird für dieses Plugin nicht verwendet, und die Arbeit läuft nie in der Browser-Anfrage.',
         'dispatch_failed' => 'Der Hintergrundvorgang konnte nicht gestartet werden.',
     ],
 

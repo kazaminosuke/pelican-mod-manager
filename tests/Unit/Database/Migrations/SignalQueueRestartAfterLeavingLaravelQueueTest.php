@@ -71,5 +71,6 @@ class SignalQueueRestartAfterLeavingLaravelQueueTest extends TestCase
         self::assertStringNotContainsString('ShouldQueue', $contents);
         self::assertStringNotContainsString('ScanInstalledProjects::dispatch', $contents);
         self::assertStringNotContainsString("Artisan::call('mod-manager:run-job')", $contents);
+        self::assertStringNotContainsString("Artisan::call('mod-manager:process-jobs')", $contents);
     }
 }

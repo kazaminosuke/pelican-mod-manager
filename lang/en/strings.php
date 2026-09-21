@@ -231,7 +231,7 @@ return [
         'failed' => ':operation failed.',
         'dispatched' => 'The background operation has been queued.',
         'already_active' => 'Another installed-file operation is already running.',
-        'queue_required' => 'Background operations need PHP CLI access so the plugin can start a short-lived artisan process. A Laravel queue worker is not required for this plugin.',
+        'queue_required' => 'Background operations are persisted and processed by Pelican\'s scheduler (`php artisan schedule:run`). A Laravel queue worker is not used for this plugin, and this work is never run inside the browser request.',
         'dispatch_failed' => 'The background operation could not be started.',
     ],
 

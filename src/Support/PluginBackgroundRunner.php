@@ -5,26 +5,27 @@ namespace Kazaminosuke\ModManager\Support;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use JsonException;
-use Symfony\Component\Process\PhpExecutableFinder;
+use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 
 /**
- * Starts Mod Manager work in a short-lived `php artisan` process.
+ * Enqueues Mod Manager work as JSON payloads for Pelican's scheduler.
  *
- * Pelican's only built-in async path is Laravel's long-running queue
- * worker. Plugin classes autoloaded into that process stay loaded for
- * the worker's lifetime, so a Plugin update cannot take effect until
- * the worker is recycled. This runner never serializes Plugin classes
- * onto that worker: it writes a JSON payload and execs a new PHP CLI
- * process, which boots the Panel and loads the Plugin from disk.
+ * Pelican's only long-running async path is Laravel's queue worker.
+ * Plugin classes autoloaded into that process stay loaded for the
+ * worker's lifetime, so a Plugin update cannot take effect until the
+ * worker is recycled. This runner never serializes Plugin classes onto
+ * that worker: it persists a JSON payload and lets the short-lived
+ * `php artisan schedule:run` process (`mod-manager:process-jobs`) boot
+ * the Panel and load the Plugin from disk.
  *
- * It is not a daemon. Each spawn exits when its job finishes.
+ * It does not spawn subprocesses or invoke a process runner.
  */
 final class PluginBackgroundRunner
 {
     public const UNIQUE_CACHE_PREFIX = 'mod_manager_bg_unique:v1';
 
     /**
-     * Recorded spawns when the runner is in fake/test mode.
+     * Recorded enqueues when the runner is in fake/test mode.
      *
      * @var array<int, array{type: string, payload: array<string, mixed>, unique_id: ?string}>
      */
@@ -38,6 +39,7 @@ final class PluginBackgroundRunner
         private readonly ?CacheRepository $cache = null,
         private readonly mixed $spawner = null,
         private readonly bool $recordOnly = false,
+        private readonly ?BackgroundJobQueue $queue = null,
     ) {}
 
     public static function disabled(): self
@@ -50,7 +52,7 @@ final class PluginBackgroundRunner
         return new self(true, $cache, recordOnly: true);
     }
 
-    public static function forRuntime(?CacheRepository $cache = null): self
+    public static function forRuntime(?CacheRepository $cache = null, ?BackgroundJobQueue $queue = null): self
     {
         $app = Container::getInstance();
 
@@ -62,7 +64,9 @@ final class PluginBackgroundRunner
             return self::disabled();
         }
 
-        return new self(self::detectCanSpawn(), $cache);
+        $queue ??= self::resolveQueue($app);
+
+        return new self($queue !== null, $cache, queue: $queue);
     }
 
     public function canSpawn(): bool
@@ -104,7 +108,7 @@ final class PluginBackgroundRunner
 
             $started = $this->spawner !== null
                 ? (bool) ($this->spawner)($type, $payload)
-                : $this->spawn($type, $payload);
+                : $this->enqueue($type, $payload);
 
             if (!$started) {
                 $this->releaseUnique($uniqueKey);
@@ -119,8 +123,8 @@ final class PluginBackgroundRunner
     }
 
     /**
-     * Encode a payload the way the artisan command expects it. Exposed for
-     * tests that assert the queued form is JSON, not a PHP serialized class.
+     * Encode a payload the way tests assert JSON rather than a PHP
+     * serialized class. Runtime jobs persist the array directly.
      *
      * @param  array<string, mixed>  $payload
      *
@@ -158,6 +162,11 @@ final class PluginBackgroundRunner
         return self::UNIQUE_CACHE_PREFIX.':'.$uniqueId;
     }
 
+    public function releaseUniqueKey(?string $uniqueKey): void
+    {
+        $this->releaseUnique($uniqueKey);
+    }
+
     private function acquireUnique(string $uniqueKey, int $uniqueFor): bool
     {
         if ($this->cache === null) {
@@ -177,112 +186,23 @@ final class PluginBackgroundRunner
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function spawn(string $type, array $payload): bool
+    private function enqueue(string $type, array $payload): bool
     {
-        $php = self::phpBinary();
-        $artisan = self::artisanPath();
-
-        if ($php === null || $artisan === null) {
-            return false;
-        }
-
-        $encoded = self::encodePayload($payload);
-        $log = function_exists('storage_path')
-            ? storage_path('logs/mod-manager-background.log')
-            : sys_get_temp_dir().'/mod-manager-background.log';
-
-        if (PHP_OS_FAMILY === 'Windows') {
-            $cmd = 'start /B "" '.escapeshellarg($php).' '.escapeshellarg($artisan)
-                .' mod-manager:run-job '.escapeshellarg($type).' '.escapeshellarg($encoded)
-                .' >> '.escapeshellarg($log).' 2>&1';
-            $handle = popen($cmd, 'r');
-
-            if (!is_resource($handle)) {
-                return false;
-            }
-
-            pclose($handle);
-
-            return true;
-        }
-
-        if (!function_exists('proc_open')) {
-            return false;
-        }
-
-        $cmd = 'nohup '.escapeshellarg($php).' '.escapeshellarg($artisan)
-            .' mod-manager:run-job '.escapeshellarg($type).' '.escapeshellarg($encoded)
-            .' >> '.escapeshellarg($log).' 2>&1 < /dev/null &';
-
-        $process = proc_open($cmd, [
-            0 => ['file', '/dev/null', 'r'],
-            1 => ['file', '/dev/null', 'w'],
-            2 => ['file', '/dev/null', 'w'],
-        ], $pipes, dirname($artisan));
-
-        if (!is_resource($process)) {
-            return false;
-        }
-
-        proc_close($process);
-
-        return true;
+        return $this->queue?->push($type, $payload) ?? false;
     }
 
-    public static function detectCanSpawn(): bool
+    private static function resolveQueue(mixed $app): ?BackgroundJobQueue
     {
-        $disabled = array_map(trim(...), explode(',', (string) ini_get('disable_functions')));
-
-        if (PHP_OS_FAMILY === 'Windows') {
-            if (in_array('popen', $disabled, true) || in_array('pclose', $disabled, true)) {
-                return false;
-            }
-        } elseif (!function_exists('proc_open') || in_array('proc_open', $disabled, true)) {
-            return false;
+        if (!is_object($app) || !method_exists($app, 'bound') || !$app->bound(BackgroundJobQueue::class)) {
+            return new DatabaseBackgroundJobQueue();
         }
 
-        return self::phpBinary() !== null && self::artisanPath() !== null;
-    }
-
-    public static function phpBinary(): ?string
-    {
-        $finder = new PhpExecutableFinder();
-        $found = $finder->find(false);
-
-        if (self::isUsablePhpBinary($found)) {
-            return $found;
+        try {
+            $queue = $app->make(BackgroundJobQueue::class);
+        } catch (\Throwable) {
+            return new DatabaseBackgroundJobQueue();
         }
 
-        foreach (['/usr/bin/php', '/usr/local/bin/php'] as $candidate) {
-            if (self::isUsablePhpBinary($candidate)) {
-                return $candidate;
-            }
-        }
-
-        if (defined('PHP_BINARY') && self::isUsablePhpBinary(PHP_BINARY)) {
-            return PHP_BINARY;
-        }
-
-        return null;
-    }
-
-    public static function artisanPath(): ?string
-    {
-        if (!function_exists('base_path')) {
-            return null;
-        }
-
-        $path = base_path('artisan');
-
-        return is_file($path) ? $path : null;
-    }
-
-    private static function isUsablePhpBinary(mixed $path): bool
-    {
-        if (!is_string($path) || $path === '' || !is_executable($path)) {
-            return false;
-        }
-
-        return !str_contains(strtolower(basename($path)), 'fpm');
+        return $queue instanceof BackgroundJobQueue ? $queue : new DatabaseBackgroundJobQueue();
     }
 }

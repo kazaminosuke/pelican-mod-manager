@@ -82,13 +82,20 @@ final class PluginIdentityTest extends TestCase
         $migrations = glob($this->path('database/migrations/*.php'));
 
         self::assertIsArray($migrations);
-        self::assertCount(3, $migrations);
+        self::assertCount(4, $migrations);
 
         $restart = $this->contents(
             'database/migrations/2026_09_21_000003_signal_queue_restart_after_leaving_laravel_queue.php',
         );
         self::assertStringContainsString("Artisan::call('queue:restart')", $restart);
         self::assertStringNotContainsString('posix_kill', $restart);
+
+        $backgroundJobs = $this->contents(
+            'database/migrations/2026_09_21_000004_create_mod_manager_background_jobs_table.php',
+        );
+        self::assertStringContainsString('mod_manager_background_jobs', $backgroundJobs);
+        self::assertStringNotContainsString('popen', $backgroundJobs);
+        self::assertStringNotContainsString('proc_open', $backgroundJobs);
 
         $serverSettings = $this->contents(
             'database/migrations/2026_08_21_000002_create_mod_manager_server_settings_table.php',
@@ -103,6 +110,27 @@ final class PluginIdentityTest extends TestCase
             'resourcepack_navigation_sort',
         ] as $column) {
             self::assertStringContainsString("'{$column}'", $serverSettings);
+        }
+    }
+
+    public function test_runtime_php_does_not_spawn_processes(): void
+    {
+        $root = $this->path('src');
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root));
+
+        foreach ($iterator as $file) {
+            if (!$file->isFile() || strtolower($file->getExtension()) !== 'php') {
+                continue;
+            }
+
+            $contents = (string) file_get_contents($file->getPathname());
+            foreach (['popen(', 'pclose(', 'proc_open(', 'proc_close(', 'shell_exec(', 'passthru('] as $forbidden) {
+                self::assertStringNotContainsString(
+                    $forbidden,
+                    $contents,
+                    $file->getPathname().' contains '.$forbidden,
+                );
+            }
         }
     }
 

@@ -6,8 +6,9 @@ use App\Models\Role;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\ServiceProvider;
-use Kazaminosuke\ModManager\Console\Commands\RunBackgroundJobCommand;
+use Kazaminosuke\ModManager\Console\Commands\ProcessBackgroundJobsCommand;
 use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
+use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
@@ -20,6 +21,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\GitHubReleasesSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Support\DatabaseBackgroundJobQueue;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
@@ -36,6 +38,7 @@ class ModManagerServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(SourceFetchExecutorInterface::class, SourceFetchExecutor::class);
+        $this->app->singleton(BackgroundJobQueue::class, DatabaseBackgroundJobQueue::class);
 
         $this->app->singleton(PluginBackgroundRunner::class, function ($app) {
             $cache = null;
@@ -49,7 +52,16 @@ class ModManagerServiceProvider extends ServiceProvider
                 $cache = null;
             }
 
-            return PluginBackgroundRunner::forRuntime($cache);
+            $queue = null;
+
+            try {
+                $resolvedQueue = $app->make(BackgroundJobQueue::class);
+                $queue = $resolvedQueue instanceof BackgroundJobQueue ? $resolvedQueue : null;
+            } catch (\Throwable) {
+                $queue = null;
+            }
+
+            return PluginBackgroundRunner::forRuntime($cache, $queue);
         });
 
         foreach ([
@@ -79,7 +91,7 @@ class ModManagerServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 WarmCatalogCacheCommand::class,
-                RunBackgroundJobCommand::class,
+                ProcessBackgroundJobsCommand::class,
             ]);
         }
     }
@@ -98,12 +110,16 @@ class ModManagerServiceProvider extends ServiceProvider
         // `php artisan schedule:run` being cron'd every minute for its own
         // per-server scheduled-task feature - see
         // App\Console\Commands\Schedule\ProcessRunnableCommand - so every
-        // functioning install already has this covered). Every 10 minutes
-        // matches CacheProfile::Search's fresh TTL: running more often
-        // than that can't keep an entry any fresher, and running less
-        // often lets it go stale between warms.
+        // functioning install already has this covered). Pending Mod Manager
+        // jobs are drained every minute in that same short-lived process.
+        // Catalog warming every 10 minutes matches CacheProfile::Search's
+        // fresh TTL.
         $this->app->booted(function (): void {
             $schedule = $this->app->make(Schedule::class);
+            $schedule->command(ProcessBackgroundJobsCommand::class)
+                ->everyMinute()
+                ->withoutOverlapping(10)
+                ->name('mod-manager:process-jobs');
             $schedule->command(WarmCatalogCacheCommand::class)
                 ->everyTenMinutes()
                 ->withoutOverlapping()

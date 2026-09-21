@@ -231,7 +231,7 @@ return [
         'failed' => ':operation に失敗しました。',
         'dispatched' => 'バックグラウンド処理を開始しました。',
         'already_active' => '別のインストール済みファイルの処理がすでに実行中です。',
-        'queue_required' => 'バックグラウンド処理には PHP CLI が必要です。短命な artisan プロセスを起動できないため、この操作は開始できません。Laravel の queue worker はこのプラグインには不要です。',
+        'queue_required' => 'バックグラウンド処理は永続化され、Pelican のスケジューラ（`php artisan schedule:run`）で実行されます。Laravel の queue worker はこのプラグインには不要で、ブラウザのリクエスト内では実行しません。',
         'dispatch_failed' => 'バックグラウンド処理を開始できませんでした。',
     ],
 

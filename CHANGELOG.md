@@ -5,6 +5,22 @@ the complete matching version section and adds the comparison information to the
 
 ## [Unreleased]
 
+### 日本語
+
+#### 変更
+
+- Installed scan / catalog warm / bulk update などの Plugin 固有処理を、`popen` / `proc_open` によるプロセス起動から外し、pending work を永続化して Pelican 既存の短命な `schedule:run`（`mod-manager:process-jobs`）で処理するよう変更
+- Plugin 更新後も Laravel の長寿命 `queue:work` に Plugin クラスを載せない設計は維持（次の `schedule:run` がディスク上の新しい Plugin を読み込む）
+- 既存の one-time `queue:restart` migration（v0.1.6）は変更せず、以後の Plugin 更新でも再実行しない
+
+### English
+
+#### Changed
+
+- Replaced subprocess spawning (`popen` / `proc_open`) with persisted pending work drained by Pelican's existing short-lived `schedule:run` (`mod-manager:process-jobs`)
+- Plugin updates still take effect without `queue:restart`; the next scheduler run loads the Plugin from disk instead of a long-running queue worker
+- Left the v0.1.6 one-time `queue:restart` migration unchanged so later Plugin updates do not recycle workers again
+
 ## [0.1.6] - 2026-09-21
 
 ### 日本語

@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Artisan;
  * the migrations table.
  *
  * Ongoing Mod Manager work uses PluginBackgroundRunner /
- * `mod-manager:run-job`, not Laravel Queue.
+ * `mod-manager:process-jobs`, not Laravel Queue.
  */
 return new class extends Migration
 {

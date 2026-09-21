@@ -286,8 +286,8 @@ final class SourceCache
      *
      * A fresh hit returns immediately. A stale hit also returns
      * immediately, and starts a background revalidation exactly like
-     * swr() does. A miss starts a background fetch (when a short-lived
-     * artisan process can be spawned - see revalidateAsync()) and returns the operation's
+     * swr() does. A miss starts a background fetch (when persisted scheduler
+     * work is available - see revalidateAsync()) and returns the operation's
      * empty result instead of waiting for one, so a render path can show
      * a placeholder rather than block on a cold cache. Callers that need
      * to tell "genuinely empty" apart from "not checked yet" should use
@@ -307,7 +307,7 @@ final class SourceCache
             return ['data' => $peeked['data'], 'pending' => false, 'retry_delayed' => false];
         }
 
-        // A failure marker (or no spawnable artisan process) means no
+        // A failure marker (or no background dispatcher) means no
         // background fetch was actually scheduled. Reporting this as pending
         // keeps callers polling forever for a value that cannot change until
         // the marker expires or background execution is available.
@@ -637,7 +637,7 @@ final class SourceCache
     /**
      * Request-scoped probe memo. SourceCache is a singleton, so the bag lives
      * on the current HTTP request when one exists and otherwise on this
-     * instance (background artisan processes / unit tests).
+     * instance (scheduler jobs / unit tests).
      */
     private ?\ArrayObject $processMemos = null;
 

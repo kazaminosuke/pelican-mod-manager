@@ -54,11 +54,11 @@ final class InstalledOperationManager
     }
 
     /**
-     * Whether a short-lived artisan process can be started for heavy work.
-     *
-     * This is independent of Laravel's queue driver. Mod Manager no longer
-     * serializes Plugin job classes onto a long-running worker, and it
-     * never falls back to running a Wings scan inside the HTTP request.
+     * Whether persisted background work can be processed later by
+     * `schedule:run`. This is independent of Laravel's queue driver.
+     * Mod Manager never serializes Plugin job classes onto a long-running
+     * worker, and it never falls back to running a Wings scan inside the
+     * HTTP request.
      */
     public function supportsAsyncDispatch(): bool
     {

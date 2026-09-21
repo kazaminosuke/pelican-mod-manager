@@ -18,7 +18,7 @@ use Throwable;
  * Discovers the (loader, Minecraft version, project type) combinations
  * actually in use across every server and warms page 1 for each source
  * that server has enabled. This is what actually prevents a cold first
- * visit to the catalog tab - the per-visit spawn in ModManagerPage::mount()
+ * visit to the catalog tab - the per-visit enqueue in ModManagerPage::mount()
  * only ever helps a later visit, since it can't land before the request
  * that triggered it finishes.
  *
@@ -29,7 +29,7 @@ use Throwable;
  *
  * The scheduler process is already short-lived and boots the current
  * Plugin from disk, so warming runs inline here instead of being handed
- * to a long-running queue worker.
+ * to a long-running queue worker or a subprocess.
  */
 final class WarmCatalogCacheCommand extends Command
 {

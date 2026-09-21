@@ -9,7 +9,8 @@ use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Throwable;
 
 /**
- * Runs one background operation inside a short-lived artisan process.
+ * Runs one background operation inside Pelican's short-lived
+ * `schedule:run` process.
  *
  * Payloads are JSON (see PluginBackgroundRunner), never PHP-serialized
  * Plugin class instances. Laravel's queue worker therefore never has to

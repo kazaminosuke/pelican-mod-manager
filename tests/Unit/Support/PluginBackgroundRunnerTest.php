@@ -7,7 +7,6 @@ use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use PHPUnit\Framework\TestCase;
-use ReflectionMethod;
 use RuntimeException;
 
 class PluginBackgroundRunnerTest extends TestCase
@@ -44,7 +43,7 @@ class PluginBackgroundRunnerTest extends TestCase
         self::assertTrue($cache->has($runner->uniqueCacheKey('same-key')));
     }
 
-    public function test_failed_spawn_releases_the_unique_lock(): void
+    public function test_failed_enqueue_releases_the_unique_lock(): void
     {
         $cache = new LaravelCacheRepository(new ArrayStore());
         $runner = new PluginBackgroundRunner(
@@ -57,34 +56,36 @@ class PluginBackgroundRunnerTest extends TestCase
         self::assertFalse($cache->has($runner->uniqueCacheKey('warm-1')));
     }
 
-    public function test_spawn_exception_releases_the_unique_lock(): void
+    public function test_enqueue_exception_releases_the_unique_lock(): void
     {
         $cache = new LaravelCacheRepository(new ArrayStore());
         $runner = new PluginBackgroundRunner(
             true,
             $cache,
             static function (): never {
-                throw new RuntimeException('spawn failed');
+                throw new RuntimeException('enqueue failed');
             },
         );
 
         try {
             $runner->run(BackgroundJob::WARM_SEARCH, ['page' => 1], 'warm-2', 60);
-            self::fail('The spawn exception must propagate.');
+            self::fail('The enqueue exception must propagate.');
         } catch (RuntimeException $exception) {
-            self::assertSame('spawn failed', $exception->getMessage());
+            self::assertSame('enqueue failed', $exception->getMessage());
         }
 
         self::assertFalse($cache->has($runner->uniqueCacheKey('warm-2')));
     }
 
-    public function test_php_fpm_binaries_are_not_usable(): void
+    public function test_runtime_source_does_not_spawn_processes(): void
     {
-        $method = new ReflectionMethod(PluginBackgroundRunner::class, 'isUsablePhpBinary');
+        $contents = (string) file_get_contents(dirname(__DIR__, 3).'/src/Support/PluginBackgroundRunner.php');
 
-        self::assertFalse($method->invoke(null, '/usr/sbin/php-fpm'));
-        self::assertFalse($method->invoke(null, '/usr/sbin/php-fpm8.5'));
-        self::assertFalse($method->invoke(null, ''));
-        self::assertFalse($method->invoke(null, null));
+        foreach (['popen(', 'pclose(', 'proc_open(', 'proc_close(', 'shell_exec(', 'passthru(', 'Symfony\\Component\\Process'] as $forbidden) {
+            self::assertStringNotContainsString($forbidden, $contents, $forbidden);
+        }
+
+        self::assertDoesNotMatchRegularExpression('/(?<!["\'])\\bexec\\s*\\(/', $contents);
+        self::assertDoesNotMatchRegularExpression('/(?<!["\'])\\bsystem\\s*\\(/', $contents);
     }
 }
