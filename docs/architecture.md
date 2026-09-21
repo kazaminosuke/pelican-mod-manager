@@ -72,6 +72,13 @@ handing work to a long-running queue worker.
 Pelican's own queue worker remains for Panel jobs such as plugin
 install/update. This Plugin does not serialize its job classes onto that worker.
 
+A one-time migration (`2026_09_21_000003_signal_queue_restart_after_leaving_laravel_queue`)
+runs `php artisan queue:restart` during Plugin update, after the new files are on
+disk (`UpdatePlugin` → `downloadPluginFromUrl()` → `installPlugin()` →
+`runPluginMigrations()`). Laravel then finishes the current update job and exits
+the old worker; systemd/supervisor starts a replacement. The migration is recorded
+in the migrations table, so later Plugin updates do not restart the worker again.
+
 ## Stale-while-revalidate cache layer
 
 Every upstream call (search, project metadata, version lookups, hash matching) goes through

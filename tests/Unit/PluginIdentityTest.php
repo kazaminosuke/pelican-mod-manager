@@ -77,12 +77,18 @@ final class PluginIdentityTest extends TestCase
         }
     }
 
-    public function test_pre_release_schema_is_defined_by_two_baseline_migrations(): void
+    public function test_pre_release_schema_is_defined_by_baseline_migrations_plus_the_one_time_queue_restart(): void
     {
         $migrations = glob($this->path('database/migrations/*.php'));
 
         self::assertIsArray($migrations);
-        self::assertCount(2, $migrations);
+        self::assertCount(3, $migrations);
+
+        $restart = $this->contents(
+            'database/migrations/2026_09_21_000003_signal_queue_restart_after_leaving_laravel_queue.php',
+        );
+        self::assertStringContainsString("Artisan::call('queue:restart')", $restart);
+        self::assertStringNotContainsString('posix_kill', $restart);
 
         $serverSettings = $this->contents(
             'database/migrations/2026_08_21_000002_create_mod_manager_server_settings_table.php',
