@@ -24,15 +24,27 @@ final class PluginIdentityTest extends TestCase
             'https://raw.githubusercontent.com/kazaminosuke/'.self::PLUGIN_ID.'/refs/heads/main/update.json',
             $manifest['update_url'],
         );
-        self::assertSame($manifest['version'], $updates['*']['version']);
-        $tag = str_starts_with($manifest['version'], 'v')
-            ? $manifest['version']
-            : 'v'.$manifest['version'];
-        self::assertSame(
-            'https://github.com/kazaminosuke/'.self::PLUGIN_ID.'/releases/download/'
-                .$tag.'/'.self::PLUGIN_ID.'.zip',
-            $updates['*']['download_url'],
-        );
+        $version = $manifest['version'];
+        self::assertIsString($version);
+        $tag = str_starts_with($version, 'v') ? $version : 'v'.$version;
+        $isPrerelease = preg_match('/-pre\./', $tag) === 1;
+        $publishedVersion = $updates['*']['version'];
+        $downloadUrl = $updates['*']['download_url'];
+        self::assertIsString($publishedVersion);
+        self::assertIsString($downloadUrl);
+
+        if ($isPrerelease) {
+            self::assertNotSame($version, $publishedVersion);
+            self::assertDoesNotMatchRegularExpression('/-pre\./', $publishedVersion);
+            self::assertStringNotContainsString('-pre.', $downloadUrl);
+        } else {
+            self::assertSame($version, $publishedVersion);
+            self::assertSame(
+                'https://github.com/kazaminosuke/'.self::PLUGIN_ID.'/releases/download/'
+                    .$tag.'/'.self::PLUGIN_ID.'.zip',
+                $downloadUrl,
+            );
+        }
     }
 
     public function test_readmes_separate_current_author_from_project_and_ui_research_credits(): void

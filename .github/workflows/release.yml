@@ -6,12 +6,16 @@ on:
       - main
     paths:
       - plugin.json
+    tags:
+      - 'v*-pre.*'
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-main
+  # Stable releases stay serialized on main. Prerelease tags do not share that
+  # group, and they never push update.json back to main.
+  group: ${{ github.ref_type == 'tag' && format('release-{0}', github.ref_name) || 'release-main' }}
   cancel-in-progress: false
 
 jobs:
@@ -43,6 +47,43 @@ jobs:
 
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Classify release channel
+        id: channel
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          prerelease=false
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            case "$GITHUB_REF_NAME" in
+              v*-pre.*)
+                prerelease=true
+                ;;
+              *)
+                echo "Tag $GITHUB_REF_NAME is not a prerelease tag. Only v*-pre.* tags publish through this trigger."
+                exit 1
+                ;;
+            esac
+
+            if [[ "$GITHUB_REF_NAME" != "$TAG" ]]; then
+              echo "Tag $GITHUB_REF_NAME does not match plugin.json version $VERSION (expected tag $TAG)."
+              exit 1
+            fi
+          else
+            case "$TAG" in
+              v*-pre.*)
+                echo "Refusing to publish prerelease $TAG from a branch push. Push the v*-pre.* tag instead, and do not update update.json."
+                exit 1
+                ;;
+            esac
+          fi
+
+          printf 'prerelease=%s\n' "$prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Confirm that the version changed
         id: version_change
@@ -92,6 +133,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
@@ -173,7 +215,13 @@ jobs:
             exit 1
           fi
 
-          PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          # A prerelease tag already points at HEAD, so describe would return that
+          # tag. Stable releases create the tag later and keep the previous lookup.
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          else
+            PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          fi
           if [[ -n "$PREV_TAG" && "$PREV_TAG" != "$TAG" ]]; then
             FULL_CHANGELOG_URL="https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG}"
           else
@@ -187,6 +235,8 @@ jobs:
 
       - name: Build and verify plugin artifact
         if: steps.version_change.outputs.changed == 'true' && steps.release_check.outputs.exists == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -213,37 +263,81 @@ jobs:
           echo 'Plugin artifact contents:'
           cat archive-files.txt
 
+          ZIP_VERSION="$(unzip -p pelican-mod-manager.zip plugin.json | jq -er '.version | select(type == "string" and length > 0)')"
+          case "$ZIP_VERSION" in
+            v*) ZIP_TAG="$ZIP_VERSION" ;;
+            *) ZIP_TAG="v$ZIP_VERSION" ;;
+          esac
+
+          if [[ "$ZIP_TAG" != "$TAG" ]]; then
+            echo "Release ZIP plugin.json version $ZIP_VERSION does not match tag $TAG."
+            exit 1
+          fi
+
       - name: Create GitHub Release
         if: steps.version_change.outputs.changed == 'true' && steps.release_check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
 
-          gh release create "$TAG" pelican-mod-manager.zip \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$TAG" \
-            --notes-file release_notes.md
+          if [[ "$PRERELEASE" == "true" ]]; then
+            # The tag already exists. Do not create it from main, and do not
+            # replace the current stable release as Latest.
+            gh release create "$TAG" pelican-mod-manager.zip \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --notes-file release_notes.md \
+              --prerelease \
+              --latest=false \
+              --verify-tag
+          else
+            gh release create "$TAG" pelican-mod-manager.zip \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --notes-file release_notes.md
+          fi
 
       - name: Verify release availability
         if: steps.version_change.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
         shell: bash
-        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+        run: |
+          set -euo pipefail
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease,isLatest \
+              --jq 'select(.isPrerelease == true and .isLatest == false) | .isPrerelease' \
+              | grep -qx true
+          else
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease \
+              --jq 'select(.isPrerelease == false) | .isPrerelease' \
+              | grep -qx false
+          fi
 
       - name: Update update.json
-        if: steps.version_change.outputs.changed == 'true'
+        if: steps.version_change.outputs.changed == 'true' && steps.channel.outputs.prerelease != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
+
+          case "$TAG" in
+            v*-pre.*)
+              echo "Refusing to update update.json for prerelease $TAG."
+              exit 1
+              ;;
+          esac
 
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/pelican-mod-manager.zip"
           jq --indent 4 --arg version "$VERSION" --arg download_url "$DOWNLOAD_URL" \
@@ -252,13 +346,25 @@ jobs:
           mv update.json.tmp update.json
 
       - name: Commit updated release metadata
-        if: steps.version_change.outputs.changed == 'true'
+        if: steps.version_change.outputs.changed == 'true' && steps.channel.outputs.prerelease != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
+
+          case "$TAG" in
+            v*-pre.*)
+              echo "Refusing to commit update.json for prerelease $TAG."
+              exit 1
+              ;;
+          esac
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "Refusing to commit update.json from a tag checkout."
+            exit 1
+          fi
 
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
@@ -271,3 +377,14 @@ jobs:
 
           git commit -m "chore: update release metadata for ${TAG} [skip ci]"
           git push origin HEAD:main
+
+      - name: Confirm prerelease did not modify update.json
+        if: steps.channel.outputs.prerelease == 'true' && steps.version_change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! git diff --exit-code -- update.json; then
+            echo "Prerelease workflow modified update.json."
+            exit 1
+          fi
