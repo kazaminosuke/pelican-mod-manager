@@ -295,6 +295,9 @@ jobs:
               --prerelease \
               --latest=false \
               --verify-tag
+            if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx 'pelican-mod-manager.zip'; then
+              gh release upload "$TAG" pelican-mod-manager.zip --repo "$GITHUB_REPOSITORY" --clobber
+            fi
           else
             gh release create "$TAG" pelican-mod-manager.zip \
               --repo "$GITHUB_REPOSITORY" \
@@ -314,13 +317,26 @@ jobs:
           set -euo pipefail
 
           if [[ "$PRERELEASE" == "true" ]]; then
-            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease,isLatest \
-              --jq 'select(.isPrerelease == true and .isLatest == false) | .isPrerelease' \
-              | grep -qx true
+            expected=true
           else
-            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease \
-              --jq 'select(.isPrerelease == false) | .isPrerelease' \
-              | grep -qx false
+            expected=false
+          fi
+
+          actual="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Expected isPrerelease=$expected for $TAG but got $actual."
+            exit 1
+          fi
+
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            | grep -qx 'pelican-mod-manager.zip'
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+            if [[ "$latest" == "$TAG" ]]; then
+              echo "Prerelease $TAG was published as the latest release."
+              exit 1
+            fi
           fi
 
       - name: Update update.json
