@@ -56,6 +56,13 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
     protected const LATEST_VERSION_POOL_SIZE = 4;
 
+    /**
+     * Part of every Spigot cache key. Bump it when a normalized payload
+     * changes shape or meaning so entries written by an older release are
+     * refetched instead of served for their remaining TTL.
+     */
+    private const CACHE_SCHEMA = 2;
+
     private const OPERATION_LATEST = 'latest';
 
     private const OPERATION_PROJECT = 'project';
@@ -1129,7 +1136,10 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return null;
         }
 
-        $author = $resource['author']['username'] ?? $resource['author'] ?? null;
+        // Simple API 0.2 nests the author and download count, and reports
+        // Unix timestamps in seconds as `last_update` / `first_release`.
+        $author = $resource['author']['username'] ?? null;
+        $downloads = $resource['stats']['downloads'] ?? null;
 
         return [
             'project_id' => $projectId,
@@ -1138,8 +1148,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             'description' => CatalogFields::description($resource['tag'] ?? ''),
             'icon_url' => $this->stringOrNull($resource['icon_link'] ?? null),
             'author' => is_string($author) && $author !== '' ? $author : null,
-            'downloads' => (int) ($resource['downloads'] ?? 0),
-            'date_modified' => $this->timestampToIso($resource['updateDate'] ?? $resource['releaseDate'] ?? null),
+            'downloads' => is_numeric($downloads) ? (int) $downloads : null,
+            'date_modified' => $this->timestampToIso($resource['last_update'] ?? $resource['first_release'] ?? null),
             'project_type' => ProjectType::Plugin->value,
             'source' => ProjectSourceKey::Spigot->value,
         ];
@@ -1395,7 +1405,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     /** @param array<int|string, mixed> $arguments */
     protected function spec(string $operation, array $arguments = []): SourceFetchSpec
     {
-        return new SourceFetchSpec($this->getKey()->value, $operation, $arguments);
+        return new SourceFetchSpec($this->getKey()->value, $operation, $arguments + ['schema' => self::CACHE_SCHEMA]);
     }
 
     private function projectSpec(?string $projectId): ?SourceFetchSpec

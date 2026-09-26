@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
@@ -121,15 +122,7 @@ class SpigotSourceTest extends TestCase
     public function test_official_api_is_used_for_canonical_project_metadata(): void
     {
         Http::fake([
-            'api.spigotmc.org/simple/0.2/index.php*' => Http::response([
-                'id' => 11431,
-                'title' => 'WorldGuard',
-                'tag' => 'Protect worlds',
-                'downloads' => 99,
-                'updateDate' => 1_700_000_000,
-                'author' => ['username' => 'sk89q'],
-                'icon_link' => 'https://www.spigotmc.org/icon.png',
-            ]),
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response($this->officialResource(11431, 'WorldGuard')),
         ]);
 
         $project = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'project', [
@@ -138,7 +131,12 @@ class SpigotSourceTest extends TestCase
 
         self::assertSame('11431', $project['project_id']);
         self::assertSame('WorldGuard', $project['title']);
+        self::assertSame('Protect worlds', $project['description']);
         self::assertSame('sk89q', $project['author']);
+        self::assertSame('https://www.spigotmc.org/data/resource_icons/11/11431.jpg', $project['icon_url']);
+        // Simple API 0.2 nests downloads under stats and reports seconds.
+        self::assertSame(5_906_503, $project['downloads']);
+        self::assertSame('2026-05-31T15:53:28+00:00', $project['date_modified']);
         Http::assertSent(function ($request): bool {
             parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
 
@@ -146,6 +144,39 @@ class SpigotSourceTest extends TestCase
                 && ($query['action'] ?? null) === 'getResource'
                 && ($query['id'] ?? null) === '11431';
         });
+    }
+
+    public function test_official_metadata_without_stats_reports_unknown_rather_than_zero(): void
+    {
+        $resource = $this->officialResource(42, 'Example');
+        unset($resource['stats'], $resource['last_update'], $resource['author']);
+        Http::fake([
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response($resource),
+        ]);
+
+        $project = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'project', [
+            'project_id' => '42',
+        ]), 1.5);
+
+        self::assertNull($project['downloads']);
+        self::assertNull($project['author']);
+        self::assertSame('2015-07-06T20:12:48+00:00', $project['date_modified']);
+    }
+
+    public function test_official_not_found_response_is_a_definitive_miss(): void
+    {
+        Http::fake([
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response([
+                'code' => 404,
+                'message' => 'Nothing was found for that request.',
+            ], 404),
+        ]);
+
+        $this->expectException(SourceFetchNotFoundException::class);
+
+        $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'project', [
+            'project_id' => '999999999',
+        ]), 1.5);
     }
 
     public function test_premium_and_external_version_files_are_not_downloadable(): void
@@ -354,6 +385,35 @@ class SpigotSourceTest extends TestCase
             $this->source()->search($server, ProjectType::Mod),
         );
         Http::assertNothingSent();
+    }
+
+    /**
+     * Shape of `action=getResource` from the official Simple API 0.2.
+     *
+     * @return array<string, mixed>
+     */
+    private function officialResource(int $id, string $title): array
+    {
+        return [
+            'id' => $id,
+            'title' => $title,
+            'tag' => 'Protect worlds',
+            'current_version' => '7.0.9',
+            'native_minecraft_version' => '',
+            'supported_minecraft_versions' => ['1.20', '1.21'],
+            'icon_link' => "https://www.spigotmc.org/data/resource_icons/11/{$id}.jpg",
+            'author' => ['id' => 1, 'username' => 'sk89q'],
+            'premium' => ['price' => '0.00', 'currency' => ''],
+            'stats' => [
+                'downloads' => 5_906_503,
+                'updates' => 32,
+                'reviews' => ['unique' => 1, 'total' => 1],
+                'rating' => '4.5',
+            ],
+            'external_download_url' => '',
+            'first_release' => 1_436_213_568,
+            'last_update' => 1_780_242_808,
+        ];
     }
 
     private function source(): SpigotSource
