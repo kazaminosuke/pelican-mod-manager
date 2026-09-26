@@ -260,12 +260,13 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     /** @return array<int, mixed> */
     public function getVersions(string $projectId, Server $server, ProjectType $type): array
     {
-        if ($type !== ProjectType::Plugin || $this->normalizeResourceId($projectId) === null) {
+        $resourceId = $this->normalizeResourceId($projectId);
+        if ($type !== ProjectType::Plugin || $resourceId === null) {
             return [];
         }
 
         $versions = $this->sourceCache->swr(
-            $this->versionsSpec($projectId, resolveDownloads: true),
+            $this->versionsSpec($resourceId, resolveDownloads: true),
             CacheProfile::InstalledLatest,
         );
 
