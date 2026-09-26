@@ -274,32 +274,12 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         Server $server,
         ProjectType $type,
     ): LatestVersionLookupResult {
-        $requests = array_values(array_filter(
-            $requests,
-            fn ($request): bool => $request instanceof LatestVersionLookupRequest,
-        ));
-
-        if ($requests === [] || $type !== ProjectType::Plugin) {
-            return $requests === []
-                ? LatestVersionLookupResult::empty()
-                : new LatestVersionLookupResult(unresolvedKeys: array_map(
-                    fn (LatestVersionLookupRequest $request): string => $request->key(),
-                    $requests,
-                ));
-        }
-
-        $spec = $this->latestSpec($requests);
+        [$requests, $spec] = $this->prepareLatestLookup($requests, $type);
         if ($spec === null) {
-            return new LatestVersionLookupResult(unresolvedKeys: array_map(
-                fn (LatestVersionLookupRequest $request): string => $request->key(),
-                $requests,
-            ));
+            return new LatestVersionLookupResult(unresolvedKeys: $this->latestRequestKeys($requests));
         }
 
-        return $this->distributeLatestPayload(
-            $this->groupLatestRequests($requests),
-            $this->sourceCache->swr($spec, CacheProfile::InstalledLatest),
-        );
+        return $this->distributeLatestPayload($requests, $this->sourceCache->swr($spec, CacheProfile::InstalledLatest));
     }
 
     /**
@@ -310,58 +290,26 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         Server $server,
         ProjectType $type,
     ): LatestVersionLookupResult {
-        $requests = array_values(array_filter(
-            $requests,
-            fn ($request): bool => $request instanceof LatestVersionLookupRequest,
-        ));
-
-        if ($requests === [] || $type !== ProjectType::Plugin) {
-            return $requests === []
-                ? LatestVersionLookupResult::empty()
-                : new LatestVersionLookupResult(unresolvedKeys: array_map(
-                    fn (LatestVersionLookupRequest $request): string => $request->key(),
-                    $requests,
-                ));
-        }
-
-        $spec = $this->latestSpec($requests);
+        [$requests, $spec] = $this->prepareLatestLookup($requests, $type);
         if ($spec === null) {
-            return new LatestVersionLookupResult(unresolvedKeys: array_map(
-                fn (LatestVersionLookupRequest $request): string => $request->key(),
-                $requests,
-            ));
+            return new LatestVersionLookupResult(unresolvedKeys: $this->latestRequestKeys($requests));
         }
 
         $peeked = $this->sourceCache->swrDeferred($spec, CacheProfile::InstalledLatest);
-        if ($peeked['pending']) {
-            return new LatestVersionLookupResult(pendingKeys: array_map(
-                fn (LatestVersionLookupRequest $request): string => $request->key(),
-                $requests,
-            ));
-        }
 
-        return $this->distributeLatestPayload($this->groupLatestRequests($requests), $peeked['data']);
+        return $peeked['pending']
+            ? new LatestVersionLookupResult(pendingKeys: $this->latestRequestKeys($requests))
+            : $this->distributeLatestPayload($requests, $peeked['data']);
     }
 
     /**
+     * Spigot has no hash lookup API. Only hashes remembered locally after an
+     * install or a confirmed scan match are recognized.
+     *
      * @param array<string, string> $hashesByFilename
      * @return array<string, mixed>
      */
     public function findVersionsByHash(array $hashesByFilename): array
-    {
-        return $this->findVersionsByHashUsingIndex($hashesByFilename);
-    }
-
-    public function findVersionsByHashAuthoritatively(array $hashesByFilename): array
-    {
-        return $this->findVersionsByHashUsingIndex($hashesByFilename);
-    }
-
-    /**
-     * @param array<string, string> $hashesByFilename
-     * @return array<string, mixed>
-     */
-    protected function findVersionsByHashUsingIndex(array $hashesByFilename): array
     {
         $matched = [];
 
@@ -371,14 +319,17 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
 
             $indexed = $this->fileIndex->findBySha256($hash);
-            if ($indexed === null) {
-                continue;
+            if ($indexed !== null) {
+                $matched[$hash] = $this->identityVersion($indexed['resource_id'], $indexed['version_id'], $indexed['version_number']);
             }
-
-            $matched[$hash] = $this->indexedVersionPayload($indexed);
         }
 
         return $matched;
+    }
+
+    public function findVersionsByHashAuthoritatively(array $hashesByFilename): array
+    {
+        return $this->findVersionsByHash($hashesByFilename);
     }
 
     /** @return array<string, mixed>|null */
@@ -434,7 +385,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         ], is_string($entry['project_title'] ?? null) ? $entry['project_title'] : null);
     }
 
-    /** @param array<string, mixed> $filters */
+    /** @return array<int, string> */
     private function versionFilterValues(mixed $values): array
     {
         $values = is_array($values) ? $values : (is_string($values) && $values !== '' ? [$values] : []);
@@ -570,10 +521,14 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             throw new Exception('Invalid Spigot resource identifier.');
         }
 
-        $fetched = $this->fetchProjectsByIdsWithPool([$projectId], $timeoutSeconds);
-        $project = $fetched[$projectId] ?? null;
+        // A 404 becomes a definitive miss in request(); any other failure is
+        // rethrown so the cache records an outage instead of a missing project.
+        $project = $this->normalizeOfficialProject($this->getJson(self::OFFICIAL_API, [
+            'action' => 'getResource',
+            'id' => $projectId,
+        ], $timeoutSeconds));
 
-        if (!is_array($project)) {
+        if ($project === null) {
             throw new SourceFetchNotFoundException("Spigot resource [$projectId] was not found.");
         }
 
@@ -599,6 +554,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $resolved = [];
 
         foreach (array_chunk($projectIds, self::PROJECT_POOL_SIZE) as $chunk) {
+            $urls = [];
+            foreach ($chunk as $projectId) {
+                $urls[$projectId] = self::OFFICIAL_API.'?'.http_build_query(['action' => 'getResource', 'id' => $projectId]);
+            }
+
             try {
                 $remaining = $this->remainingTimeout($deadline);
             } catch (Throwable $exception) {
@@ -607,57 +567,30 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 break;
             }
 
-            $aliases = [];
-
             try {
-                $headers = $this->headers();
-                $responses = Http::pool(function (Pool $pool) use ($chunk, $remaining, $headers, &$aliases) {
-                    $poolRequests = [];
-
-                    foreach (array_values($chunk) as $index => $projectId) {
-                        $alias = "spigot_project_$index";
-                        $aliases[$alias] = $projectId;
-                        $poolRequests[] = $pool->as($alias)
-                            ->asJson()
-                            ->withHeaders($headers)
-                            ->timeout($remaining)
-                            ->connectTimeout(min(1.0, $remaining))
-                            ->get(self::OFFICIAL_API, [
-                                'action' => 'getResource',
-                                'id' => $projectId,
-                            ]);
-                    }
-
-                    return $poolRequests;
-                });
+                $responses = $this->pool($urls, $remaining);
             } catch (Throwable $exception) {
                 report($exception);
 
                 continue;
             }
 
-            foreach ($aliases as $alias => $projectId) {
+            foreach ($chunk as $projectId) {
                 try {
-                    $response = $responses[$alias] ?? null;
-                    $payload = $response instanceof Response ? $response->json() : null;
-
-                    if (!$response instanceof Response
-                        || !$response->successful()
-                        || !is_array($payload)
-                        || isset($payload['error'])) {
-                        throw new SourceFetchNotFoundException("Spigot resource [$projectId] was not found.");
-                    }
-
-                    $normalized = $this->normalizeOfficialProject($payload);
-                    if ($normalized === null) {
-                        throw new SourceFetchNotFoundException("Spigot resource [$projectId] was not found.");
-                    }
-
-                    $resolved[$projectId] = $normalized;
+                    $normalized = $this->normalizeOfficialProject(
+                        $this->poolJson($responses[$projectId] ?? null, $projectId),
+                    );
                 } catch (SourceFetchNotFoundException) {
                     // A definitive miss is left out of the batch map.
+                    continue;
                 } catch (Throwable $exception) {
                     report($exception);
+
+                    continue;
+                }
+
+                if ($normalized !== null) {
+                    $resolved[$projectId] = $normalized;
                 }
             }
         }
@@ -865,26 +798,18 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
-     * @param array<int, LatestVersionLookupRequest> $requests
-     * @return array<string, array<int, LatestVersionLookupRequest>>
+     * @param array<int, mixed> $requests
+     * @return array{0: array<int, LatestVersionLookupRequest>, 1: ?SourceFetchSpec}
      */
-    private function groupLatestRequests(array $requests): array
+    private function prepareLatestLookup(array $requests, ProjectType $type): array
     {
-        $grouped = [];
-        foreach ($requests as $request) {
-            $grouped[$request->projectId][] = $request;
-        }
+        $requests = array_values(array_filter(
+            $requests,
+            fn ($request): bool => $request instanceof LatestVersionLookupRequest,
+        ));
 
-        return $grouped;
-    }
-
-    /**
-     * @param array<int, LatestVersionLookupRequest> $requests
-     */
-    private function latestSpec(array $requests): ?SourceFetchSpec
-    {
         $projectIds = [];
-        foreach ($requests as $request) {
+        foreach ($type === ProjectType::Plugin ? $requests : [] as $request) {
             $projectId = $this->normalizeResourceId($request->projectId);
             if ($projectId !== null) {
                 $projectIds[] = $projectId;
@@ -894,18 +819,31 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $projectIds = array_values(array_unique($projectIds));
         sort($projectIds, SORT_STRING);
 
-        if ($projectIds === []) {
-            return null;
-        }
-
-        return $this->spec(self::OPERATION_LATEST, ['project_ids' => $projectIds]);
+        return [
+            $requests,
+            $projectIds !== [] ? $this->spec(self::OPERATION_LATEST, ['project_ids' => $projectIds]) : null,
+        ];
     }
 
     /**
-     * @param array<string, array<int, LatestVersionLookupRequest>> $requestsByProject
+     * @param array<int, LatestVersionLookupRequest> $requests
+     * @return array<int, string>
      */
-    private function distributeLatestPayload(array $requestsByProject, mixed $payload): LatestVersionLookupResult
+    private function latestRequestKeys(array $requests): array
     {
+        return array_map(fn (LatestVersionLookupRequest $request): string => $request->key(), $requests);
+    }
+
+    /**
+     * @param array<int, LatestVersionLookupRequest> $requests
+     */
+    private function distributeLatestPayload(array $requests, mixed $payload): LatestVersionLookupResult
+    {
+        $requestsByProject = [];
+        foreach ($requests as $request) {
+            $requestsByProject[$request->projectId][] = $request;
+        }
+
         $resolved = is_array($payload) && is_array($payload['versions'] ?? null)
             ? $payload['versions']
             : [];
@@ -944,7 +882,6 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         );
     }
 
-    /** @return array<string, mixed>|null */
     private function identifyResourceId(BukkitPluginDescriptor $descriptor): ?string
     {
         $name = $descriptor->name ?? $this->filenamePluginName($descriptor->filename);
@@ -1067,33 +1004,23 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     {
         $versionId = trim((string) ($metadata['known_version_id'] ?? ''));
         $versionNumber = trim((string) ($metadata['known_version_number'] ?? ''));
-        if ($versionId === '' || $versionNumber === '') {
-            return null;
-        }
 
+        return $versionId !== '' && $versionNumber !== ''
+            ? $this->identityVersion($resourceId, $versionId, $versionNumber)
+            : null;
+    }
+
+    /**
+     * Version payload for an identity recorded locally, without upstream data.
+     *
+     * @return array<string, mixed>
+     */
+    private function identityVersion(string $resourceId, string $versionId, string $versionNumber): array
+    {
         return [
             'id' => $versionId,
             'project_id' => $resourceId,
             'version_number' => $versionNumber,
-            'version_type' => 'release',
-            'downloads' => 0,
-            'date_published' => null,
-            'changelog' => null,
-            'featured' => false,
-            'files' => [],
-        ];
-    }
-
-    /**
-     * @param  array{resource_id: string, version_id: string, version_number: string, plugin_name: ?string}  $indexed
-     * @return array<string, mixed>
-     */
-    private function indexedVersionPayload(array $indexed): array
-    {
-        return [
-            'id' => $indexed['version_id'],
-            'project_id' => $indexed['resource_id'],
-            'version_number' => $indexed['version_number'],
             'version_type' => 'release',
             'downloads' => 0,
             'date_published' => null,
@@ -1514,8 +1441,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     private function request(string $url, array $query, float $timeoutSeconds): Response
     {
         $timeoutSeconds = max(0.1, $timeoutSeconds);
-        $response = Http::asJson()
-            ->withHeaders($this->headers())
+        $response = Http::withHeaders($this->headers())
             ->timeout($timeoutSeconds)
             ->connectTimeout(min(1.0, $timeoutSeconds))
             ->get($url, $query);

@@ -7,8 +7,10 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
@@ -46,6 +48,7 @@ class SpigotSourceTest extends TestCase
         $factory = new Factory();
         $container->instance(Factory::class, $factory);
         $container->instance('cache', new LaravelCacheRepository(new ArrayStore()));
+        $container->instance(ExceptionHandler::class, Mockery::mock(ExceptionHandler::class)->shouldIgnoreMissing());
         Container::setInstance($container);
         Facade::setFacadeApplication($container);
         Http::swap($factory);
@@ -315,6 +318,24 @@ class SpigotSourceTest extends TestCase
         $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'project', [
             'project_id' => '999999999',
         ]), 1.5);
+    }
+
+    public function test_official_outage_is_not_mistaken_for_a_missing_project(): void
+    {
+        Http::fake([
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response(null, 503),
+        ]);
+
+        try {
+            $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'project', [
+                'project_id' => '11431',
+            ]), 1.5);
+            self::fail('An upstream outage must surface as a failure.');
+        } catch (SourceFetchNotFoundException) {
+            self::fail('An upstream outage must not be cached as a missing project.');
+        } catch (RequestException $exception) {
+            self::assertSame(503, $exception->response->status());
+        }
     }
 
     public function test_premium_and_external_version_files_are_not_downloadable(): void
