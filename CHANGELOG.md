@@ -7,17 +7,45 @@ the complete matching version section and adds the comparison information to the
 
 ### 日本語
 
+### English
+
+## [0.2.0-pre.2] - 2026-09-26
+
+### 日本語
+
+#### 変更
+
+- Spigot の Catalog 一覧が表示されない問題を修正（Minecraft バージョン絞り込み時の Spiget 応答形式とパッチバージョンの 404 に対応）
+- Spigot の Catalog と Installed でダウンロード数・最終更新日が 0 / 空になる問題を修正（Spigot 公式 API と Spiget の実際のフィールド・秒単位の日時に合わせた）
+- Spigot の無料プラグインをインストール / 更新できなかった問題を修正（Spiget CDN にミラーされた現行バージョンのファイルのみ使用。premium / 外部ホストは引き続きダウンロードしない）
+- Spigot の更新確認が常に未解決になる問題を修正し、インストールできない更新（premium / 外部ホスト / CDN 未反映）は表示しないように変更
+- Spiget の古いエッジキャッシュにより新しいバージョンが反映されない問題を修正
+- 0.2.0-pre.1 の変更（schedule:run によるバックグラウンド処理、Spigot ソースの追加）をすべて含む
+- このプレリリースは GitHub Releases の Prerelease としてのみ公開し、パネルのアップデート一覧（update.json）には出さない
+
+### English
+
+#### Changed
+
+- Fixed the Spigot catalog showing no rows when filtered by Minecraft version (Spiget's response envelope and 404 for patch versions)
+- Fixed Spigot download counts and last-updated dates showing zero or blank in the catalog and Installed tab (matched the official API and Spiget fields and their second-based timestamps)
+- Fixed free Spigot plugins failing to install or update; only the current version mirrored on Spiget's CDN is downloaded, and premium or externally hosted files still are not
+- Fixed Spigot update checks never resolving; updates that cannot be installed (premium, external, or not yet mirrored) are not offered
+- Fixed stale Spiget edge-cache responses hiding new versions
+- Includes every change from 0.2.0-pre.1 (background work drained by schedule:run and the Spigot source)
+- Published this build only as a GitHub Prerelease. It is not offered in the panel update list (update.json)
+
+## [0.2.0-pre.1] - 2026-09-23
+
+### 日本語
+
 #### 変更
 
 - Installed scan / catalog warm / bulk update などの Plugin 固有処理を、`popen` / `proc_open` によるプロセス起動から外し、pending work を永続化して Pelican 既存の短命な `schedule:run`（`mod-manager:process-jobs`）で処理するよう変更
 - Plugin 更新後も Laravel の長寿命 `queue:work` に Plugin クラスを載せない設計は維持（次の `schedule:run` がディスク上の新しい Plugin を読み込む）
 - 既存の one-time `queue:restart` migration（v0.1.6）は変更せず、以後の Plugin 更新でも再実行しない
 - Plugin の Catalog / Installed に Spigot ソースを追加（UI 名は常に Spigot。公式 Simple API を canonical metadata に使い、検索・バージョン・公開ファイルのダウンロードは不足分のみ Spiget を補助利用。premium / 外部ホストはダウンロードしない）
-- Spigot の Catalog 一覧が表示されない問題を修正（Minecraft バージョン絞り込み時の Spiget 応答形式とパッチバージョンの 404 に対応）
-- Spigot の Catalog と Installed でダウンロード数・最終更新日が 0 / 空になる問題を修正（Spigot 公式 API と Spiget の実際のフィールド・秒単位の日時に合わせた）
-- Spigot の無料プラグインをインストール / 更新できなかった問題を修正（Spiget CDN にミラーされた現行バージョンのファイルのみ使用。premium / 外部ホストは引き続きダウンロードしない）
-- Spigot の更新確認が常に未解決になる問題を修正し、インストールできない更新（premium / 外部ホスト / CDN 未反映）は表示しないように変更
-- Spiget の古いエッジキャッシュにより新しいバージョンが反映されない問題を修正
+- このプレリリースは GitHub Releases の Prerelease としてのみ公開し、パネルのアップデート一覧（update.json）には出さない
 
 ### English
 
@@ -27,11 +55,7 @@ the complete matching version section and adds the comparison information to the
 - Plugin updates still take effect without `queue:restart`; the next scheduler run loads the Plugin from disk instead of a long-running queue worker
 - Left the v0.1.6 one-time `queue:restart` migration unchanged so later Plugin updates do not recycle workers again
 - Added Spigot as a Plugin catalog source (UI label is always Spigot). Canonical metadata uses the official Simple API; Spiget fills search, versions, and public-file download gaps. Premium and externally hosted files are not downloaded.
-- Fixed the Spigot catalog showing no rows when filtered by Minecraft version (Spiget's response envelope and 404 for patch versions)
-- Fixed Spigot download counts and last-updated dates showing zero or blank in the catalog and Installed tab (matched the official API and Spiget fields and their second-based timestamps)
-- Fixed free Spigot plugins failing to install or update; only the current version mirrored on Spiget's CDN is downloaded, and premium or externally hosted files still are not
-- Fixed Spigot update checks never resolving; updates that cannot be installed (premium, external, or not yet mirrored) are not offered
-- Fixed stale Spiget edge-cache responses hiding new versions
+- Published this build only as a GitHub Prerelease. It is not offered in the panel update list (update.json)
 
 ## [0.1.6] - 2026-09-21
 
