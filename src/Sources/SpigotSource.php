@@ -676,7 +676,16 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $resolveDownloads = (bool) ($spec->arguments['resolve_downloads'] ?? true);
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
         $resource = $this->fetchSpigetResource($projectId, $this->remainingTimeout($deadline));
-        $downloadable = $resource !== null && $this->isDirectlyDownloadable($resource);
+        $currentFileUrl = null;
+
+        if ($resolveDownloads && $resource !== null && $this->isDirectlyDownloadable($resource)) {
+            try {
+                $currentFileUrl = $this->resolveCurrentFileUrls([$projectId], $this->remainingTimeout($deadline))[$projectId] ?? null;
+            } catch (Throwable) {
+                $currentFileUrl = null;
+            }
+        }
+
         $versions = [];
 
         for ($page = 1; $page <= self::VERSION_MAX_PAGES; $page++) {
@@ -695,36 +704,10 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
 
             foreach ($payload as $version) {
-                if (!is_array($version)) {
-                    continue;
+                $normalized = is_array($version) ? $this->normalizeSpigetVersion($projectId, $version, $resource) : null;
+                if ($normalized !== null) {
+                    $versions[] = $this->withCurrentFileUrl($normalized, $resource, $currentFileUrl);
                 }
-
-                $normalized = $this->normalizeSpigetVersion($projectId, $version, $resource);
-                if ($normalized === null) {
-                    continue;
-                }
-
-                if ($resolveDownloads && $downloadable) {
-                    try {
-                        $url = $this->resolveDownloadUrl(
-                            $projectId,
-                            (string) $normalized['id'],
-                            $this->remainingTimeout($deadline),
-                        );
-                    } catch (Throwable) {
-                        $url = null;
-                    }
-
-                    if (is_string($url) && $url !== '') {
-                        $normalized['files'][0]['url'] = $url;
-                    } else {
-                        $normalized['files'] = [];
-                    }
-                } else {
-                    $normalized['files'] = [];
-                }
-
-                $versions[] = $normalized;
             }
 
             if (count($payload) < self::VERSION_PAGE_SIZE) {
@@ -794,83 +777,75 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
+     * Resolve each resource's current version. Spiget's resource payload has
+     * the premium/external flags and current version id but no version name,
+     * so it is paired with /versions/latest in the same pool.
+     *
      * @param array<int, string> $projectIds
      * @return array{0: array<string, array<string, mixed>>, 1: array<string, string>}
      */
     protected function fetchLatestVersionChunk(array $projectIds, float $timeoutSeconds): array
     {
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
-        $aliases = [];
+        $urls = [];
+        foreach ($projectIds as $projectId) {
+            $urls["resource:$projectId"] = self::SPIGET_API."/resources/{$projectId}";
+            $urls["latest:$projectId"] = self::SPIGET_API."/resources/{$projectId}/versions/latest";
+        }
 
         try {
-            $headers = $this->headers();
-            $remaining = $this->remainingTimeout($deadline);
-            $responses = Http::pool(function (Pool $pool) use ($projectIds, $remaining, $headers, &$aliases) {
-                $poolRequests = [];
-
-                foreach (array_values($projectIds) as $index => $projectId) {
-                    $alias = "spigot_latest_$index";
-                    $aliases[$alias] = $projectId;
-                    $poolRequests[] = $pool->as($alias)
-                        ->asJson()
-                        ->withHeaders($headers)
-                        ->timeout($remaining)
-                        ->connectTimeout(min(1.0, $remaining))
-                        ->get(self::SPIGET_API."/resources/{$projectId}");
-                }
-
-                return $poolRequests;
-            });
+            $responses = $this->pool($urls, $this->remainingTimeout($deadline));
         } catch (Throwable $exception) {
             report($exception);
 
             return [[], array_fill_keys($projectIds, $exception->getMessage())];
         }
 
-        $resolved = [];
+        $candidates = [];
         $failures = [];
 
-        foreach ($aliases as $alias => $projectId) {
+        foreach ($projectIds as $projectId) {
             try {
-                $response = $responses[$alias] ?? null;
-                $payload = $response instanceof Response ? $response->json() : null;
-
-                if (!$response instanceof Response || !$response->successful() || !is_array($payload)) {
-                    throw new Exception("Spigot resource [$projectId] was not found.");
-                }
-
-                $versionPayload = is_array($payload['version'] ?? null) ? $payload['version'] : [];
-                $normalized = $this->normalizeSpigetVersion($projectId, [
-                    'id' => $versionPayload['id'] ?? null,
-                    'name' => $payload['current_version'] ?? ($versionPayload['name'] ?? null),
-                    'releaseDate' => $payload['updateDate'] ?? $payload['releaseDate'] ?? null,
-                    'downloads' => $payload['downloads'] ?? 0,
-                ], $payload);
-
-                if ($normalized === null) {
-                    continue;
-                }
-
-                if ($this->isDirectlyDownloadable($payload)) {
-                    $url = $this->resolveDownloadUrl(
-                        $projectId,
-                        (string) $normalized['id'],
-                        $this->remainingTimeout($deadline),
-                    );
-                    if (is_string($url) && $url !== '') {
-                        $normalized['files'][0]['url'] = $url;
-                    } else {
-                        $normalized['files'] = [];
-                    }
-                } else {
-                    $normalized['files'] = [];
-                }
-
-                $resolved[$projectId] = $normalized;
+                $resource = $this->poolJson($responses["resource:$projectId"] ?? null, $projectId);
+                $latest = $this->poolJson($responses["latest:$projectId"] ?? null, $projectId);
+            } catch (SourceFetchNotFoundException) {
+                // A removed resource or one without versions stays unresolved.
+                continue;
             } catch (Throwable $exception) {
                 report($exception);
                 $failures[$projectId] = $exception->getMessage();
+
+                continue;
             }
+
+            $version = $this->normalizeSpigetVersion($projectId, $latest, $resource);
+            if ($version !== null) {
+                $candidates[$projectId] = ['version' => $version, 'resource' => $resource];
+            }
+        }
+
+        $downloadable = array_keys(array_filter(
+            $candidates,
+            fn (array $candidate): bool => $this->isCurrentVersion($candidate['version'], $candidate['resource'])
+                && $this->isDirectlyDownloadable($candidate['resource']),
+        ));
+        $fileUrls = [];
+
+        if ($downloadable !== []) {
+            try {
+                $fileUrls = $this->resolveCurrentFileUrls(array_map('strval', $downloadable), $this->remainingTimeout($deadline));
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        $resolved = [];
+        foreach ($candidates as $projectId => $candidate) {
+            $resolved[$projectId] = $this->withCurrentFileUrl(
+                $candidate['version'],
+                $candidate['resource'],
+                $fileUrls[$projectId] ?? null,
+            );
         }
 
         return [$resolved, $failures];
@@ -1140,39 +1115,72 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         return $payload;
     }
 
-    private function resolveDownloadUrl(string $resourceId, string $versionId, float $timeoutSeconds): ?string
+    /**
+     * Spiget mirrors only a free resource's current JAR on its CDN, via
+     * /resources/{id}/download. Version-specific download routes redirect to
+     * spigotmc.org, which needs a browser session, so they are never used.
+     * Only a redirect to the CDN is accepted; external links, premium
+     * files, and anything hosted elsewhere yield no URL.
+     *
+     * @param array<int, string> $resourceIds
+     * @return array<string, string>
+     */
+    private function resolveCurrentFileUrls(array $resourceIds, float $timeoutSeconds): array
     {
-        if ($resourceId === '' || $versionId === '') {
-            return null;
+        $urls = [];
+        foreach ($resourceIds as $resourceId) {
+            $urls[$resourceId] = self::SPIGET_API."/resources/{$resourceId}/download";
         }
 
-        $response = Http::withHeaders($this->headers())
-            ->withOptions(['allow_redirects' => false])
-            ->timeout(max(0.1, $timeoutSeconds))
-            ->connectTimeout(min(1.0, $timeoutSeconds))
-            ->get(self::SPIGET_API."/resources/{$resourceId}/versions/{$versionId}/download");
+        $resolved = [];
+        foreach ($this->pool($urls, $timeoutSeconds, followRedirects: false) as $resourceId => $response) {
+            if (!$response instanceof Response
+                || !$response->redirect()
+                || strtolower((string) $response->header('X-Spiget-File-Source')) === 'external') {
+                continue;
+            }
 
-        $source = strtolower((string) $response->header('X-Spiget-File-Source'));
-        if ($source === 'external') {
-            return null;
+            $location = $response->header('Location');
+            if (str_starts_with($location, '//')) {
+                $location = 'https:'.$location;
+            }
+
+            if ($this->isAllowedDownloadUrl($location)) {
+                $resolved[(string) $resourceId] = $location;
+            }
         }
 
-        if (in_array($response->status(), [401, 403, 404], true)) {
-            return null;
+        return $resolved;
+    }
+
+    /**
+     * Attach the current-file URL to the version it belongs to. Every other
+     * version keeps no downloadable file.
+     *
+     * @param  array<string, mixed>  $version
+     * @param  array<string, mixed>|null  $resource
+     * @return array<string, mixed>
+     */
+    private function withCurrentFileUrl(array $version, ?array $resource, ?string $currentFileUrl): array
+    {
+        if ($resource !== null && $currentFileUrl !== null && $this->isCurrentVersion($version, $resource)) {
+            $version['files'][0]['url'] = $currentFileUrl;
+        } else {
+            $version['files'] = [];
         }
 
-        $location = $response->header('Location');
-        if (!is_string($location) || $location === '') {
-            return null;
-        }
+        return $version;
+    }
 
-        if (str_starts_with($location, '//')) {
-            $location = 'https:'.$location;
-        } elseif (str_starts_with($location, '/')) {
-            $location = 'https://api.spiget.org'.$location;
-        }
+    /**
+     * @param  array<string, mixed>  $version
+     * @param  array<string, mixed>  $resource
+     */
+    private function isCurrentVersion(array $version, array $resource): bool
+    {
+        $currentId = $resource['version']['id'] ?? null;
 
-        return $this->isAllowedDownloadUrl($location) ? $location : null;
+        return is_scalar($currentId) && (string) $currentId === (string) ($version['id'] ?? '');
     }
 
     private function isAllowedDownloadUrl(string $url): bool
@@ -1317,7 +1325,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
         $file = $resource['file'] ?? null;
 
-        return is_array($file) && ($file['external'] ?? false) === true;
+        return is_array($file) && (($file['external'] ?? false) === true || ($file['type'] ?? null) === 'external');
     }
 
     /**
@@ -1438,6 +1446,68 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             'User-Agent' => self::USER_AGENT,
             'Accept' => 'application/json',
         ];
+    }
+
+    /**
+     * Send GET requests concurrently. A transport failure is returned in
+     * place of its response, as Laravel's pool does.
+     *
+     * @param  array<string, string>  $urlsByAlias
+     * @return array<string, Response|Throwable>
+     */
+    private function pool(array $urlsByAlias, float $timeoutSeconds, bool $followRedirects = true): array
+    {
+        if ($urlsByAlias === []) {
+            return [];
+        }
+
+        $timeoutSeconds = max(0.1, $timeoutSeconds);
+        $headers = $this->headers();
+
+        return Http::pool(function (Pool $pool) use ($urlsByAlias, $timeoutSeconds, $headers, $followRedirects): array {
+            $requests = [];
+            foreach ($urlsByAlias as $alias => $url) {
+                $request = $pool->as((string) $alias)
+                    ->withHeaders($headers)
+                    ->timeout($timeoutSeconds)
+                    ->connectTimeout(min(1.0, $timeoutSeconds));
+
+                if (!$followRedirects) {
+                    $request = $request->withOptions(['allow_redirects' => false]);
+                }
+
+                $requests[] = $request->get($url);
+            }
+
+            return $requests;
+        });
+    }
+
+    /**
+     * @return array<string, mixed>
+     *
+     * @throws SourceFetchNotFoundException when the resource does not exist
+     */
+    private function poolJson(mixed $response, string $projectId): array
+    {
+        if ($response instanceof Throwable) {
+            throw $response;
+        }
+
+        if (!$response instanceof Response) {
+            throw new Exception("No Spigot response for resource [$projectId].");
+        }
+
+        if ($response->status() === 404) {
+            throw new SourceFetchNotFoundException("Spigot resource [$projectId] was not found.");
+        }
+
+        $payload = $response->throw()->json();
+        if (!is_array($payload)) {
+            throw new Exception("Invalid Spigot response for resource [$projectId].");
+        }
+
+        return $payload;
     }
 
     /** @param array<string, mixed> $query */
