@@ -146,22 +146,28 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         };
     }
 
-    /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
+    /**
+     * @param array<string, mixed> $filters
+     * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
+     */
     public function search(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): array
     {
         return $this->cachedSearch->search($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
+    /** @param array<string, mixed> $filters */
     public function hasCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
         return $this->cachedSearch->hasCached($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
+    /** @param array<string, mixed> $filters */
     public function hasFreshCachedSearch(Server $server, ProjectType $type, int $page, ?string $search = null, array $filters = []): bool
     {
         return $this->cachedSearch->hasFreshCached($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
+    /** @param array<string, mixed> $filters */
     public function warmSearch(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): bool
     {
         return $this->cachedSearch->warm($this->buildSearchSpec($server, $type, $page, $search, $filters));
@@ -1455,7 +1461,10 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         return $response;
     }
 
-    /** @param array<string, mixed> $query */
+    /**
+     * @param array<string, mixed> $query
+     * @return array<mixed>
+     */
     private function getJson(string $url, array $query, float $timeoutSeconds): array
     {
         $payload = $this->request($url, $query, $timeoutSeconds)->json();

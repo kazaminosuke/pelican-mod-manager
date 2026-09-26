@@ -10,6 +10,13 @@ use Illuminate\Database\Eloquent\Model;
  * Spigot has no complete upstream hash reverse lookup. Once a scan or
  * install identifies a file with high confidence, later scans reuse this
  * mapping instead of guessing from ambiguous name matches.
+ *
+ * @property int $id
+ * @property string $sha256
+ * @property string $resource_id
+ * @property string $version_id
+ * @property string $version_number
+ * @property string|null $plugin_name
  */
 class ModManagerSpigotFileIndex extends Model
 {
