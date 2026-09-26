@@ -48,6 +48,8 @@ class SpigotSourceTest extends TestCase
         Container::setInstance($container);
         Facade::setFacadeApplication($container);
         Http::swap($factory);
+        // Every upstream call must be faked; a stray request would reach the live APIs.
+        Http::preventStrayRequests();
 
         if (self::$capsule === null) {
             self::$capsule = new Capsule();
@@ -90,16 +92,10 @@ class SpigotSourceTest extends TestCase
     {
         Http::fake([
             'api.spiget.org/v2/search/resources/WorldGuard*' => Http::response([
-                [
-                    'id' => 11431,
-                    'name' => 'WorldGuard',
-                    'tag' => 'World protection',
-                    'downloads' => 12,
-                    'updateDate' => 1_700_000_000,
-                    'author' => ['name' => 'sk89q'],
-                    'testedVersions' => ['1.21'],
-                ],
-            ], 200, ['X-Total-Count' => '1']),
+                $this->spigetResource(11431, 'WorldGuard', ['1.20', '1.21']),
+                $this->spigetResource(500, 'WorldGuard Legacy', ['1.8']),
+            ], 200, ['X-Total' => '2', 'X-Page-Count' => '1']),
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response($this->officialResource(11431, 'WorldGuard')),
         ]);
 
         $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
@@ -109,14 +105,155 @@ class SpigotSourceTest extends TestCase
             'version' => '1.21.4',
         ]), 1.5);
 
+        self::assertCount(1, $result['hits']);
         self::assertSame('11431', $result['hits'][0]['project_id']);
         self::assertSame('Spigot', $this->source()->getLabel());
         self::assertSame('spigot', $result['hits'][0]['source']);
-        self::assertSame(1, $result['total_hits']);
+        self::assertSame(2, $result['total_hits']);
         Http::assertSent(function ($request): bool {
             return str_contains($request->url(), 'api.spiget.org/v2/search/resources/WorldGuard')
                 && str_contains($request->url(), 'field=name');
         });
+    }
+
+    public function test_version_filtered_catalog_reads_the_spiget_match_envelope(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/for/*' => Http::response([
+                'check' => ['1.21.4', '1.21'],
+                'method' => 'any',
+                // /resources/for returns only these three fields per row.
+                'match' => [
+                    ['testedVersions' => ['1.21'], 'name' => 'WorldGuard', 'id' => 11431],
+                    ['testedVersions' => ['1.21'], 'name' => 'Vault', 'id' => 34315],
+                ],
+            ], 200, ['X-Page-Count' => '5887', 'X-Total' => '17659']),
+            'api.spigotmc.org/simple/0.2/index.php?action=getResource&id=11431' => Http::response(
+                $this->officialResource(11431, 'WorldGuard'),
+            ),
+            'api.spigotmc.org/simple/0.2/index.php?action=getResource&id=34315' => Http::response(
+                ['code' => 404, 'message' => 'Nothing was found for that request.'],
+                404,
+            ),
+        ]);
+
+        $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
+            'page' => 1,
+            'query' => '',
+            'sort' => 'downloads',
+            'version' => '1.21.4',
+        ]), 1.5);
+
+        self::assertSame(17659, $result['total_hits']);
+        self::assertSame(['11431', '34315'], array_column($result['hits'], 'project_id'));
+        // Canonical statistics come from the official API.
+        self::assertSame('WorldGuard', $result['hits'][0]['title']);
+        self::assertSame('sk89q', $result['hits'][0]['author']);
+        self::assertSame(5_906_503, $result['hits'][0]['downloads']);
+        self::assertSame('2026-05-31T15:53:28+00:00', $result['hits'][0]['date_modified']);
+        self::assertSame('spigot', $result['hits'][0]['source']);
+        // A row without official metadata stays listed but never invents zero.
+        self::assertSame('Vault', $result['hits'][1]['title']);
+        self::assertNull($result['hits'][1]['downloads']);
+        self::assertNull($result['hits'][1]['date_modified']);
+        Http::assertSent(function ($request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return str_contains($request->url(), 'api.spiget.org/v2/resources/for/1.21.4,1.21?')
+                && ($query['method'] ?? null) === 'any'
+                && ($query['sort'] ?? null) === '-downloads'
+                && ($query['size'] ?? null) === '20';
+        });
+    }
+
+    public function test_version_without_any_tested_resource_is_an_empty_catalog(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/for/*' => Http::response([
+                'check' => ['1.99'],
+                'method' => 'any',
+                'match' => [],
+            ], 404, ['X-Total' => '0']),
+        ]);
+
+        $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
+            'page' => 1,
+            'query' => '',
+            'sort' => 'updated',
+            'version' => '1.99',
+        ]), 1.5);
+
+        self::assertSame(['hits' => [], 'total_hits' => 0], $result);
+    }
+
+    public function test_catalog_keeps_spiget_statistics_when_official_metadata_is_unavailable(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources?*' => Http::response([
+                $this->spigetResource(28140, 'LuckPerms', ['1.21']),
+            ], 200, ['X-Total' => '1', 'X-Page-Count' => '1']),
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response(null, 503),
+        ]);
+
+        $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
+            'page' => 1,
+            'query' => '',
+            'sort' => 'newest',
+            'version' => null,
+        ]), 1.5);
+
+        $hit = $result['hits'][0];
+        self::assertSame('LuckPerms', $hit['title']);
+        self::assertSame(8_932_095, $hit['downloads']);
+        self::assertSame('2026-08-06T19:38:34+00:00', $hit['date_modified']);
+        self::assertSame('https://www.spigotmc.org/data/resource_icons/28/28140.jpg?1490821714', $hit['icon_url']);
+        self::assertNull($hit['author']);
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sort=-releaseDate'));
+    }
+
+    public function test_catalog_reuses_cached_official_metadata_and_primes_new_entries(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/for/*' => Http::response([
+                'check' => ['1.21'],
+                'method' => 'any',
+                'match' => [
+                    ['testedVersions' => ['1.21'], 'name' => 'Cached', 'id' => 1],
+                    ['testedVersions' => ['1.21'], 'name' => 'WorldGuard', 'id' => 11431],
+                ],
+            ], 200, ['X-Total' => '2']),
+            'api.spigotmc.org/simple/0.2/index.php?action=getResource&id=11431' => Http::response(
+                $this->officialResource(11431, 'WorldGuard'),
+            ),
+        ]);
+        $source = $this->source();
+        $cached = [
+            'project_id' => '1',
+            'slug' => '1',
+            'title' => 'Cached',
+            'description' => 'From cache',
+            'icon_url' => null,
+            'author' => 'someone',
+            'downloads' => 7,
+            'date_modified' => '2026-01-01T00:00:00+00:00',
+            'project_type' => 'plugin',
+            'source' => 'spigot',
+        ];
+        $source->primeProjects(['1' => $cached]);
+
+        $result = $source->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
+            'page' => 1,
+            'query' => '',
+            'sort' => 'downloads',
+            'version' => '1.21',
+        ]), 1.5);
+
+        self::assertSame(7, $result['hits'][0]['downloads']);
+        self::assertSame('someone', $result['hits'][0]['author']);
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'getResource&id=1&')
+            || str_ends_with($request->url(), 'getResource&id=1'));
+        // The fetched project is primed for Installed rows and detail views.
+        self::assertSame(5_906_503, $source->peekProject('11431', dispatchOnMiss: false)['data']['downloads'] ?? null);
     }
 
     public function test_official_api_is_used_for_canonical_project_metadata(): void
@@ -264,13 +401,9 @@ class SpigotSourceTest extends TestCase
         $source = $this->sourceWithExecutor();
         Http::fake([
             'api.spiget.org/v2/search/resources/WorldGuard*' => Http::response([
-                [
-                    'id' => 11431,
-                    'name' => 'WorldGuard',
-                    'downloads' => 10,
-                    'author' => ['name' => 'sk89q'],
-                ],
-            ], 200, ['X-Total-Count' => '1']),
+                $this->spigetResource(11431, 'WorldGuard', ['1.21']),
+            ], 200, ['X-Total' => '1']),
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response($this->officialResource(11431, 'WorldGuard')),
             'api.spiget.org/v2/resources/11431/versions*' => Http::response([
                 ['id' => 88, 'name' => '7.0.9', 'releaseDate' => 1, 'downloads' => 1],
             ]),
@@ -304,15 +437,57 @@ class SpigotSourceTest extends TestCase
         $source = $this->sourceWithExecutor();
         Http::fake([
             'api.spiget.org/v2/search/resources/Chat*' => Http::response([
-                ['id' => 1, 'name' => 'Chat', 'author' => ['name' => 'One']],
-                ['id' => 2, 'name' => 'Chat', 'author' => ['name' => 'Two']],
-            ], 200, ['X-Total-Count' => '2']),
+                $this->spigetResource(1, 'Chat', ['1.21']),
+                $this->spigetResource(2, 'Chat', ['1.21']),
+            ], 200, ['X-Total' => '2']),
+            'api.spigotmc.org/simple/0.2/index.php?action=getResource&id=1' => Http::response(
+                ['author' => ['id' => 1, 'username' => 'One']] + $this->officialResource(1, 'Chat'),
+            ),
+            'api.spigotmc.org/simple/0.2/index.php?action=getResource&id=2' => Http::response(
+                ['author' => ['id' => 2, 'username' => 'Two']] + $this->officialResource(2, 'Chat'),
+            ),
         ]);
 
         self::assertNull($source->identifyFromArchiveMetadata([
             'name' => 'Chat',
             'version' => '1.0.0',
         ], []));
+        self::assertNull($source->identifyFromArchiveMetadata([
+            'name' => 'Chat',
+            'version' => '1.0.0',
+            'authors' => ['Someone else'],
+        ], []));
+    }
+
+    public function test_official_author_name_disambiguates_identical_resource_names(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'api.spiget.org/v2/search/resources/Chat*' => Http::response([
+                $this->spigetResource(1, 'Chat', ['1.21']),
+                $this->spigetResource(2, 'Chat', ['1.21']),
+            ], 200, ['X-Total' => '2']),
+            'api.spigotmc.org/simple/0.2/index.php?action=getResource&id=1' => Http::response(
+                ['author' => ['id' => 1, 'username' => 'One']] + $this->officialResource(1, 'Chat'),
+            ),
+            'api.spigotmc.org/simple/0.2/index.php?action=getResource&id=2' => Http::response(
+                ['author' => ['id' => 2, 'username' => 'Two']] + $this->officialResource(2, 'Chat'),
+            ),
+            'api.spiget.org/v2/resources/2/versions*' => Http::response([
+                ['id' => 9, 'name' => '1.0.0', 'releaseDate' => 1_700_000_000, 'downloads' => 3, 'resource' => 2],
+            ]),
+            'api.spiget.org/v2/resources/2' => Http::response($this->spigetResource(2, 'Chat', ['1.21'])),
+        ]);
+
+        $version = $source->identifyFromArchiveMetadata([
+            'name' => 'Chat',
+            'version' => '1.0.0',
+            'authors' => ['two'],
+        ], []);
+
+        self::assertSame('2', $version['project_id']);
+        self::assertSame('9', $version['id']);
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download'));
     }
 
     public function test_website_resource_id_is_preferred_over_name_search(): void
@@ -385,6 +560,36 @@ class SpigotSourceTest extends TestCase
             $this->source()->search($server, ProjectType::Mod),
         );
         Http::assertNothingSent();
+    }
+
+    /**
+     * Shape of a full resource row from Spiget's /resources and
+     * /search/resources endpoints.
+     *
+     * @param  array<int, string>  $testedVersions
+     * @return array<string, mixed>
+     */
+    private function spigetResource(int $id, string $name, array $testedVersions): array
+    {
+        return [
+            'external' => false,
+            'file' => ['type' => '.jar', 'size' => 1.4, 'sizeUnit' => 'MB', 'url' => "resources/plugin.{$id}/download?version=648014"],
+            'likes' => 10,
+            'testedVersions' => $testedVersions,
+            'name' => $name,
+            'tag' => 'A permissions plugin',
+            'version' => ['id' => 648014, 'uuid' => '023bffe3-2919-e143-0039-d7d95035b999'],
+            'author' => ['id' => 100356],
+            'category' => ['id' => 21],
+            'rating' => ['count' => 972, 'average' => 4.7],
+            'icon' => ['url' => 'data/resource_icons/28/28140.jpg?1490821714', 'data' => ''],
+            'releaseDate' => 1_471_719_960,
+            'updateDate' => 1_786_045_114,
+            'downloads' => 8_932_095,
+            'premium' => false,
+            'existenceStatus' => 1,
+            'id' => $id,
+        ];
     }
 
     /**

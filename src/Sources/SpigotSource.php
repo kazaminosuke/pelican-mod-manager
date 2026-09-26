@@ -56,6 +56,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
     protected const LATEST_VERSION_POOL_SIZE = 4;
 
+    protected const PROJECT_POOL_SIZE = 10;
+
     /**
      * Part of every Spigot cache key. Bump it when a normalized payload
      * changes shape or meaning so entries written by an older release are
@@ -443,64 +445,121 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         ));
     }
 
-    /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
+    /**
+     * Spiget decides which resources appear on a catalog page and in what
+     * order; each row is then overlaid with the canonical official metadata.
+     *
+     * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
+     */
     protected function fetchSearch(SourceFetchSpec $spec, float $timeoutSeconds): array
     {
         $page = max(1, (int) ($spec->arguments['page'] ?? 1));
         $query = trim((string) ($spec->arguments['query'] ?? ''));
-        $sort = $this->spigetSort((string) ($spec->arguments['sort'] ?? 'downloads'));
         $version = trim((string) ($spec->arguments['version'] ?? ''));
-        $version = $version !== '' ? $version : null;
+        $deadline = microtime(true) + max(0.1, $timeoutSeconds);
 
         $params = [
             'size' => self::CATALOG_PAGE_SIZE,
             'page' => $page,
-            'sort' => $sort,
+            'sort' => $this->spigetSort((string) ($spec->arguments['sort'] ?? 'downloads')),
         ];
 
         if ($query !== '') {
             $path = '/search/resources/'.rawurlencode($query);
             $params['field'] = 'name';
-        } elseif ($version !== null) {
-            $path = '/resources/for/'.rawurlencode($version);
+        } elseif ($version !== '') {
+            $path = '/resources/for/'.implode(',', array_map('rawurlencode', $this->testedVersionCandidates($version)));
+            $params['method'] = 'any';
         } else {
             $path = '/resources';
         }
 
-        $response = $this->request(self::SPIGET_API.$path, $params, $timeoutSeconds);
+        try {
+            $response = $this->request(self::SPIGET_API.$path, $params, $timeoutSeconds);
+        } catch (SourceFetchNotFoundException) {
+            // Spiget answers 404 for a query or version without any match.
+            return ['hits' => [], 'total_hits' => 0];
+        }
+
         $payload = $response->json();
-        if (!is_array($payload)) {
+        // /resources/for wraps its rows as {check, method, match}.
+        $resources = is_array($payload) && !array_is_list($payload) ? ($payload['match'] ?? null) : $payload;
+        if (!is_array($resources)) {
             throw new Exception('Invalid Spigot catalog response.');
         }
 
         $hits = [];
-        foreach ($payload as $resource) {
+        foreach ($resources as $resource) {
             if (!is_array($resource)) {
                 continue;
             }
 
+            // Spiget search has no version filter, so apply it to the page.
+            if ($query !== '' && $version !== '' && !$this->testedVersionsInclude($resource, $version)) {
+                continue;
+            }
+
             $normalized = $this->normalizeSpigetProject($resource);
-            if ($normalized === null) {
-                continue;
+            if ($normalized !== null) {
+                $hits[] = $normalized;
             }
-
-            if ($query !== '' && $version !== null && !$this->testedVersionsInclude($resource, $version)) {
-                continue;
-            }
-
-            $hits[] = $normalized;
         }
 
-        $total = (int) $response->header('X-Total-Count');
+        $total = (int) $response->header('X-Total');
         if ($total < 1) {
             $pages = (int) $response->header('X-Page-Count');
             $total = $pages > 0 ? $pages * self::CATALOG_PAGE_SIZE : (($page - 1) * self::CATALOG_PAGE_SIZE) + count($hits);
         }
 
         return [
-            'hits' => $hits,
+            'hits' => $this->withOfficialMetadata($hits, $deadline),
             'total_hits' => $total,
         ];
+    }
+
+    /**
+     * Overlay catalog rows with official metadata. Rows from /resources/for
+     * carry only id, name, and tested versions, and Spiget's own statistics
+     * lag behind SpigotMC, so the official API stays the canonical source.
+     * Cached projects are reused; the rest are fetched within the remaining
+     * budget and primed for the Installed tab. A row keeps its Spiget values
+     * when the official lookup does not complete.
+     *
+     * @param  array<int, array<string, mixed>>  $hits
+     * @return array<int, array<string, mixed>>
+     */
+    private function withOfficialMetadata(array $hits, float $deadline): array
+    {
+        if ($hits === []) {
+            return [];
+        }
+
+        $projectIds = array_map(static fn (array $hit): string => (string) $hit['project_id'], $hits);
+        $official = [];
+        $missing = [];
+
+        foreach ($this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...)) as $projectId => $peeked) {
+            if (is_array($peeked['data'])) {
+                $official[$projectId] = $peeked['data'];
+            } else {
+                $missing[] = (string) $projectId;
+            }
+        }
+
+        $remaining = $deadline - microtime(true);
+        if ($missing !== [] && $remaining > 0.1) {
+            $fetched = $this->fetchProjectsByIdsWithPool($missing, $remaining);
+            $this->primeProjects($fetched);
+            $official += $fetched;
+        }
+
+        return array_map(static function (array $hit) use ($official): array {
+            $project = $official[$hit['project_id']] ?? null;
+
+            return is_array($project)
+                ? array_merge($hit, array_filter($project, static fn (mixed $value): bool => $value !== null))
+                : $hit;
+        }, $hits);
     }
 
     /** @return array<string, mixed> */
@@ -539,7 +598,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
         $resolved = [];
 
-        foreach (array_chunk($projectIds, self::LATEST_VERSION_POOL_SIZE) as $chunk) {
+        foreach (array_chunk($projectIds, self::PROJECT_POOL_SIZE) as $chunk) {
             try {
                 $remaining = $this->remainingTimeout($deadline);
             } catch (Throwable $exception) {
@@ -1171,7 +1230,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             $icon = 'https://www.spigotmc.org/'.ltrim($icon, '/');
         }
 
-        $author = $resource['author']['name'] ?? $resource['author']['username'] ?? null;
+        $downloads = $resource['downloads'] ?? null;
 
         return [
             'project_id' => $projectId,
@@ -1179,8 +1238,9 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             'title' => (string) ($resource['name'] ?? $projectId),
             'description' => CatalogFields::description($resource['tag'] ?? ''),
             'icon_url' => $this->stringOrNull($icon),
-            'author' => is_string($author) && $author !== '' ? $author : null,
-            'downloads' => (int) ($resource['downloads'] ?? 0),
+            // Spiget exposes only the author id; the official overlay names it.
+            'author' => null,
+            'downloads' => is_numeric($downloads) ? (int) $downloads : null,
             'date_modified' => $this->timestampToIso($resource['updateDate'] ?? $resource['releaseDate'] ?? null),
             'project_type' => ProjectType::Plugin->value,
             'source' => ProjectSourceKey::Spigot->value,
@@ -1258,6 +1318,24 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $file = $resource['file'] ?? null;
 
         return is_array($file) && ($file['external'] ?? false) === true;
+    }
+
+    /**
+     * SpigotMC authors tick "tested versions" from a list of mostly
+     * major.minor releases (1.20, 1.21, 26.1, ...), and Spiget returns 404
+     * for a version nobody ticked. Match the exact server version or its
+     * release line, e.g. 1.21.4 matches 1.21.4 or 1.21.
+     *
+     * @return array<int, string>
+     */
+    private function testedVersionCandidates(string $version): array
+    {
+        $version = strtolower(trim($version));
+        if (preg_match('/^(\d+\.\d+)\.\d+$/', $version, $matches) === 1) {
+            return [$version, $matches[1]];
+        }
+
+        return $version !== '' ? [$version] : [];
     }
 
     /**
