@@ -47,6 +47,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
     protected const CDN_HOST = 'cdn.spiget.org';
 
+    protected const SPIGET_MAX_AGE_SECONDS = 3600;
+
     protected const USER_AGENT = 'pelican-mod-manager (https://github.com/kazaminosuke/pelican-mod-manager)';
 
     protected const CATALOG_PAGE_SIZE = 20;
@@ -500,7 +502,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
         $urls = [];
         foreach ($compactIds as $projectId) {
-            $urls[$projectId] = self::SPIGET_API."/resources/{$projectId}";
+            $urls[$projectId] = $this->spigetResourceUrl($projectId);
         }
 
         try {
@@ -629,12 +631,12 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
         for ($page = 1; $page <= self::VERSION_MAX_PAGES; $page++) {
             $payload = $this->getJson(
-                self::SPIGET_API."/resources/{$projectId}/versions",
-                [
+                $this->spigetResourceUrl($projectId, '/versions', [
                     'size' => self::VERSION_PAGE_SIZE,
                     'page' => $page,
                     'sort' => '-releaseDate',
-                ],
+                ]),
+                [],
                 $this->remainingTimeout($deadline),
             );
 
@@ -728,8 +730,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
         $urls = [];
         foreach ($projectIds as $projectId) {
-            $urls["resource:$projectId"] = self::SPIGET_API."/resources/{$projectId}";
-            $urls["latest:$projectId"] = self::SPIGET_API."/resources/{$projectId}/versions/latest";
+            $urls["resource:$projectId"] = $this->spigetResourceUrl($projectId);
+            $urls["latest:$projectId"] = $this->spigetResourceUrl($projectId, '/versions/latest');
         }
 
         try {
@@ -1042,7 +1044,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     private function fetchSpigetResource(string $projectId, float $timeoutSeconds): ?array
     {
         try {
-            $payload = $this->getJson(self::SPIGET_API."/resources/{$projectId}", [], $timeoutSeconds);
+            $payload = $this->getJson($this->spigetResourceUrl($projectId), [], $timeoutSeconds);
         } catch (SourceFetchNotFoundException) {
             return null;
         }
@@ -1116,6 +1118,19 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $currentId = $resource['version']['id'] ?? null;
 
         return is_scalar($currentId) && (string) $currentId === (string) ($version['id'] ?? '');
+    }
+
+    /**
+     * Cloudflare serves Spiget's single-resource responses for weeks past
+     * their one-hour max-age, which hides new releases from update checks
+     * and installs. An hourly token keys the edge cache to that max-age.
+     */
+    /** @param array<string, scalar> $query */
+    private function spigetResourceUrl(string $resourceId, string $path = '', array $query = []): string
+    {
+        return self::SPIGET_API."/resources/{$resourceId}{$path}?".http_build_query($query + [
+            '_' => intdiv(time(), self::SPIGET_MAX_AGE_SECONDS) * self::SPIGET_MAX_AGE_SECONDS,
+        ]);
     }
 
     private function isAllowedDownloadUrl(string $url): bool
@@ -1449,10 +1464,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     private function request(string $url, array $query, float $timeoutSeconds): Response
     {
         $timeoutSeconds = max(0.1, $timeoutSeconds);
-        $response = Http::withHeaders($this->headers())
+        $pending = Http::withHeaders($this->headers())
             ->timeout($timeoutSeconds)
-            ->connectTimeout(min(1.0, $timeoutSeconds))
-            ->get($url, $query);
+            ->connectTimeout(min(1.0, $timeoutSeconds));
+        // A query option replaces the URL's own query string.
+        $response = $query === [] ? $pending->get($url) : $pending->get($url, $query);
 
         if ($response->status() === 404) {
             throw new SourceFetchNotFoundException('Spigot resource was not found.');

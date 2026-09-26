@@ -135,8 +135,8 @@ class SpigotSourceTest extends TestCase
                     ['testedVersions' => ['1.21'], 'name' => 'Vault', 'id' => 34315],
                 ],
             ], 200, ['X-Page-Count' => '5887', 'X-Total' => '17659']),
-            'api.spiget.org/v2/resources/28140' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.21'])),
-            'api.spiget.org/v2/resources/34315' => Http::response(['error' => 'resource not found'], 404),
+            'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.21'])),
+            'api.spiget.org/v2/resources/34315?*' => Http::response(['error' => 'resource not found'], 404),
         ]);
 
         $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
@@ -311,7 +311,7 @@ class SpigotSourceTest extends TestCase
             'api.spiget.org/v2/resources/98/versions*' => Http::response([
                 ['id' => 8, 'name' => '2.0.0', 'releaseDate' => 1_700_000_000, 'downloads' => 1],
             ]),
-            'api.spiget.org/v2/resources/99' => Http::response([
+            'api.spiget.org/v2/resources/99?*' => Http::response([
                 'id' => 99,
                 'name' => 'PremiumPlugin',
                 'premium' => true,
@@ -320,7 +320,7 @@ class SpigotSourceTest extends TestCase
                 'file' => ['type' => '.jar'],
                 'version' => ['id' => 7],
             ]),
-            'api.spiget.org/v2/resources/98' => Http::response([
+            'api.spiget.org/v2/resources/98?*' => Http::response([
                 'id' => 98,
                 'name' => 'ExternalPlugin',
                 'premium' => false,
@@ -351,7 +351,7 @@ class SpigotSourceTest extends TestCase
             'api.spiget.org/v2/resources/50/versions*' => Http::response([
                 ['id' => 3, 'name' => '1.2.0', 'releaseDate' => 1_700_000_000, 'downloads' => 4],
             ]),
-            'api.spiget.org/v2/resources/50' => Http::response($this->freeSpigetResource(50, 3)),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
         ]);
 
         $versions = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'versions', [
@@ -373,7 +373,7 @@ class SpigotSourceTest extends TestCase
                 ['id' => 3, 'name' => '1.2.0', 'releaseDate' => 1_700_000_000, 'downloads' => 4, 'resource' => 50],
                 ['id' => 2, 'name' => '1.1.0', 'releaseDate' => 1_600_000_000, 'downloads' => 9, 'resource' => 50],
             ]),
-            'api.spiget.org/v2/resources/50' => Http::response($this->freeSpigetResource(50, 3)),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
         ]);
 
         $versions = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'versions', [
@@ -390,13 +390,50 @@ class SpigotSourceTest extends TestCase
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/versions/3/download'));
     }
 
+    public function test_single_resource_requests_carry_an_hourly_cache_token(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/50/versions*' => Http::response([
+                ['id' => 3, 'name' => '1.2.0', 'releaseDate' => 1_700_000_000, 'downloads' => 4],
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+        $bucket = intdiv(time(), 3600) * 3600;
+
+        $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'versions', [
+            'project_id' => '50',
+            'resolve_downloads' => false,
+        ]), 2.0);
+
+        // Cloudflare otherwise serves weeks-old single-resource payloads.
+        $tokens = [];
+        Http::assertSent(function ($request) use (&$tokens): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+            $tokens[] = (int) ($query['_'] ?? 0);
+
+            return true;
+        });
+        self::assertCount(2, $tokens);
+        foreach ($tokens as $token) {
+            self::assertContains($token, [$bucket, $bucket + 3600]);
+        }
+        Http::assertSent(function ($request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return str_contains($request->url(), '/resources/50/versions?')
+                && ($query['size'] ?? null) === '25'
+                && ($query['page'] ?? null) === '1'
+                && ($query['sort'] ?? null) === '-releaseDate';
+        });
+    }
+
     public function test_versions_for_identification_skip_download_resolution(): void
     {
         Http::fake([
             'api.spiget.org/v2/resources/50/versions*' => Http::response([
                 ['id' => 3, 'name' => '1.2.0', 'releaseDate' => 1_700_000_000, 'downloads' => 4],
             ]),
-            'api.spiget.org/v2/resources/50' => Http::response($this->freeSpigetResource(50, 3)),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
         ]);
 
         $versions = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'versions', [
@@ -416,7 +453,7 @@ class SpigotSourceTest extends TestCase
                 'X-Spiget-File-Source' => 'cdn',
                 'Location' => 'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ]),
-            'api.spiget.org/v2/resources/28140/versions/latest' => Http::response([
+            'api.spiget.org/v2/resources/28140/versions/latest*' => Http::response([
                 'downloads' => 4305,
                 'name' => '5.5.71',
                 'rating' => ['count' => 0, 'average' => 0],
@@ -425,14 +462,14 @@ class SpigotSourceTest extends TestCase
                 'uuid' => '023bffe3-2919-e143-0039-d7d95035b999',
                 'id' => 648014,
             ]),
-            'api.spiget.org/v2/resources/28140' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.21'])),
-            'api.spiget.org/v2/resources/9089/versions/latest' => Http::response([
+            'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.21'])),
+            'api.spiget.org/v2/resources/9089/versions/latest*' => Http::response([
                 'name' => '2.22.0',
                 'releaseDate' => 1_780_242_808,
                 'resource' => 9089,
                 'id' => 639442,
             ]),
-            'api.spiget.org/v2/resources/9089' => Http::response([
+            'api.spiget.org/v2/resources/9089?*' => Http::response([
                 'external' => true,
                 'file' => ['type' => 'external', 'externalUrl' => 'https://github.com/EssentialsX/Essentials/releases/tag/2.22.0'],
                 'name' => 'EssentialsX',
@@ -440,8 +477,8 @@ class SpigotSourceTest extends TestCase
                 'premium' => false,
                 'id' => 9089,
             ]),
-            'api.spiget.org/v2/resources/404/versions/latest' => Http::response(['error' => 'resource not found'], 404),
-            'api.spiget.org/v2/resources/404' => Http::response(['error' => 'resource not found'], 404),
+            'api.spiget.org/v2/resources/404/versions/latest*' => Http::response(['error' => 'resource not found'], 404),
+            'api.spiget.org/v2/resources/404?*' => Http::response(['error' => 'resource not found'], 404),
         ]);
 
         $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'latest', [
@@ -464,13 +501,13 @@ class SpigotSourceTest extends TestCase
     public function test_latest_version_without_a_matching_cdn_file_is_not_offered_as_an_update(): void
     {
         Http::fake([
-            'api.spiget.org/v2/resources/50/versions/latest' => Http::response([
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
                 'name' => '1.3.0',
                 'releaseDate' => 1_700_000_000,
                 'id' => 4,
             ]),
             // Spiget has not caught up: its mirrored file is still version 3.
-            'api.spiget.org/v2/resources/50' => Http::response($this->freeSpigetResource(50, 3)),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
         ]);
 
         $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'latest', [
@@ -489,12 +526,12 @@ class SpigotSourceTest extends TestCase
             'api.spiget.org/v2/resources/50/download' => Http::response('', 302, [
                 'Location' => 'https://cdn.spiget.org/file/spiget-resources/50.jar',
             ]),
-            'api.spiget.org/v2/resources/50/versions/latest' => Http::response([
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
                 'name' => '1.2.0',
                 'releaseDate' => 1_700_000_000,
                 'id' => 3,
             ]),
-            'api.spiget.org/v2/resources/50' => Http::response($this->freeSpigetResource(50, 3)),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
         ]);
         $server = Mockery::mock(Server::class);
         $request = new LatestVersionLookupRequest('spigot', '50', '2');
@@ -521,7 +558,7 @@ class SpigotSourceTest extends TestCase
                 ['id' => 3, 'name' => '1.2.0', 'releaseDate' => 1_700_000_000, 'downloads' => 4],
                 ['id' => 2, 'name' => '1.1.0', 'releaseDate' => 1_600_000_000, 'downloads' => 9],
             ]),
-            'api.spiget.org/v2/resources/50' => Http::response($this->freeSpigetResource(50, 3)),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
         ]);
         $server = Mockery::mock(Server::class);
 
@@ -565,7 +602,7 @@ class SpigotSourceTest extends TestCase
             'api.spiget.org/v2/resources/11431/versions*' => Http::response([
                 ['id' => 88, 'name' => '7.0.9', 'releaseDate' => 1, 'downloads' => 1],
             ]),
-            'api.spiget.org/v2/resources/11431' => Http::response([
+            'api.spiget.org/v2/resources/11431?*' => Http::response([
                 'id' => 11431,
                 'name' => 'WorldGuard',
                 'premium' => false,
@@ -618,7 +655,7 @@ class SpigotSourceTest extends TestCase
             'api.spiget.org/v2/resources/42/versions*' => Http::response([
                 ['id' => 5, 'name' => '3.1', 'releaseDate' => 1, 'downloads' => 0],
             ]),
-            'api.spiget.org/v2/resources/42' => Http::response([
+            'api.spiget.org/v2/resources/42?*' => Http::response([
                 'id' => 42,
                 'name' => 'Example',
                 'premium' => false,

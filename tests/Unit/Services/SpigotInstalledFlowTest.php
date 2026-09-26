@@ -136,7 +136,7 @@ class SpigotInstalledFlowTest extends TestCase
                 ['id' => 88, 'name' => '7.0.9', 'releaseDate' => 1_700_000_000, 'downloads' => 1, 'resource' => 11431],
                 ['id' => 87, 'name' => '7.0.8', 'releaseDate' => 1_690_000_000, 'downloads' => 1, 'resource' => 11431],
             ]),
-            'api.spiget.org/v2/resources/11431' => Http::response([
+            'api.spiget.org/v2/resources/11431?*' => Http::response([
                 'id' => 11431,
                 'name' => 'WorldGuard',
                 'premium' => false,
@@ -186,7 +186,7 @@ class SpigotInstalledFlowTest extends TestCase
             'api.spiget.org/v2/resources/11431/versions*' => Http::response([
                 ['id' => 88, 'name' => '7.0.9', 'releaseDate' => 1_700_000_000, 'downloads' => 1],
             ]),
-            'api.spiget.org/v2/resources/11431' => Http::response(['id' => 11431, 'name' => 'WorldGuard']),
+            'api.spiget.org/v2/resources/11431?*' => Http::response(['id' => 11431, 'name' => 'WorldGuard']),
         ]);
         $service = $this->service([
             'worldguard.jar' => new BukkitPluginDescriptor(
@@ -254,12 +254,12 @@ class SpigotInstalledFlowTest extends TestCase
                 'X-Spiget-File-Source' => 'cdn',
                 'Location' => 'https://cdn.spiget.org/file/spiget-resources/50.jar',
             ]),
-            'api.spiget.org/v2/resources/50/versions/latest' => Http::response([
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
                 'name' => '1.2.0',
                 'releaseDate' => 1_700_000_000,
                 'id' => 3,
             ]),
-            'api.spiget.org/v2/resources/50' => Http::response([
+            'api.spiget.org/v2/resources/50?*' => Http::response([
                 'id' => 50,
                 'name' => 'FreePlugin',
                 'premium' => false,
@@ -267,12 +267,12 @@ class SpigotInstalledFlowTest extends TestCase
                 'file' => ['type' => '.jar'],
                 'version' => ['id' => 3],
             ]),
-            'api.spiget.org/v2/resources/9089/versions/latest' => Http::response([
+            'api.spiget.org/v2/resources/9089/versions/latest*' => Http::response([
                 'name' => '2.22.0',
                 'releaseDate' => 1_780_242_808,
                 'id' => 639442,
             ]),
-            'api.spiget.org/v2/resources/9089' => Http::response([
+            'api.spiget.org/v2/resources/9089?*' => Http::response([
                 'id' => 9089,
                 'name' => 'EssentialsX',
                 'premium' => false,
