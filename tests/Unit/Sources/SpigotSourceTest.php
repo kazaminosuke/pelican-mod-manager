@@ -18,8 +18,10 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\SpigotSource;
+use Kazaminosuke\ModManager\Support\CacheProfile;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
+use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Kazaminosuke\ModManager\Support\SpigotFileIndex;
@@ -550,6 +552,51 @@ class SpigotSourceTest extends TestCase
         self::assertSame($first->versions(), $second->versions());
         self::assertSame([], $second->pendingKeys());
         Http::assertSentCount(3);
+    }
+
+    public function test_install_takes_the_cdn_primary_file_from_cached_versions(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'api.spiget.org/v2/resources/50/download' => Http::response('', 302, [
+                'Location' => 'https://cdn.spiget.org/file/spiget-resources/50.jar',
+            ]),
+            'api.spiget.org/v2/resources/50/versions*' => Http::response([
+                ['id' => 3, 'name' => '1.2.0', 'releaseDate' => 1_700_000_000, 'downloads' => 4],
+                ['id' => 2, 'name' => '1.1.0', 'releaseDate' => 1_600_000_000, 'downloads' => 9],
+            ]),
+            'api.spiget.org/v2/resources/50' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+        $server = Mockery::mock(Server::class);
+
+        $versions = $source->getVersions('50', $server, ProjectType::Plugin);
+        $cached = $source->getVersions('https://www.spigotmc.org/resources/freeplugin.50/', $server, ProjectType::Plugin);
+
+        // The page installs versions[0]; it must carry the CDN primary file.
+        self::assertSame(
+            'https://cdn.spiget.org/file/spiget-resources/50.jar',
+            ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
+        );
+        self::assertNull(ProjectPrimaryFile::fromVersion($versions[1]));
+        self::assertSame([], $source->getVersions('50', $server, ProjectType::Mod));
+        Http::assertSentCount(3);
+        self::assertCount(2, $cached);
+    }
+
+    public function test_cache_entries_written_before_the_schema_change_are_ignored(): void
+    {
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldNotReceive('fetch');
+        $sourceCache = new SourceCache($cache, new InstalledOperationManager($cache, app('config')), $executor);
+        $sourceCache->primeMany([[
+            'spec' => new SourceFetchSpec('spigot', 'project', ['project_id' => '42']),
+            'data' => ['project_id' => '42', 'downloads' => 0, 'date_modified' => null],
+        ]], CacheProfile::ProjectMetadata);
+
+        $peeked = (new SpigotSource($sourceCache))->peekProject('42', dispatchOnMiss: false);
+
+        self::assertSame(['data' => null, 'pending' => true, 'retry_delayed' => false], $peeked);
     }
 
     public function test_identification_requires_a_unique_name_and_version_match(): void
