@@ -33,8 +33,9 @@ use Throwable;
 /**
  * Plugin catalog source for SpigotMC resources.
  *
- * Canonical resource metadata comes from the official Spigot Simple API.
- * Search, version listings, and public-file download redirects come from
+ * Canonical per-resource metadata (Installed rows, identification, project
+ * lookups) comes from the official Spigot Simple API. Catalog listings and
+ * search, version listings, and public-file download redirects come from
  * Spiget because those operations are not exposed by the official API.
  * Premium, buyer-only, and externally hosted files are never downloaded.
  */
@@ -56,7 +57,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
     protected const LATEST_VERSION_POOL_SIZE = 4;
 
-    protected const PROJECT_POOL_SIZE = 10;
+    /** The official API answers 429 to bursts of roughly 20 requests. */
+    protected const PROJECT_POOL_SIZE = 4;
 
     /**
      * Part of every Spigot cache key. Bump it when a normalized payload
@@ -403,12 +405,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         ));
     }
 
-    /**
-     * Spiget decides which resources appear on a catalog page and in what
-     * order; each row is then overlaid with the canonical official metadata.
-     *
-     * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
-     */
+    /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
     protected function fetchSearch(SourceFetchSpec $spec, float $timeoutSeconds): array
     {
         $page = max(1, (int) ($spec->arguments['page'] ?? 1));
@@ -447,6 +444,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         $hits = [];
+        $compactIds = [];
         foreach ($resources as $resource) {
             if (!is_array($resource)) {
                 continue;
@@ -458,9 +456,16 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
 
             $normalized = $this->normalizeSpigetProject($resource);
-            if ($normalized !== null) {
-                $hits[] = $normalized;
+            if ($normalized === null) {
+                continue;
             }
+
+            // /resources/for rows carry only id, name, and tested versions.
+            if (!array_key_exists('downloads', $resource)) {
+                $compactIds[] = $normalized['project_id'];
+            }
+
+            $hits[] = $normalized;
         }
 
         $total = (int) $response->header('X-Total');
@@ -470,53 +475,47 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         return [
-            'hits' => $this->withOfficialMetadata($hits, $deadline),
+            'hits' => $this->withSpigetDetails($hits, $compactIds, $deadline),
             'total_hits' => $total,
         ];
     }
 
     /**
-     * Overlay catalog rows with official metadata. Rows from /resources/for
-     * carry only id, name, and tested versions, and Spiget's own statistics
-     * lag behind SpigotMC, so the official API stays the canonical source.
-     * Cached projects are reused; the rest are fetched within the remaining
-     * budget and primed for the Installed tab. A row keeps its Spiget values
-     * when the official lookup does not complete.
+     * Fill compact catalog rows from Spiget's resource endpoint, which is
+     * CDN-cached and serves a page of parallel requests. The official API
+     * rate-limits bursts of that size, so it is kept for per-project
+     * metadata. A row whose detail request fails stays listed with unknown
+     * statistics rather than invented zeros.
      *
      * @param  array<int, array<string, mixed>>  $hits
+     * @param  array<int, string>  $compactIds
      * @return array<int, array<string, mixed>>
      */
-    private function withOfficialMetadata(array $hits, float $deadline): array
+    private function withSpigetDetails(array $hits, array $compactIds, float $deadline): array
     {
-        if ($hits === []) {
-            return [];
-        }
-
-        $projectIds = array_map(static fn (array $hit): string => (string) $hit['project_id'], $hits);
-        $official = [];
-        $missing = [];
-
-        foreach ($this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...)) as $projectId => $peeked) {
-            if (is_array($peeked['data'])) {
-                $official[$projectId] = $peeked['data'];
-            } else {
-                $missing[] = (string) $projectId;
-            }
-        }
-
         $remaining = $deadline - microtime(true);
-        if ($missing !== [] && $remaining > 0.1) {
-            $fetched = $this->fetchProjectsByIdsWithPool($missing, $remaining);
-            $this->primeProjects($fetched);
-            $official += $fetched;
+        if ($compactIds === [] || $remaining <= 0.1) {
+            return $hits;
         }
 
-        return array_map(static function (array $hit) use ($official): array {
-            $project = $official[$hit['project_id']] ?? null;
+        $urls = [];
+        foreach ($compactIds as $projectId) {
+            $urls[$projectId] = self::SPIGET_API."/resources/{$projectId}";
+        }
 
-            return is_array($project)
-                ? array_merge($hit, array_filter($project, static fn (mixed $value): bool => $value !== null))
-                : $hit;
+        try {
+            $responses = $this->pool($urls, $remaining);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return $hits;
+        }
+
+        return array_map(function (array $hit) use ($responses): array {
+            $response = $responses[$hit['project_id']] ?? null;
+            $resource = $response instanceof Response && $response->successful() ? $response->json() : null;
+
+            return is_array($resource) ? ($this->normalizeSpigetProject($resource) ?? $hit) : $hit;
         }, $hits);
     }
 
