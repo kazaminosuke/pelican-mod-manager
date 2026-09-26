@@ -496,15 +496,14 @@ class SpigotSourceTest extends TestCase
         self::assertSame('2026-08-06T19:38:34+00:00', $luckPerms['date_published']);
         self::assertSame('https://cdn.spiget.org/file/spiget-resources/28140.jar', $luckPerms['files'][0]['url']);
         self::assertSame('LuckPerms-5.5.71.jar', $luckPerms['files'][0]['filename']);
-        // External files are reported for update checks but never downloaded.
-        self::assertSame('2.22.0', $result['versions']['9089']['version_number']);
-        self::assertSame([], $result['versions']['9089']['files']);
-        self::assertSame(['404'], $result['unresolved']);
+        // An external file cannot be installed, so it is not offered as an update.
+        self::assertArrayNotHasKey('9089', $result['versions']);
+        self::assertSame(['404', '9089'], $result['unresolved']);
         self::assertArrayNotHasKey('failures', $result);
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/resources/9089/download'));
     }
 
-    public function test_latest_version_without_a_matching_cdn_file_is_not_downloadable(): void
+    public function test_latest_version_without_a_matching_cdn_file_is_not_offered_as_an_update(): void
     {
         Http::fake([
             'api.spiget.org/v2/resources/50/versions/latest' => Http::response([
@@ -520,8 +519,8 @@ class SpigotSourceTest extends TestCase
             'project_ids' => ['50'],
         ]), 2.0);
 
-        self::assertSame('1.3.0', $result['versions']['50']['version_number']);
-        self::assertSame([], $result['versions']['50']['files']);
+        self::assertSame([], $result['versions']);
+        self::assertSame(['50'], $result['unresolved']);
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download'));
     }
 

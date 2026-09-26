@@ -778,13 +778,15 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
         }
 
+        // The Installed tab offers an update for any resolved latest version,
+        // so a premium, external, or not yet mirrored file stays unresolved
+        // rather than surfacing an update that cannot be installed.
         $resolved = [];
         foreach ($candidates as $projectId => $candidate) {
-            $resolved[$projectId] = $this->withCurrentFileUrl(
-                $candidate['version'],
-                $candidate['resource'],
-                $fileUrls[$projectId] ?? null,
-            );
+            $fileUrl = $fileUrls[$projectId] ?? null;
+            if ($fileUrl !== null) {
+                $resolved[$projectId] = $this->withCurrentFileUrl($candidate['version'], $candidate['resource'], $fileUrl);
+            }
         }
 
         return [$resolved, $failures];
