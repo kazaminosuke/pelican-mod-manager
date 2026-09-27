@@ -7,7 +7,33 @@ the complete matching version section and adds the comparison information to the
 
 ### 日本語
 
+#### 変更
+
+- ファイルに変更がないのに「インストール済みファイルのスキャンをキューに追加しました」が繰り返し表示される問題を修正（スキャン結果を 10 分で破棄せず保持し、古くなった結果は表示したままバックグラウンドで静かに再検証。自動スキャンは間隔を空けて再試行し、失敗したスキャンが繰り返しキューに入らないように変更）
+- インストール・更新・削除のたびにフォルダ全体を再スキャンしないように変更（変更したファイルだけをスキャン結果に反映し、インストール時にファイルのサイズ・更新日時を記録して再ダウンロード・再ハッシュを省略）
+- 変更のないフォルダの再検証では、既知のファイルと最近確認済みの未識別ファイルを再ハッシュ・再照会しないように変更（未識別ファイルの再確認は 1 日 1 回、または手動スキャン時）
+- スキャン待ちの間にインストール・更新・削除が「A managed file operation is already running.」で失敗する問題を修正（スキャンは実行開始時にロックを取得し、他の操作中はスケジューラ内で待機せずに後で再実行）
+- 別の操作が実行中の場合は、インストール失敗ではなく既存の「別の操作が実行中」通知を表示するように変更
+- ソースの応答が遅い・一時的に失敗した場合に「No compatible versions found」でインストール・更新に失敗する問題を修正（操作時はキャッシュの短い表示用タイムアウトではなく通常のタイムアウトで取得し、取得失敗を「互換バージョンなし」と扱わない）
+- 最新バージョンにダウンロード可能なファイルがない場合（Spiget 未反映、CurseForge の外部配布無効、JAR のない GitHub Release）、ダウンロード可能な最新バージョンをインストールするように変更
+- Spiget のダウンロード先確認が一時的に失敗しただけで、Spigot のバージョン一覧が「ダウンロード可能なファイルなし」として最大 30 分キャッシュされる問題を修正
+- Spigot / Hangar の最新バージョン確認の失敗が別のプロジェクトとして扱われる問題を修正
+- Mod Manager の外で置き換えられた Spigot プラグイン JAR を、以前のバージョンのまま表示し続ける問題を修正
+
 ### English
+
+#### Changed
+
+- Fixed "Scanning installed files queued" appearing repeatedly although no file changed. Scan results are kept instead of expiring after ten minutes; a stale result stays on screen while a background scan quietly revalidates it, and automatic scans are spaced out so a failing scan is not queued again on every page load
+- Installing, updating, or removing a project no longer rescans the whole folder. Only the changed file is applied to the scan result, and an install records the file's size and modification time so it is not downloaded and hashed again
+- Revalidating an unchanged folder no longer re-hashes or re-identifies tracked files or recently checked unknown files (unknown files are rechecked once a day or on a manual scan)
+- Fixed installs, updates, and removals failing with "A managed file operation is already running." while a scan was waiting for the scheduler. A scan now takes the lock when it starts and, if another operation is running, is retried later instead of waiting inside the scheduler
+- Another operation in progress is now reported with the existing "already running" notice instead of an install failure
+- Fixed installs and updates failing with "No compatible versions found" when a source was slow or briefly failing. Actions fetch versions with the regular timeout instead of the short render budget and never treat a failed fetch as "no compatible versions"
+- When the newest version has no downloadable file (not yet mirrored by Spiget, CurseForge third-party downloads disabled, or a GitHub release without a JAR), the newest downloadable version is installed
+- Fixed a transient Spiget download-lookup failure caching a Spigot version list without any downloadable file for up to 30 minutes
+- Fixed Spigot and Hangar latest-version failures being attributed to the wrong project
+- Fixed a Spigot plugin JAR replaced outside Mod Manager keeping its previous version in the Installed list
 
 ## [0.2.0-pre.2] - 2026-09-26
 

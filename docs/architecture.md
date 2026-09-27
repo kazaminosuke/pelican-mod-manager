@@ -46,6 +46,35 @@ signature has changed (or is absent). A case-insensitive filename collision on d
 that would map to the same tracked entry) deliberately discards any reusable signature and forces
 a fresh hash, since the persisted index cannot safely disambiguate them.
 
+An install or update records the signature Wings lists for the pulled file (a rename keeps size
+and mtime) together with the hashes its source publishes, so a tracked file whose signature still
+matches is trusted without a complete hash set. An unknown file whose signature is unchanged is
+only re-identified once `UNRESOLVED_RECHECK_SECONDS` (one day) has passed since its
+`last_checked_at`, or on an explicit rescan; a lookup that failed transiently is not recorded as
+a check. Revalidating an unchanged folder therefore costs one directory listing and one metadata
+read, with no hashing, upstream lookup, or metadata write.
+
+### Scan result freshness
+
+The last scan result (file count and unknown files) is cached for seven days with a `checked_at`
+timestamp. It is fresh for `InstalledScanResult::FRESH_SECONDS` (ten minutes):
+
+- **fresh** - nothing is queued;
+- **stale** - the result stays on screen and a *background* scan revalidates it. Its state carries
+  `background: true` and is never shown or announced; the table refreshes when it completes;
+- **missing** - a visible scan is queued, as before.
+
+`InstalledOperationManager::dispatchScanIfDue()` throttles automatic scans to one attempt per
+server/type every five minutes, so a scan that keeps failing is not queued on every render. An
+explicit rescan is never throttled, bypasses a fresh result without deleting it, and takes over a
+queued background scan (making it visible) instead of being refused. A scan that saved metadata
+but could not identify every file keeps its result as stale; a transport failure keeps the
+previous result.
+
+Installs, updates (including bulk updates), and removals do not discard the result: the archive
+transaction and the removal action apply the one changed file to it
+(`InstalledProjectService::applyFileChangeToScanResult()`) while they hold the operation lease.
+
 Spigot has no complete upstream hash reverse lookup. After the Modrinth / CurseForge / Hangar hash
 APIs have run, remaining Plugin JARs are identified from `plugin.yml` / `paper-plugin.yml` only
 when the match is unique. High-confidence SHA-256 → resource/version rows are stored in
@@ -65,12 +94,33 @@ not PHP-serialized Plugin job classes, which avoids Laravel queue workers
 holding stale Plugin classes after an update.
 
 Any applicable Mod/Plugin/Datapack manager page starts a missing installed-file
-scan, and active operations are polled every two seconds. Scan lifecycle is
+scan (or a background revalidation of a stale one, see above), and active
+operations are polled every two seconds. Scan lifecycle is
 reported through Filament notifications, while bulk-update progress remains
 inline. `supportsAsyncDispatch()` is checked before starting anything; it means
 "pending work can be persisted for the scheduler", not "Laravel `queue.default`
 is redis/database". If the runner cannot enqueue, the UI shows a warning instead
 of running a Wings scan in a Livewire request.
+
+### Operation lease lifecycle
+
+`InstalledOperationLease` serializes managed file work per server/type. Foreground installs,
+updates, and removals hold it for their duration and wait up to five seconds for it; a lease that
+stays busy raises `InstalledOperationBusyException`, which the page reports with the "already
+running" notice rather than as a failure.
+
+A queued scan does **not** hold the lease while it waits for the scheduler. Duplicate scans are
+coalesced by a pending-dispatch marker (`…:scan:pending`, holding the dispatch token), and the job
+claims the lease only when it starts (`claimQueuedScan()`). If another operation owns the lease,
+the job is released back to the queue after 15 seconds without consuming an attempt
+(`BackgroundJobQueue::release()`), and fails with `scan_busy_timeout` after ten minutes. A queued
+state counts as active only while its marker exists; a running one only while the lease matches.
+Bulk updates and metadata resets still claim their lease at dispatch, because they are explicit
+exclusive operations; a long bulk update refreshes it while progressing.
+
+Scan, bulk-update, and reset jobs are terminal on an exception: `failed()` records the outcome and
+releases the lease and marker, so a queue-level retry could not do any work. Cache warming and
+revalidation jobs remain retried by `mod-manager:process-jobs`.
 
 Scheduled catalog warming (`mod-manager:warm-catalog`) already runs in Pelican's
 short-lived `schedule:run` process, so it executes the warmer inline rather than
@@ -116,6 +166,10 @@ Read paths, roughly fastest-to-most-thorough:
 - **`swrRequired()`** - for authoritative workflows (an Installed scan matching a file's hash) that
   must not silently treat a transport failure as "no match" - a cold failure is rethrown rather
   than swallowed into an empty result.
+- **`swrForAction()`** - for data a user action is about to act on (the version list an install or
+  update picks its file from, via `getVersionsAuthoritatively()`): a fresh hit is used as-is,
+  otherwise the upstream is asked with the background timeout; a stale entry is only the fallback
+  on failure, and a cold failure is rethrown instead of becoming "No compatible versions found".
 
 A failed fetch writes a short-lived failure marker (`failureMarkerTtlSeconds()`, 30s) so a burst of
 requests during an outage doesn't retry the same failing call repeatedly.
