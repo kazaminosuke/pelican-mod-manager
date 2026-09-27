@@ -524,6 +524,70 @@ class SourceCacheTest extends TestCase
         self::assertSame($stale, $result);
     }
 
+    /**
+     * Regression: installs read version lists through the render-path swr(),
+     * whose 1.5s budget and failure marker turned a slow or failing source
+     * into an empty list and a misleading "No compatible versions found".
+     */
+    public function test_action_read_uses_the_background_timeout_and_propagates_a_cold_failure(): void
+    {
+        $cache = $this->cache();
+        $spec = $this->versionsSpec();
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->with($spec, CacheProfile::InstalledLatest->backgroundTimeoutSeconds())
+            ->andThrow(new RuntimeException('timed out'));
+        $executor->shouldNotReceive('emptyResult');
+        $sourceCache = $this->sourceCache($cache, 'database', $executor);
+
+        try {
+            $sourceCache->swrForAction($spec, CacheProfile::InstalledLatest);
+            self::fail('A cold failure must not be reported as an empty version list.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('timed out', $exception->getMessage());
+        }
+
+        // The failure marker keeps a retry burst away from the upstream.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('temporarily unavailable');
+        $sourceCache->swrForAction($spec, CacheProfile::InstalledLatest);
+    }
+
+    public function test_action_read_refreshes_a_stale_entry_and_falls_back_to_it_on_failure(): void
+    {
+        $cache = $this->cache();
+        $spec = $this->versionsSpec();
+        $stale = [['id' => 'v1']];
+        $cache->put($spec->cacheKey(), $this->entry($stale, time() - 1), 300);
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')->once()->andReturn([['id' => 'v2'], ['id' => 'v1']]);
+
+        $fresh = $this->sourceCache($cache, 'database', $executor)
+            ->swrForAction($spec, CacheProfile::InstalledLatest);
+
+        self::assertSame('v2', $fresh[0]['id']);
+
+        $cache->put($spec->cacheKey(), $this->entry($stale, time() - 1), 300);
+        $failing = Mockery::mock(SourceFetchExecutorInterface::class);
+        $failing->shouldReceive('fetch')->once()->andThrow(new RuntimeException('offline'));
+
+        self::assertSame($stale, $this->sourceCache($cache, 'database', $failing)
+            ->swrForAction($spec, CacheProfile::InstalledLatest));
+    }
+
+    public function test_action_read_uses_a_fresh_entry_without_fetching(): void
+    {
+        $cache = $this->cache();
+        $spec = $this->versionsSpec();
+        $cache->put($spec->cacheKey(), $this->entry([['id' => 'v1']], time() + 60), 300);
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldNotReceive('fetch');
+
+        self::assertSame([['id' => 'v1']], $this->sourceCache($cache, 'database', $executor)
+            ->swrForAction($spec, CacheProfile::InstalledLatest));
+    }
+
     public function test_sync_queue_refreshes_stale_data_inline_without_dispatching(): void
     {
         $cache = $this->cache();
@@ -779,6 +843,14 @@ class SourceCacheTest extends TestCase
             'data' => $data,
             'fresh_until' => $freshUntil,
         ];
+    }
+
+    private function versionsSpec(): SourceFetchSpec
+    {
+        return new SourceFetchSpec('modrinth', 'versions', [
+            'project_id' => 'sodium',
+            'game_version' => '1.21.1',
+        ]);
     }
 
     private function spec(): SourceFetchSpec

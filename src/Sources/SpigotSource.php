@@ -278,6 +278,28 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
+     * Spiget's CDN serves only the resource's current file. An install
+     * prefers a fresh version list so the version it records matches the
+     * file it downloads; a stale list is only used when Spiget is down.
+     *
+     * @return array<int, mixed>
+     */
+    public function getVersionsAuthoritatively(string $projectId, Server $server, ProjectType $type): array
+    {
+        $resourceId = $this->normalizeResourceId($projectId);
+        if ($type !== ProjectType::Plugin || $resourceId === null) {
+            return [];
+        }
+
+        $versions = $this->sourceCache->swrForAction(
+            $this->versionsSpec($resourceId, resolveDownloads: true),
+            CacheProfile::InstalledLatest,
+        );
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    /**
      * @param array<int, LatestVersionLookupRequest> $requests
      */
     public function lookupLatestVersions(

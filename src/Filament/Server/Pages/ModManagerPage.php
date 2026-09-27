@@ -44,6 +44,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
+use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
@@ -1875,6 +1876,43 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /**
+     * The newest compatible version an install can actually download.
+     *
+     * The list is read for this action (fresh when possible, never an empty
+     * list standing in for a slow or failing source). Some listed versions
+     * have no downloadable file: Spiget mirrors only a resource's current
+     * JAR, CurseForge authors can disable third-party downloads, and a
+     * GitHub release may carry no JAR. Those are skipped, matching the
+     * update checks, which only offer installable versions.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws Exception
+     */
+    protected function latestInstallableVersion(
+        ProjectSourceInterface $source,
+        string $projectId,
+        Server $server,
+        ProjectType $type,
+    ): array {
+        $versions = $source instanceof SourceFetchAuthoritativeInterface
+            ? $source->getVersionsAuthoritatively($projectId, $server, $type)
+            : $source->getVersions($projectId, $server, $type);
+
+        if ($versions === []) {
+            throw new Exception('No compatible versions found');
+        }
+
+        foreach ($versions as $version) {
+            if (is_array($version) && ProjectPrimaryFile::fromVersion($version) !== null) {
+                return $version;
+            }
+        }
+
+        throw new Exception('No downloadable file found');
+    }
+
+    /**
      * @throws Exception
      */
     protected function validateFilename(string $filename): string
@@ -3114,13 +3152,7 @@ class ModManagerPage extends Page implements HasTable
                                 throw new Exception('Source unavailable');
                             }
 
-                            $versions = $source->getVersions($record['project_id'], $server, $type);
-
-                            if (empty($versions)) {
-                                throw new Exception('No compatible versions found');
-                            }
-
-                            $latestVersion = $versions[0];
+                            $latestVersion = $this->latestInstallableVersion($source, $record['project_id'], $server, $type);
 
                             if (!isset($latestVersion['id'], $latestVersion['version_number'], $latestVersion['files'])) {
                                 throw new Exception('Invalid version data structure');
@@ -3235,12 +3267,7 @@ class ModManagerPage extends Page implements HasTable
 
                             $latestVersion = $this->getCachedLatestVersion($record['project_id'], $sourceKey->value);
                             if ($latestVersion === null) {
-                                $versions = $source->getVersions($record['project_id'], $server, $type);
-                                if (empty($versions)) {
-                                    throw new Exception('No compatible versions found');
-                                }
-
-                                $latestVersion = $versions[0];
+                                $latestVersion = $this->latestInstallableVersion($source, $record['project_id'], $server, $type);
                             }
 
                             if (!isset($latestVersion['id'], $latestVersion['version_number'], $latestVersion['files'])) {

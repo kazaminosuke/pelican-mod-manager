@@ -200,22 +200,35 @@ class GitHubReleasesSource implements BatchLatestVersionSourceInterface, Project
     /** @return array<int, mixed> */
     public function getVersions(string $projectId, Server $server, ProjectType $type): array
     {
+        $spec = $this->releasesSpec($projectId);
+        $versions = $spec !== null ? $this->sourceCache->swr($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    /** @return array<int, mixed> */
+    public function getVersionsAuthoritatively(string $projectId, Server $server, ProjectType $type): array
+    {
+        $spec = $this->releasesSpec($projectId);
+        $versions = $spec !== null ? $this->sourceCache->swrForAction($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    private function releasesSpec(string $projectId): ?SourceFetchSpec
+    {
         $repo = $this->parseIdentifier($projectId);
 
         if ($repo === null) {
-            return [];
+            return null;
         }
 
         [$owner, $name] = array_map('strtolower', $repo);
-        $versions = $this->sourceCache->swr(
-            $this->spec(self::OPERATION_RELEASES, [
-                'name' => $name,
-                'owner' => $owner,
-            ]),
-            CacheProfile::InstalledLatest,
-        );
 
-        return is_array($versions) ? $versions : [];
+        return $this->spec(self::OPERATION_RELEASES, [
+            'name' => $name,
+            'owner' => $owner,
+        ]);
     }
 
     /**

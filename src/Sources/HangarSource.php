@@ -372,14 +372,31 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
     /** @return array<int, mixed> */
     public function getVersions(string $projectId, Server $server, ProjectType $type): array
     {
+        $spec = $this->versionsSpec($projectId, $server, $type);
+        $versions = $spec !== null ? $this->sourceCache->swr($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    /** @return array<int, mixed> */
+    public function getVersionsAuthoritatively(string $projectId, Server $server, ProjectType $type): array
+    {
+        $spec = $this->versionsSpec($projectId, $server, $type);
+        $versions = $spec !== null ? $this->sourceCache->swrForAction($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    private function versionsSpec(string $projectId, Server $server, ProjectType $type): ?SourceFetchSpec
+    {
         if ($type !== ProjectType::Plugin) {
-            return [];
+            return null;
         }
 
         $platform = $this->platformFor($server);
 
         if ($platform === null) {
-            return [];
+            return null;
         }
 
         $params = [
@@ -388,16 +405,11 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             'limit' => self::PAGE_SIZE,
         ];
 
-        $versions = $this->sourceCache->swr(
-            $this->spec(self::OPERATION_VERSIONS, [
-                'project_id' => $projectId,
-                'platform' => $platform,
-                'params' => $params,
-            ]),
-            CacheProfile::InstalledLatest,
-        );
-
-        return is_array($versions) ? $versions : [];
+        return $this->spec(self::OPERATION_VERSIONS, [
+            'project_id' => $projectId,
+            'platform' => $platform,
+            'params' => $params,
+        ]);
     }
 
     /**

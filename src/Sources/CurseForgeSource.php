@@ -426,13 +426,30 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     /** @return array<int, mixed> */
     public function getVersions(string $projectId, Server $server, ProjectType $type): array
     {
+        $spec = $this->versionsSpec($projectId, $server, $type);
+        $versions = $spec !== null ? $this->cache()->swr($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    /** @return array<int, mixed> */
+    public function getVersionsAuthoritatively(string $projectId, Server $server, ProjectType $type): array
+    {
+        $spec = $this->versionsSpec($projectId, $server, $type);
+        $versions = $spec !== null ? $this->cache()->swrForAction($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    private function versionsSpec(string $projectId, Server $server, ProjectType $type): ?SourceFetchSpec
+    {
         $params = $this->getVersionRequestParams($server, $type);
 
         if ($params === null) {
-            return [];
+            return null;
         }
 
-        $versions = $this->cache()->swr(new SourceFetchSpec(
+        return new SourceFetchSpec(
             sourceKey: $this->getKey()->value,
             operation: 'versions',
             arguments: [
@@ -440,9 +457,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
                 'params' => $params,
                 'project_type' => $type->value,
             ],
-        ), CacheProfile::InstalledLatest);
-
-        return is_array($versions) ? $versions : [];
+        );
     }
 
     protected function fetchWarmVersions(

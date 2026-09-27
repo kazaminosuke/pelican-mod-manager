@@ -490,10 +490,27 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
     /** @return array<int, mixed> */
     public function getVersions(string $projectId, Server $server, ProjectType $type): array
     {
+        $spec = $this->versionsSpec($projectId, $server, $type);
+        $versions = $spec !== null ? $this->sourceCache->swr($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    /** @return array<int, mixed> */
+    public function getVersionsAuthoritatively(string $projectId, Server $server, ProjectType $type): array
+    {
+        $spec = $this->versionsSpec($projectId, $server, $type);
+        $versions = $spec !== null ? $this->sourceCache->swrForAction($spec, CacheProfile::InstalledLatest) : [];
+
+        return is_array($versions) ? $versions : [];
+    }
+
+    private function versionsSpec(string $projectId, Server $server, ProjectType $type): ?SourceFetchSpec
+    {
         $minecraftLoader = $type->getLoaderSlug($server);
 
         if (!$minecraftLoader && $type !== ProjectType::ResourcePack) {
-            return [];
+            return null;
         }
 
         $minecraftVersion = MinecraftVersionResolver::resolve($server);
@@ -505,12 +522,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             $arguments['loader'] = $minecraftLoader;
         }
 
-        $versions = $this->sourceCache->swr(
-            $this->spec(self::OPERATION_VERSIONS, $arguments),
-            CacheProfile::InstalledLatest,
-        );
-
-        return is_array($versions) ? $versions : [];
+        return $this->spec(self::OPERATION_VERSIONS, $arguments);
     }
 
     /**

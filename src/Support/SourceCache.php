@@ -132,6 +132,46 @@ final class SourceCache
     }
 
     /**
+     * Read data a user action is about to act on, such as the version list
+     * an install picks its file from.
+     *
+     * A fresh entry is used as-is. Otherwise the upstream is asked with the
+     * background timeout rather than the 1.5s render budget, and a stale
+     * entry is only a fallback when that fails. A cold failure is rethrown so
+     * a slow or failing source is never reported as "no versions".
+     */
+    public function swrForAction(SourceFetchSpec $spec, CacheProfile $profile): mixed
+    {
+        $entry = $this->readEntry($spec);
+
+        if ($entry !== null && $entry['fresh_until'] > time()) {
+            return $entry['data'];
+        }
+
+        if ($this->hasFailureMarker($spec)) {
+            if ($entry !== null) {
+                return $entry['data'];
+            }
+
+            throw new RuntimeException("Source [{$spec->sourceKey}] operation [{$spec->operation}] is temporarily unavailable.");
+        }
+
+        try {
+            return $this->fetchAndStore($spec, $profile, $profile->backgroundTimeoutSeconds());
+        } catch (SourceFetchNotFoundException) {
+            return $this->emptyResult($spec);
+        } catch (Throwable $exception) {
+            $this->markFailure($spec, $profile, $exception);
+
+            if ($entry !== null) {
+                return $entry['data'];
+            }
+
+            throw $exception;
+        }
+    }
+
+    /**
      * Fetch a value that is both authoritative and fresh.
      *
      * This is intentionally narrower than swrRequired(): Installed metadata

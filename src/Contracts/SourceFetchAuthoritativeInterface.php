@@ -2,6 +2,9 @@
 
 namespace Kazaminosuke\ModManager\Contracts;
 
+use App\Models\Server;
+use Kazaminosuke\ModManager\Enums\ProjectType;
+
 /**
  * Source lookups used by authoritative background operations such as an
  * installed-file scan.
@@ -23,4 +26,13 @@ interface SourceFetchAuthoritativeInterface
      * @return array<string, mixed>
      */
     public function findVersionsByHashAuthoritatively(array $hashesByFilename): array;
+
+    /**
+     * The compatible versions an install or update is about to choose from.
+     * Prefers fresh data and throws when the source cannot be reached and
+     * nothing is cached, instead of returning an empty list.
+     *
+     * @return array<int, mixed>
+     */
+    public function getVersionsAuthoritatively(string $projectId, Server $server, ProjectType $type): array;
 }
