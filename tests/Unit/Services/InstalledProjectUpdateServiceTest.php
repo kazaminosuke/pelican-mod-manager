@@ -83,7 +83,6 @@ class InstalledProjectUpdateServiceTest extends TestCase
             ],
         ));
 
-
         $server = new Server();
         $server->forceFill(['id' => 4]);
         $result = (new InstalledProjectUpdateService($projects, $archives, $versions))

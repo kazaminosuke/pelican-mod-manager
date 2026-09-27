@@ -78,7 +78,6 @@ final class InstalledProjectUpdateService
 
         // Each archive transaction has already applied its file change to
         // the cached scan result, so a bulk update needs no folder rescan.
-
         return [
             'total' => $total,
             'updated' => $updated,
