@@ -3,9 +3,9 @@
 namespace Kazaminosuke\ModManager\Support;
 
 use Closure;
-use Exception;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
 
 /**
  * Atomic exclusive lease for mutating installed-file operations on one
@@ -36,6 +36,11 @@ final class InstalledOperationLease
      * Owners release early on success or failure; this is crash recovery.
      */
     public const TTL_SECONDS = 1200;
+
+    /** Wait a foreground install/update/removal allows for a busy lease. */
+    public const FOREGROUND_WAIT_SECONDS = 5.0;
+
+    private const WAIT_INTERVAL_MICROSECONDS = 250_000;
 
     public function __construct(
         private readonly CacheRepository $cache,
@@ -185,16 +190,32 @@ final class InstalledOperationLease
     }
 
     /**
+     * Run a foreground operation under the lease. A short wait lets an
+     * install that races a brief background scan succeed instead of failing.
+     *
      * @template T
      * @param  Closure(): T  $callback
      * @return T
+     *
+     * @throws InstalledOperationBusyException when the lease stays held
      */
-    public function run(int $serverId, ProjectType $type, string $operation, Closure $callback): mixed
-    {
+    public function run(
+        int $serverId,
+        ProjectType $type,
+        string $operation,
+        Closure $callback,
+        float $waitSeconds = 0.0,
+    ): mixed {
+        $deadline = microtime(true) + max(0.0, $waitSeconds);
         $token = $this->tryAcquire($serverId, $type, $operation);
 
+        while ($token === null && microtime(true) < $deadline) {
+            usleep(self::WAIT_INTERVAL_MICROSECONDS);
+            $token = $this->tryAcquire($serverId, $type, $operation);
+        }
+
         if ($token === null) {
-            throw new Exception('A managed file operation is already running.');
+            throw new InstalledOperationBusyException();
         }
 
         try {

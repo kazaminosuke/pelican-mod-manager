@@ -103,6 +103,25 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
         }
     }
 
+    public function release(int|string $id, int $delaySeconds): void
+    {
+        if (!$this->tableReady()) {
+            return;
+        }
+
+        try {
+            ModManagerBackgroundJob::query()
+                ->whereKey($id)
+                ->where('attempts', '>', 0)
+                ->decrement('attempts', 1, [
+                    'reserved_at' => null,
+                    'available_at' => now()->addSeconds(max(0, $delaySeconds)),
+                ]);
+        } catch (Throwable) {
+            // The stale-reservation reclaim path will pick the row up later.
+        }
+    }
+
     /**
      * @param  array<string, mixed>  $payload
      */

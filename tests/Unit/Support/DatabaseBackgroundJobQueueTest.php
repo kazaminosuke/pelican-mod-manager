@@ -74,4 +74,33 @@ class DatabaseBackgroundJobQueueTest extends TestCase
         self::assertSame($claimed['id'], $retried['id']);
         self::assertSame(2, $retried['attempts']);
     }
+
+    public function test_release_requeues_the_job_without_consuming_an_attempt(): void
+    {
+        $queue = new DatabaseBackgroundJobQueue();
+        $queue->push(BackgroundJob::SCAN, ['server_id' => 1]);
+        $claimed = $queue->claim();
+
+        self::assertIsArray($claimed);
+        self::assertSame(1, $claimed['attempts']);
+
+        $queue->release($claimed['id'], 0);
+        $released = $queue->claim();
+
+        self::assertIsArray($released);
+        self::assertSame($claimed['id'], $released['id']);
+        self::assertSame(1, $released['attempts']);
+    }
+
+    public function test_released_job_waits_for_its_delay(): void
+    {
+        $queue = new DatabaseBackgroundJobQueue();
+        $queue->push(BackgroundJob::SCAN, ['server_id' => 1]);
+        $claimed = $queue->claim();
+
+        self::assertIsArray($claimed);
+        $queue->release($claimed['id'], 60);
+
+        self::assertNull($queue->claim());
+    }
 }

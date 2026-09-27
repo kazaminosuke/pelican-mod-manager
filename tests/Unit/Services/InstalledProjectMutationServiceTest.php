@@ -9,6 +9,7 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
@@ -64,11 +65,11 @@ class InstalledProjectMutationServiceTest extends TestCase
         $archives->shouldNotReceive('installOrUpdate');
         $leases = new InstalledOperationLease(new Repository(new ArrayStore()));
         $leases->tryAcquire(9, ProjectType::Mod, InstalledOperationLease::OPERATION_SCAN);
-        $service = new InstalledProjectMutationService($archives, $leases);
+        $service = new InstalledProjectMutationService($archives, $leases, leaseWaitSeconds: 0.0);
         $server = new Server();
         $server->forceFill(['id' => 9]);
 
-        $this->expectException(Exception::class);
+        $this->expectException(InstalledOperationBusyException::class);
         $this->expectExceptionMessage('A managed file operation is already running.');
 
         $service->installOrUpdate(

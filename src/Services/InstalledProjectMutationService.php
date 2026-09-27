@@ -20,6 +20,7 @@ final class InstalledProjectMutationService
     public function __construct(
         private readonly InstalledArchiveTransaction $archives,
         private readonly InstalledOperationLease $leases,
+        private readonly float $leaseWaitSeconds = InstalledOperationLease::FOREGROUND_WAIT_SECONDS,
     ) {}
 
     /**
@@ -69,6 +70,7 @@ final class InstalledProjectMutationService
 
                 return (string) $file['filename'];
             },
+            $this->leaseWaitSeconds,
         );
     }
 }

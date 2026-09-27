@@ -17,47 +17,33 @@ use Throwable;
 
 final class ScanInstalledProjects
 {
-    public int $tries = 5;
+    /**
+     * How long a queued scan waits for another managed operation (an
+     * install, update, removal, bulk update, or reset) before it gives up.
+     */
+    public const BUSY_TIMEOUT_SECONDS = 600;
 
-    public int $uniqueFor = 600;
+    /** Delay before a scan that found the lease busy is claimed again. */
+    public const BUSY_RETRY_SECONDS = 15;
 
-    private int $attemptNumber = 1;
-
-    private bool $retryRequested = false;
+    private ?int $releaseAfterSeconds = null;
 
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
-        public readonly string $leaseToken,
+        private ?string $leaseToken = null,
         public readonly bool $force = false,
         public readonly ?int $actorUserId = null,
+        public readonly ?string $dispatchToken = null,
     ) {}
 
-    public function setAttemptNumber(int $attempt): void
+    /**
+     * Seconds after which the queue should start this job again, or null
+     * once the job reached a terminal outcome.
+     */
+    public function releaseAfterSeconds(): ?int
     {
-        $this->attemptNumber = max(1, $attempt);
-        $this->retryRequested = false;
-    }
-
-    public function attempts(): int
-    {
-        return $this->attemptNumber;
-    }
-
-    public function retryRequested(): bool
-    {
-        return $this->retryRequested;
-    }
-
-    /** @return array<int, int> */
-    public function backoff(): array
-    {
-        return [5, 15, 30, 60];
-    }
-
-    public function uniqueId(): string
-    {
-        return "mod-manager:scan:{$this->serverId}:{$this->projectType}";
+        return $this->releaseAfterSeconds;
     }
 
     public function handle(
@@ -68,18 +54,64 @@ final class ScanInstalledProjects
         CacheRepository $cache,
         ProjectOperationAuthorizer $authorizer,
     ): void {
+        $this->releaseAfterSeconds = null;
         $type = ProjectType::tryFrom($this->projectType);
 
         if (!$type) {
             return;
         }
 
-        // A lease can expire while a retry sleeps. An older job
-        // must never perform work under a replacement owner's lease.
-        if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
+        $force = $this->force;
+
+        if ($this->dispatchToken === null) {
+            // A job queued by an older release held its lease from dispatch.
+            // It must never run under a replacement owner's lease.
+            if ($this->leaseToken !== null && $leases->refresh($this->serverId, $type, $this->leaseToken)) {
+                $this->scan($fileRepository, $service, $operations, $leases, $cache, $authorizer, $type, $force);
+            }
+
             return;
         }
 
+        $claim = $operations->claimQueuedScan($this->serverId, $type, $this->dispatchToken);
+
+        if ($claim['status'] === 'stale') {
+            return;
+        }
+
+        try {
+            if ($claim['status'] === 'busy') {
+                $this->waitForLease($operations, $type, $claim['state']?->secondsSinceQueued() ?? 0);
+
+                return;
+            }
+
+            $this->leaseToken = $claim['lease_token'];
+            // An explicit rescan may have taken over this queued dispatch.
+            $force = $force || ($claim['state']?->result['force'] ?? false) === true;
+            $this->scan($fileRepository, $service, $operations, $leases, $cache, $authorizer, $type, $force);
+        } finally {
+            if ($this->releaseAfterSeconds === null) {
+                $operations->releasePendingDispatch(
+                    $this->serverId,
+                    $type,
+                    InstalledOperationManager::OPERATION_SCAN,
+                    $this->dispatchToken,
+                );
+            }
+        }
+    }
+
+    private function scan(
+        DaemonFileRepository $fileRepository,
+        InstalledProjectService $service,
+        InstalledOperationManager $operations,
+        InstalledOperationLease $leases,
+        CacheRepository $cache,
+        ProjectOperationAuthorizer $authorizer,
+        ProjectType $type,
+        bool $force,
+    ): void {
         /** @var Server|null $server */
         $server = Server::query()->with('egg')->find($this->serverId);
 
@@ -118,34 +150,25 @@ final class ScanInstalledProjects
         );
 
         try {
-            // A released job keeps force=true, so only the first attempt should
-            // invalidate a completed scan produced by another worker.
-            if ($this->force && $this->attempts() <= 1) {
+            if ($force) {
                 $cache->forget($service->getHashScanCacheKey($server, $type));
             }
 
             $result = $service->scanAndImportModsResult($server, $fileRepository, $type);
 
             if (!$result->successful && $result->failure === 'scan_in_progress') {
-                if ($this->attempts() >= $this->tries) {
-                    $operations->fail(
-                        $server,
-                        $type,
-                        InstalledOperationManager::OPERATION_SCAN,
-                        'scan_busy_timeout',
-                        leaseToken: $this->leaseToken,
-                    );
-
-                    return;
+                // Another process holds the scan lock. Give the lease back so
+                // foreground operations are not blocked while this job waits.
+                if ($this->leaseToken !== null) {
+                    $leases->release($this->serverId, $type, $this->leaseToken);
+                    $this->leaseToken = null;
                 }
 
-                $operations->defer(
-                    $server,
+                $this->waitForLease(
+                    $operations,
                     $type,
-                    InstalledOperationManager::OPERATION_SCAN,
-                    ['reason' => 'scan_in_progress'],
+                    $operations->state($server, $type, InstalledOperationManager::OPERATION_SCAN)?->secondsSinceQueued() ?? 0,
                 );
-                $this->retryRequested = true;
 
                 return;
             }
@@ -196,6 +219,32 @@ final class ScanInstalledProjects
         }
     }
 
+    /**
+     * Keep the scan queued while another managed operation owns the lease.
+     * The scheduler starts it again later instead of sleeping in-process.
+     */
+    private function waitForLease(InstalledOperationManager $operations, ProjectType $type, int $waitedSeconds): void
+    {
+        if ($waitedSeconds >= self::BUSY_TIMEOUT_SECONDS) {
+            $operations->fail(
+                $this->serverId,
+                $type,
+                InstalledOperationManager::OPERATION_SCAN,
+                'scan_busy_timeout',
+            );
+
+            return;
+        }
+
+        $operations->defer(
+            $this->serverId,
+            $type,
+            InstalledOperationManager::OPERATION_SCAN,
+            ['reason' => 'operation_busy'],
+        );
+        $this->releaseAfterSeconds = self::BUSY_RETRY_SECONDS;
+    }
+
     public function failed(?Throwable $exception): void
     {
         $type = ProjectType::tryFrom($this->projectType);
@@ -206,24 +255,36 @@ final class ScanInstalledProjects
 
         $container = Container::getInstance();
         $leases = $container->make(InstalledOperationLease::class);
-
-        if (!$leases->owns($this->serverId, $type, $this->leaseToken)) {
-            return;
-        }
-
-        $container->make(InstalledOperationManager::class)->fail(
+        $operations = $container->make(InstalledOperationManager::class);
+        $ownsLease = $this->leaseToken !== null && $leases->owns($this->serverId, $type, $this->leaseToken);
+        $ownsDispatch = $this->dispatchToken !== null && $operations->ownsPendingDispatch(
             $this->serverId,
             $type,
             InstalledOperationManager::OPERATION_SCAN,
-            $exception === null ? 'scan_job_failed' : 'scan_job_exception',
-            leaseToken: $this->leaseToken,
+            $this->dispatchToken,
         );
-    }
 
-    public function retryDelaySeconds(): int
-    {
-        $backoff = $this->backoff();
+        if (!$ownsLease && !$ownsDispatch) {
+            return;
+        }
 
-        return $backoff[min(max(0, $this->attempts() - 1), count($backoff) - 1)];
+        try {
+            $operations->fail(
+                $this->serverId,
+                $type,
+                InstalledOperationManager::OPERATION_SCAN,
+                $exception === null ? 'scan_job_failed' : 'scan_job_exception',
+                leaseToken: $ownsLease ? $this->leaseToken : null,
+            );
+        } finally {
+            if ($this->dispatchToken !== null) {
+                $operations->releasePendingDispatch(
+                    $this->serverId,
+                    $type,
+                    InstalledOperationManager::OPERATION_SCAN,
+                    $this->dispatchToken,
+                );
+            }
+        }
     }
 }

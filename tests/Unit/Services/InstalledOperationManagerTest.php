@@ -96,18 +96,16 @@ class InstalledOperationManagerTest extends TestCase
 
     public function test_async_runner_persists_queued_state_and_starts_a_scan_process(): void
     {
-        $leaseToken = null;
+        $dispatchToken = null;
         $cache = Mockery::mock(CacheRepository::class);
         $cache->shouldReceive('get')->twice()->andReturnNull();
         $cache->shouldReceive('add')
             ->once()
-            ->withArgs(function (string $key, array $payload, int $ttl) use (&$leaseToken): bool {
-                $leaseToken = $payload['token'] ?? null;
+            ->withArgs(function (string $key, string $token, int $ttl) use (&$dispatchToken): bool {
+                $dispatchToken = $token;
 
-                return $key === 'mod_manager_op_lease:v1:42:mod'
-                    && $payload['operation'] === 'scan'
-                    && is_string($leaseToken)
-                    && $ttl === 1200;
+                return $key === 'mod_manager_operation:v1:42:mod:scan:pending'
+                    && $ttl === InstalledOperationLease::TTL_SECONDS;
             })
             ->andReturnTrue();
         $cache->shouldReceive('put')
@@ -115,7 +113,8 @@ class InstalledOperationManagerTest extends TestCase
             ->withArgs(fn (string $key, array $payload): bool => $key === 'mod_manager_operation:v1:42:mod:scan'
                 && $payload['status'] === InstalledOperationState::STATUS_QUEUED
                 && $payload['result']['force'] === true
-                && $payload['result']['actor_user_id'] === 7);
+                && $payload['result']['actor_user_id'] === 7
+                && $payload['result']['background'] === false);
         $config = Mockery::mock(ConfigRepository::class);
         $runner = PluginBackgroundRunner::fake();
 
@@ -129,10 +128,159 @@ class InstalledOperationManagerTest extends TestCase
         self::assertSame(BackgroundJob::SCAN, $runner->spawned[0]['type']);
         self::assertSame(42, $runner->spawned[0]['payload']['server_id']);
         self::assertSame(ProjectType::Mod->value, $runner->spawned[0]['payload']['project_type']);
-        self::assertSame($leaseToken, $runner->spawned[0]['payload']['lease_token']);
+        self::assertSame($dispatchToken, $runner->spawned[0]['payload']['dispatch_token']);
+        self::assertArrayNotHasKey('lease_token', $runner->spawned[0]['payload']);
         self::assertTrue($runner->spawned[0]['payload']['force']);
         self::assertSame(7, $runner->spawned[0]['payload']['actor_user_id']);
         self::assertStringStartsNotWith('O:', PluginBackgroundRunner::encodePayload($runner->spawned[0]['payload']));
+    }
+
+    /**
+     * Regression: a scan waiting for `schedule:run` used to hold the
+     * installed-file lease, so installing a second project right after the
+     * first one (which queues a scan) failed with "A managed file operation
+     * is already running." until the scheduler picked the scan up.
+     */
+    public function test_queued_scan_does_not_block_foreground_operations(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $leases = new InstalledOperationLease($cache);
+        $manager = new InstalledOperationManager(
+            $cache,
+            Mockery::mock(ConfigRepository::class),
+            $leases,
+            PluginBackgroundRunner::fake(),
+        );
+
+        self::assertTrue($manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7)['dispatched']);
+        self::assertFalse($leases->isHeld(42, ProjectType::Mod));
+
+        $installed = $leases->run(
+            42,
+            ProjectType::Mod,
+            InstalledOperationLease::OPERATION_INSTALL,
+            fn (): string => 'installed',
+        );
+
+        self::assertSame('installed', $installed);
+    }
+
+    public function test_queued_scan_is_coalesced_until_its_job_finishes(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $leases = new InstalledOperationLease($cache);
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), $leases, $runner);
+
+        self::assertTrue($manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7)['dispatched']);
+        $second = $manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7);
+        $bulk = $manager->dispatchBulkUpdate(42, ProjectType::Mod);
+
+        self::assertFalse($second['dispatched']);
+        self::assertSame('already_active', $second['reason']);
+        self::assertFalse($bulk['dispatched']);
+        self::assertSame('already_active', $bulk['reason']);
+        self::assertCount(1, $runner->spawned);
+
+        $token = $runner->spawned[0]['payload']['dispatch_token'];
+        $claim = $manager->claimQueuedScan(42, ProjectType::Mod, $token);
+        self::assertSame('claimed', $claim['status']);
+        $manager->complete(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN, leaseToken: $claim['lease_token']);
+        $manager->releasePendingDispatch(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN, $token);
+
+        self::assertFalse($leases->isHeld(42, ProjectType::Mod));
+        self::assertTrue($manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7)['dispatched']);
+        self::assertCount(2, $runner->spawned);
+    }
+
+    public function test_claiming_a_queued_scan_waits_for_a_busy_lease_and_rejects_stale_dispatches(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $leases = new InstalledOperationLease($cache);
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), $leases, $runner);
+        $manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7);
+        $token = $runner->spawned[0]['payload']['dispatch_token'];
+        $installToken = $leases->tryAcquire(42, ProjectType::Mod, InstalledOperationLease::OPERATION_INSTALL);
+        self::assertNotNull($installToken);
+
+        self::assertSame('busy', $manager->claimQueuedScan(42, ProjectType::Mod, $token)['status']);
+        self::assertSame('stale', $manager->claimQueuedScan(42, ProjectType::Mod, 'another-dispatch')['status']);
+        // The queued scan stays current while it waits for the install.
+        self::assertTrue($manager->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN)?->isActive());
+        self::assertSame('already_active', $manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7)['reason']);
+
+        $leases->release(42, ProjectType::Mod, $installToken);
+        $claim = $manager->claimQueuedScan(42, ProjectType::Mod, $token);
+
+        self::assertSame('claimed', $claim['status']);
+        self::assertSame(InstalledOperationLease::OPERATION_SCAN, $leases->currentOperation(42, ProjectType::Mod));
+    }
+
+    public function test_lost_queued_scan_is_not_reported_as_active(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $manager = new InstalledOperationManager(
+            $cache,
+            Mockery::mock(ConfigRepository::class),
+            new InstalledOperationLease($cache),
+            PluginBackgroundRunner::fake(),
+        );
+        $manager->queue(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN);
+
+        // No pending dispatch and no lease: the job that owned this state is gone.
+        $snapshot = $manager->installedTabCacheSnapshot(42, ProjectType::Mod, 'scan-result');
+
+        self::assertNull($snapshot['scan']);
+        self::assertTrue($manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7)['dispatched']);
+    }
+
+    public function test_explicit_scan_surfaces_a_queued_background_scan(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager(
+            $cache,
+            Mockery::mock(ConfigRepository::class),
+            new InstalledOperationLease($cache),
+            $runner,
+        );
+
+        $background = $manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7, background: true);
+        self::assertTrue($background['state']?->isBackground());
+
+        $explicit = $manager->dispatchScan(42, ProjectType::Mod, force: true, actorUserId: 7);
+
+        self::assertTrue($explicit['dispatched']);
+        self::assertFalse($explicit['state']?->isBackground());
+        self::assertTrue($explicit['state']?->result['force']);
+        self::assertCount(1, $runner->spawned);
+    }
+
+    public function test_terminal_state_keeps_the_background_flag(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager(
+            $cache,
+            Mockery::mock(ConfigRepository::class),
+            new InstalledOperationLease($cache),
+            $runner,
+        );
+        $manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7, background: true);
+        $claim = $manager->claimQueuedScan(42, ProjectType::Mod, $runner->spawned[0]['payload']['dispatch_token']);
+
+        $state = $manager->fail(
+            42,
+            ProjectType::Mod,
+            InstalledOperationManager::OPERATION_SCAN,
+            'hash_lookup_partial_failure',
+            ['disk_file_count' => 3],
+            $claim['lease_token'],
+        );
+
+        self::assertTrue($state->isBackground());
+        self::assertSame(3, $state->result['disk_file_count']);
     }
 
     public function test_async_bulk_update_persists_queued_state_and_starts_a_process(): void

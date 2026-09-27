@@ -15,6 +15,8 @@ final class BulkUpdateInstalledProjects
 {
     public int $uniqueFor = 1200;
 
+    private const LEASE_REFRESH_SECONDS = 60;
+
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
@@ -63,12 +65,22 @@ final class BulkUpdateInstalledProjects
             InstalledOperationManager::OPERATION_BULK_UPDATE,
         );
 
+        $leaseRefreshedAt = microtime(true);
+
         try {
             $result = $updates->updateAll(
                 $server,
                 $fileRepository,
                 $type,
-                function (int $progress, int $total) use ($operations, $server, $type): void {
+                function (int $progress, int $total) use ($operations, $leases, $server, $type, &$leaseRefreshedAt): void {
+                    // A large bulk update can outlive the lease's crash-recovery
+                    // TTL. Renew it while work is still progressing so the final
+                    // complete() is not rejected as coming from a stale owner.
+                    if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
+                        $leases->refresh($this->serverId, $type, $this->leaseToken);
+                        $leaseRefreshedAt = microtime(true);
+                    }
+
                     $operations->progress(
                         $server,
                         $type,

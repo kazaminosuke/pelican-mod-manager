@@ -48,6 +48,7 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
 use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
 use Kazaminosuke\ModManager\Filament\Filters\CatalogSelectFilter;
@@ -2005,6 +2006,7 @@ class ModManagerPage extends Page implements HasTable
                     $versionData,
                     $primaryFile,
                 ),
+                InstalledOperationLease::FOREGROUND_WAIT_SECONDS,
             );
 
             $this->forgetInstalledModsMetadata();
@@ -3042,17 +3044,11 @@ class ModManagerPage extends Page implements HasTable
                                                 ->success()
                                                 ->send();
                                         } catch (Exception $exception) {
-                                            report($exception);
-
                                             $this->forgetInstalledModsMetadata();
                                             $this->forgetVersionCaches();
                                             $this->flushCachedTableRecords();
 
-                                            Notification::make()
-                                                ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
-                                                ->body(trans('pelican-mod-manager::strings.notifications.install_failed_body'))
-                                                ->danger()
-                                                ->send();
+                                            $this->notifyProjectOperationFailure($exception, 'install_failed');
                                         }
                                     });
                                 $sectionIcon = null;
@@ -3138,16 +3134,10 @@ class ModManagerPage extends Page implements HasTable
                                 ->success()
                                 ->send();
                         } catch (Exception $exception) {
-                            report($exception);
-
                             $this->forgetInstalledModsMetadata();
                             $this->forgetVersionCaches();
 
-                            Notification::make()
-                                ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
-                                ->body(trans('pelican-mod-manager::strings.notifications.install_failed_body'))
-                                ->danger()
-                                ->send();
+                            $this->notifyProjectOperationFailure($exception, 'install_failed');
                         }
                     }),
                 CatalogRowAction::compact('update', 'warning')
@@ -3256,16 +3246,10 @@ class ModManagerPage extends Page implements HasTable
                                 ->success()
                                 ->send();
                         } catch (Exception $exception) {
-                            report($exception);
-
                             $this->forgetInstalledModsMetadata();
                             $this->forgetVersionCaches();
 
-                            Notification::make()
-                                ->title(trans('pelican-mod-manager::strings.notifications.update_failed'))
-                                ->body(trans('pelican-mod-manager::strings.notifications.update_failed_body'))
-                                ->danger()
-                                ->send();
+                            $this->notifyProjectOperationFailure($exception, 'update_failed');
                         }
                     }),
                 CatalogRowAction::compact('installed', 'success')
@@ -3337,6 +3321,7 @@ class ModManagerPage extends Page implements HasTable
                                 function () use ($server, $fileRepository, $record, $type): void {
                                     $this->performUninstall($server, $fileRepository, $record, $type);
                                 },
+                                InstalledOperationLease::FOREGROUND_WAIT_SECONDS,
                             );
                             $this->warmInstalledStateIfMissing();
 
@@ -3348,8 +3333,6 @@ class ModManagerPage extends Page implements HasTable
                                 ->success()
                                 ->send();
                         } catch (Exception $exception) {
-                            report($exception);
-
                             $this->forgetInstalledModsMetadata();
                             $this->forgetVersionCaches();
 
@@ -3357,11 +3340,7 @@ class ModManagerPage extends Page implements HasTable
                                 $this->flushCachedTableRecords();
                             }
 
-                            Notification::make()
-                                ->title(trans('pelican-mod-manager::strings.notifications.uninstall_failed'))
-                                ->body(trans('pelican-mod-manager::strings.notifications.uninstall_failed_body'))
-                                ->danger()
-                                ->send();
+                            $this->notifyProjectOperationFailure($exception, 'uninstall_failed');
                         }
                     }),
             ]);
@@ -4074,13 +4053,7 @@ class ModManagerPage extends Page implements HasTable
                             ->success()
                             ->send();
                     } catch (Exception $exception) {
-                        report($exception);
-
-                        Notification::make()
-                            ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
-                            ->body(trans('pelican-mod-manager::strings.notifications.install_failed_body'))
-                            ->danger()
-                            ->send();
+                        $this->notifyProjectOperationFailure($exception, 'install_failed');
                     }
                 })
                 ->visible(fn () => $githubAvailable && $this->canManageInstallOrUpdate($server)),
@@ -4865,6 +4838,30 @@ class ModManagerPage extends Page implements HasTable
 
         // Successful scans are deliberately represented by the short-lived
         // Installed-tab status instead of a global Filament notification.
+    }
+
+    /**
+     * Another managed operation owning the lease is normal duplicate
+     * prevention. Show it as such, and report only genuine failures.
+     */
+    protected function notifyProjectOperationFailure(Exception $exception, string $notificationKey): void
+    {
+        if ($exception instanceof InstalledOperationBusyException) {
+            Notification::make()
+                ->title(trans('pelican-mod-manager::strings.operations.already_active'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        report($exception);
+
+        Notification::make()
+            ->title(trans("pelican-mod-manager::strings.notifications.{$notificationKey}"))
+            ->body(trans("pelican-mod-manager::strings.notifications.{$notificationKey}_body"))
+            ->danger()
+            ->send();
     }
 
     /**

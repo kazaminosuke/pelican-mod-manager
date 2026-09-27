@@ -32,14 +32,25 @@ final class BackgroundJob
     public const REVALIDATE = 'revalidate';
 
     /**
+     * Run one job. A non-null return value asks the queue to start the same
+     * job again after that many seconds without counting a failed attempt.
+     *
+     * Jobs that own an installed-file operation lease (scan, bulk update,
+     * metadata reset) are terminal on an exception: failed() records the
+     * outcome and releases the lease, so a queue-level retry could never do
+     * any work. Idempotent cache jobs still rethrow and use queue retries.
+     *
      * @param  array<string, mixed>  $payload
      */
-    public static function execute(string $type, array $payload): void
+    public static function execute(string $type, array $payload): ?int
     {
         unset($payload['_unique_key']);
 
+        if ($type === self::SCAN) {
+            return self::executeScan($payload);
+        }
+
         match ($type) {
-            self::SCAN => self::executeScan($payload),
             self::BULK_UPDATE => self::executeBulkUpdate($payload),
             self::RESET_METADATA => self::executeResetMetadata($payload),
             self::WARM_SEARCH => self::executeWarmSearch($payload),
@@ -47,41 +58,41 @@ final class BackgroundJob
             self::REVALIDATE => self::executeRevalidate($payload),
             default => throw new InvalidArgumentException("Unknown Mod Manager background job [{$type}]."),
         };
+
+        return null;
     }
 
     /**
      * @param  array<string, mixed>  $payload
      */
-    private static function executeScan(array $payload): void
+    private static function executeScan(array $payload): ?int
     {
+        $dispatchToken = self::optionalString($payload, 'dispatch_token');
+        $leaseToken = self::optionalString($payload, 'lease_token');
+
+        if ($dispatchToken === null && $leaseToken === null) {
+            throw new InvalidArgumentException('Background job payload missing [dispatch_token].');
+        }
+
         $job = new ScanInstalledProjects(
             serverId: self::int($payload, 'server_id'),
             projectType: self::string($payload, 'project_type'),
-            leaseToken: self::string($payload, 'lease_token'),
+            leaseToken: $leaseToken,
             force: (bool) ($payload['force'] ?? false),
             actorUserId: isset($payload['actor_user_id']) ? (int) $payload['actor_user_id'] : null,
+            dispatchToken: $dispatchToken,
         );
 
         try {
-            for ($attempt = 1; $attempt <= $job->tries; $attempt++) {
-                $job->setAttemptNumber($attempt);
-                Container::getInstance()->call([$job, 'handle']);
-
-                if (!$job->retryRequested()) {
-                    return;
-                }
-
-                if ($attempt >= $job->tries) {
-                    return;
-                }
-
-                sleep($job->retryDelaySeconds());
-            }
+            Container::getInstance()->call([$job, 'handle']);
         } catch (Throwable $exception) {
+            self::reportQuietly($exception);
             $job->failed($exception);
 
-            throw $exception;
+            return null;
         }
+
+        return $job->releaseAfterSeconds();
     }
 
     /**
@@ -98,9 +109,8 @@ final class BackgroundJob
         try {
             Container::getInstance()->call([$job, 'handle']);
         } catch (Throwable $exception) {
+            self::reportQuietly($exception);
             $job->failed($exception);
-
-            throw $exception;
         }
     }
 
@@ -126,9 +136,8 @@ final class BackgroundJob
         try {
             Container::getInstance()->call([$job, 'handle']);
         } catch (Throwable $exception) {
+            self::reportQuietly($exception);
             $job->failed($exception);
-
-            throw $exception;
         }
     }
 
@@ -197,6 +206,25 @@ final class BackgroundJob
         );
 
         Container::getInstance()->call([$job, 'handle']);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private static function optionalString(array $payload, string $key): ?string
+    {
+        $value = $payload[$key] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    private static function reportQuietly(Throwable $exception): void
+    {
+        try {
+            report($exception);
+        } catch (Throwable) {
+            // Unit tests and a missing log binding must not hide the outcome.
+        }
     }
 
     /**

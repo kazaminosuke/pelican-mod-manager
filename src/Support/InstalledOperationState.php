@@ -190,6 +190,49 @@ final class InstalledOperationState
         );
     }
 
+    /**
+     * Replace the result while keeping the lifecycle status and timestamps.
+     *
+     * @param array<string, mixed> $result
+     */
+    public function withResult(array $result): self
+    {
+        return new self(
+            status: $this->status,
+            operation: $this->operation,
+            serverId: $this->serverId,
+            projectType: $this->projectType,
+            progress: $this->progress,
+            total: $this->total,
+            result: self::sanitizeResult($result),
+            error: $this->error,
+            queuedAt: $this->queuedAt,
+            startedAt: $this->startedAt,
+            finishedAt: $this->finishedAt,
+        );
+    }
+
+    /**
+     * A background revalidation refreshes data the page already shows. It is
+     * not user-requested work, so its lifecycle stays out of the UI.
+     */
+    public function isBackground(): bool
+    {
+        return ($this->result['background'] ?? false) === true;
+    }
+
+    /** Seconds since this operation was first queued. */
+    public function secondsSinceQueued(?DateTimeImmutable $now = null): int
+    {
+        $queuedAt = DateTimeImmutable::createFromFormat(DATE_ATOM, $this->queuedAt);
+
+        if ($queuedAt === false) {
+            return 0;
+        }
+
+        return max(0, ($now ?? new DateTimeImmutable())->getTimestamp() - $queuedAt->getTimestamp());
+    }
+
     public function isActive(): bool
     {
         return in_array($this->status, [self::STATUS_QUEUED, self::STATUS_RUNNING], true);

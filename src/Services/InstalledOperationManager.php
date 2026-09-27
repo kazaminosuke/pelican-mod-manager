@@ -25,6 +25,12 @@ final class InstalledOperationManager
     private const CACHE_TTL_MINUTES = 120;
 
     /**
+     * Crash recovery for a queued job whose row was lost. It matches the
+     * operation lease TTL; a started job releases the marker itself.
+     */
+    private const PENDING_DISPATCH_TTL_SECONDS = InstalledOperationLease::TTL_SECONDS;
+
+    /**
      * Persist running progress at most this often. The first update and the
      * terminal complete/fail write are always flushed immediately.
      */
@@ -105,6 +111,15 @@ final class InstalledOperationManager
      * The manager never falls back to synchronous execution. Callers can use
      * the reason to show an operator-facing queue configuration warning.
      *
+     * A queued scan does not hold the installed-file operation lease. The
+     * job only claims that lease once `schedule:run` starts it, so installs,
+     * updates, and removals stay available while a scan waits in the queue.
+     * Duplicate scans are coalesced by a pending-dispatch marker instead.
+     *
+     * A background scan revalidates data the page already shows and is kept
+     * out of the UI. An explicit request for a scan that is already queued in
+     * the background makes that scan visible instead of being refused.
+     *
      * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'missing_actor'|'unsupported_type', state: ?InstalledOperationState}
      */
     public function dispatchScan(
@@ -112,6 +127,7 @@ final class InstalledOperationManager
         ProjectType $projectType,
         bool $force = false,
         ?int $actorUserId = null,
+        bool $background = false,
     ): array {
         $serverId = $this->serverId($server);
 
@@ -134,6 +150,20 @@ final class InstalledOperationManager
         }
 
         if ($current?->isActive()) {
+            if (!$background
+                && $current->operation === self::OPERATION_SCAN
+                && $current->isBackground()) {
+                return [
+                    'dispatched' => true,
+                    'reason' => null,
+                    'state' => $this->put($current->withResult([
+                        ...$current->result,
+                        'background' => false,
+                        'force' => $force || ($current->result['force'] ?? false) === true,
+                    ])),
+                ];
+            }
+
             return [
                 'dispatched' => false,
                 'reason' => 'already_active',
@@ -149,13 +179,10 @@ final class InstalledOperationManager
             ];
         }
 
-        $leaseToken = $this->leases->tryAcquire(
-            $serverId,
-            $projectType,
-            InstalledOperationLease::OPERATION_SCAN,
-        );
+        $dispatchToken = bin2hex(random_bytes(16));
+        $pendingKey = $this->pendingKey($serverId, $projectType, self::OPERATION_SCAN);
 
-        if ($leaseToken === null) {
+        if (!$this->cache->add($pendingKey, $dispatchToken, self::PENDING_DISPATCH_TTL_SECONDS)) {
             return [
                 'dispatched' => false,
                 'reason' => 'already_active',
@@ -169,13 +196,14 @@ final class InstalledOperationManager
             $state = $this->queue($serverId, $projectType, self::OPERATION_SCAN, [
                 'force' => $force,
                 'actor_user_id' => $actorUserId,
+                'background' => $background,
             ]);
             if (!$this->runner->run(
                 BackgroundJob::SCAN,
                 [
                     'server_id' => $serverId,
                     'project_type' => $projectType->value,
-                    'lease_token' => $leaseToken,
+                    'dispatch_token' => $dispatchToken,
                     'force' => $force,
                     'actor_user_id' => $actorUserId,
                 ],
@@ -191,10 +219,11 @@ final class InstalledOperationManager
                     $projectType,
                     self::OPERATION_SCAN,
                     'dispatch_failed',
-                    leaseToken: $leaseToken,
                 );
             } catch (Throwable $stateException) {
                 report($stateException);
+            } finally {
+                $this->releasePendingDispatch($serverId, $projectType, self::OPERATION_SCAN, $dispatchToken);
             }
 
             return [
@@ -209,6 +238,59 @@ final class InstalledOperationManager
             'reason' => null,
             'state' => $state,
         ];
+    }
+
+    /**
+     * Claim the operation lease for a queued scan that `schedule:run` has
+     * just started.
+     *
+     * - `stale`: the dispatch was superseded or already finished, so this
+     *   job must not do any work.
+     * - `busy`: another managed operation (an install, update, removal,
+     *   bulk update, or metadata reset) holds the lease; the job should be
+     *   released back to the queue and retried later.
+     * - `claimed`: the job owns the lease and must finish with complete()
+     *   or fail() using `lease_token`, then releasePendingDispatch().
+     *
+     * @return array{status: 'stale'|'busy'|'claimed', lease_token: ?string, state: ?InstalledOperationState}
+     */
+    public function claimQueuedScan(int $serverId, ProjectType $projectType, string $dispatchToken): array
+    {
+        $state = $this->state($serverId, $projectType, self::OPERATION_SCAN);
+
+        if (!$this->ownsPendingDispatch($serverId, $projectType, self::OPERATION_SCAN, $dispatchToken)) {
+            return ['status' => 'stale', 'lease_token' => null, 'state' => $state];
+        }
+
+        $leaseToken = $this->leases->tryAcquire($serverId, $projectType, InstalledOperationLease::OPERATION_SCAN);
+
+        return [
+            'status' => $leaseToken === null ? 'busy' : 'claimed',
+            'lease_token' => $leaseToken,
+            'state' => $state,
+        ];
+    }
+
+    public function ownsPendingDispatch(
+        int $serverId,
+        ProjectType $projectType,
+        string $operation,
+        string $dispatchToken,
+    ): bool {
+        $current = $this->cache->get($this->pendingKey($serverId, $projectType, $operation));
+
+        return is_string($current) && hash_equals($current, $dispatchToken);
+    }
+
+    public function releasePendingDispatch(
+        int $serverId,
+        ProjectType $projectType,
+        string $operation,
+        string $dispatchToken,
+    ): void {
+        if ($this->ownsPendingDispatch($serverId, $projectType, $operation, $dispatchToken)) {
+            $this->cache->forget($this->pendingKey($serverId, $projectType, $operation));
+        }
     }
 
     public function state(
@@ -384,7 +466,7 @@ final class InstalledOperationManager
         $state = $this->state($serverId, $projectType, $operation)
             ?? InstalledOperationState::queued($operation, $serverId, $projectType);
 
-        return $this->put($state->requeue($result));
+        return $this->put($state->requeue([...$state->result, ...$result]));
     }
 
     /**
@@ -408,7 +490,7 @@ final class InstalledOperationManager
             $state = $this->state($serverId, $projectType, $operation)
                 ?? InstalledOperationState::queued($operation, $serverId, $projectType);
 
-            return $this->put($state->completed($result));
+            return $this->put($state->completed($this->withCarriedFlags($state, $result)));
         } finally {
             if ($leaseToken !== null) {
                 $this->leases->release($serverId, $projectType, $leaseToken);
@@ -438,7 +520,7 @@ final class InstalledOperationManager
             $state = $this->state($serverId, $projectType, $operation)
                 ?? InstalledOperationState::queued($operation, $serverId, $projectType);
 
-            return $this->put($state->failed($error, $result));
+            return $this->put($state->failed($error, $this->withCarriedFlags($state, $result)));
         } finally {
             if ($leaseToken !== null) {
                 $this->leases->release($serverId, $projectType, $leaseToken);
@@ -504,7 +586,36 @@ final class InstalledOperationManager
             default => false,
         };
 
+        // A queued scan waits without the lease; its pending-dispatch marker
+        // is what keeps it current until the job starts.
+        if (!$matches
+            && $state->operation === self::OPERATION_SCAN
+            && $state->status === InstalledOperationState::STATUS_QUEUED) {
+            $matches = $this->cache->has($this->pendingKey($state->serverId, $state->projectType, $state->operation));
+        }
+
         return $matches ? $state : null;
+    }
+
+    /**
+     * Terminal and requeued states replace the result payload. Keep the
+     * flag that decides whether the page shows this operation at all.
+     *
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function withCarriedFlags(?InstalledOperationState $state, array $result): array
+    {
+        if ($state?->isBackground() && !array_key_exists('background', $result)) {
+            $result['background'] = true;
+        }
+
+        return $result;
+    }
+
+    private function pendingKey(int $serverId, ProjectType $projectType, string $operation): string
+    {
+        return $this->cacheKey($serverId, $projectType, $operation).':pending';
     }
 
     private function put(InstalledOperationState $state): InstalledOperationState

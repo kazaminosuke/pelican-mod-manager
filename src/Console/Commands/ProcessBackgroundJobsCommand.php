@@ -56,9 +56,17 @@ final class ProcessBackgroundJobsCommand extends Command
             $finished = false;
 
             try {
-                BackgroundJob::execute($job['type'], $payload);
-                $queue->ack($job['id']);
-                $finished = true;
+                $releaseAfter = BackgroundJob::execute($job['type'], $payload);
+
+                if ($releaseAfter !== null) {
+                    // The job is waiting for another managed operation. It
+                    // stays pending (and keeps its unique lock) without
+                    // sleeping inside this shared scheduler process.
+                    $queue->release($job['id'], $releaseAfter);
+                } else {
+                    $queue->ack($job['id']);
+                    $finished = true;
+                }
             } catch (Throwable $exception) {
                 try {
                     report($exception);

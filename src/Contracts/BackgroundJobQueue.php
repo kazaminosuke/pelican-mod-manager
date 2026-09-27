@@ -26,4 +26,10 @@ interface BackgroundJobQueue
     public function ack(int|string $id): void;
 
     public function retry(int|string $id, int $delaySeconds = 30): void;
+
+    /**
+     * Return a claimed job that asked to wait (for example, for a busy
+     * operation lease) without counting that claim as a failed attempt.
+     */
+    public function release(int|string $id, int $delaySeconds): void;
 }

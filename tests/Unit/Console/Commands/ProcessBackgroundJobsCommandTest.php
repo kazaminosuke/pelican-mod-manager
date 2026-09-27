@@ -94,6 +94,9 @@ final class RecordingBackgroundJobQueue implements BackgroundJobQueue
     /** @var list<int|string> */
     public array $retried = [];
 
+    /** @var list<array{id: int|string, delay: int}> */
+    public array $released = [];
+
     /** @param list<Job> $jobs */
     public function __construct(private array $jobs = []) {}
 
@@ -126,5 +129,10 @@ final class RecordingBackgroundJobQueue implements BackgroundJobQueue
     {
         unset($delaySeconds);
         $this->retried[] = $id;
+    }
+
+    public function release(int|string $id, int $delaySeconds): void
+    {
+        $this->released[] = ['id' => $id, 'delay' => $delaySeconds];
     }
 }
