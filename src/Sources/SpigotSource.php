@@ -638,29 +638,44 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
         $resolveDownloads = (bool) ($spec->arguments['resolve_downloads'] ?? true);
         $deadline = microtime(true) + max(0.1, $timeoutSeconds);
-        $resource = $this->fetchSpigetResource($projectId, $this->remainingTimeout($deadline));
+        $versionsUrl = fn (int $page): string => $this->spigetResourceUrl($projectId, '/versions', [
+            'size' => self::VERSION_PAGE_SIZE,
+            'page' => $page,
+            'sort' => '-releaseDate',
+        ]);
+
+        // The resource and the first version page are independent; one round
+        // trip keeps a cold versions modal within the render budget.
+        $responses = $this->pool([
+            'resource' => $this->spigetResourceUrl($projectId),
+            'versions' => $versionsUrl(1),
+        ], $this->remainingTimeout($deadline));
+
+        try {
+            $resource = $this->poolJson($responses['resource'] ?? null, $projectId);
+        } catch (SourceFetchNotFoundException) {
+            $resource = null;
+        }
+
+        $firstPage = $this->poolJson($responses['versions'] ?? null, $projectId);
         $currentFileUrl = null;
 
         if ($resolveDownloads && $resource !== null && $this->isDirectlyDownloadable($resource)) {
-            try {
-                $currentFileUrl = $this->resolveCurrentFileUrls([$projectId], $this->remainingTimeout($deadline))[$projectId] ?? null;
-            } catch (Throwable) {
-                $currentFileUrl = null;
+            [$fileUrls, $fileFailures] = $this->resolveCurrentFileUrls([$projectId], $this->remainingTimeout($deadline));
+
+            if ($fileFailures !== []) {
+                throw new Exception(implode('; ', $fileFailures));
             }
+
+            $currentFileUrl = $fileUrls[$projectId] ?? null;
         }
 
         $versions = [];
 
         for ($page = 1; $page <= self::VERSION_MAX_PAGES; $page++) {
-            $payload = $this->getJson(
-                $this->spigetResourceUrl($projectId, '/versions', [
-                    'size' => self::VERSION_PAGE_SIZE,
-                    'page' => $page,
-                    'sort' => '-releaseDate',
-                ]),
-                [],
-                $this->remainingTimeout($deadline),
-            );
+            $payload = $page === 1
+                ? $firstPage
+                : $this->getJson($versionsUrl($page), [], $this->remainingTimeout($deadline));
 
             if ($payload === []) {
                 break;
@@ -714,7 +729,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
 
             [$chunkResolved, $chunkFailures] = $this->fetchLatestVersionChunk($chunk, $remaining);
-            $failures = array_merge($failures, $chunkFailures);
+            $failures = array_replace($failures, $chunkFailures);
 
             foreach ($chunk as $projectId) {
                 if (isset($chunkResolved[$projectId])) {
@@ -795,11 +810,19 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $fileUrls = [];
 
         if ($downloadable !== []) {
+            // A failed download lookup is a fetch failure for that resource,
+            // not proof that it has no installable update.
             try {
-                $fileUrls = $this->resolveCurrentFileUrls(array_map('strval', $downloadable), $this->remainingTimeout($deadline));
+                [$fileUrls, $fileFailures] = $this->resolveCurrentFileUrls(
+                    array_map('strval', $downloadable),
+                    $this->remainingTimeout($deadline),
+                );
             } catch (Throwable $exception) {
                 report($exception);
+                $fileFailures = array_fill_keys(array_map('strval', $downloadable), $exception->getMessage());
             }
+
+            $failures = array_replace($failures, $fileFailures);
         }
 
         // The Installed tab offers an update for any resolved latest version,
@@ -1062,18 +1085,6 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         ];
     }
 
-    /** @return array<string, mixed>|null */
-    private function fetchSpigetResource(string $projectId, float $timeoutSeconds): ?array
-    {
-        try {
-            $payload = $this->getJson($this->spigetResourceUrl($projectId), [], $timeoutSeconds);
-        } catch (SourceFetchNotFoundException) {
-            return null;
-        }
-
-        return $payload;
-    }
-
     /**
      * Spiget mirrors only a free resource's current JAR on its CDN, via
      * /resources/{id}/download. Version-specific download routes redirect to
@@ -1081,8 +1092,12 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      * Only a redirect to the CDN is accepted; external links, premium
      * files, and anything hosted elsewhere yield no URL.
      *
+     * A transport error, rate limit, or server error is reported as a
+     * failure rather than as "no file": otherwise one timeout would be
+     * cached as a resource without a downloadable version.
+     *
      * @param array<int, string> $resourceIds
-     * @return array<string, string>
+     * @return array{0: array<string, string>, 1: array<string, string>} [urls, failures] keyed by resource id
      */
     private function resolveCurrentFileUrls(array $resourceIds, float $timeoutSeconds): array
     {
@@ -1092,9 +1107,29 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         $resolved = [];
+        $failures = [];
         foreach ($this->pool($urls, $timeoutSeconds, followRedirects: false) as $resourceId => $response) {
-            if (!$response instanceof Response
-                || !$response->redirect()
+            $resourceId = (string) $resourceId;
+
+            if ($response instanceof Throwable) {
+                $failures[$resourceId] = $response->getMessage();
+
+                continue;
+            }
+
+            if (!$response instanceof Response) {
+                $failures[$resourceId] = "No Spiget download response for resource [$resourceId].";
+
+                continue;
+            }
+
+            if ($response->status() === 429 || $response->serverError()) {
+                $failures[$resourceId] = "Spiget download lookup for resource [$resourceId] returned HTTP {$response->status()}.";
+
+                continue;
+            }
+
+            if (!$response->redirect()
                 || strtolower((string) $response->header('X-Spiget-File-Source')) === 'external') {
                 continue;
             }
@@ -1105,11 +1140,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
 
             if ($this->isAllowedDownloadUrl($location)) {
-                $resolved[(string) $resourceId] = $location;
+                $resolved[$resourceId] = $location;
             }
         }
 
-        return $resolved;
+        return [$resolved, $failures];
     }
 
     /**

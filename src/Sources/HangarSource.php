@@ -814,7 +814,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             );
             $requestCount += count($chunk);
 
-            $failures = array_merge($failures, $chunkFailures);
+            $failures = array_replace($failures, $chunkFailures);
 
             foreach ($chunk as $projectId) {
                 if (isset($chunkResolved[$projectId])) {

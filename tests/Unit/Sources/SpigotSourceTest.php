@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Tests\Unit\Sources;
 
 use App\Models\Server;
+use Exception;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
@@ -15,6 +16,7 @@ use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\SpigotSource;
@@ -360,6 +362,74 @@ class SpigotSourceTest extends TestCase
         ]), 2.0);
 
         self::assertSame([], $versions[0]['files']);
+    }
+
+    /**
+     * Regression: a timeout or 5xx on the download redirect was swallowed,
+     * so the version list was cached for 30 minutes without any downloadable
+     * file and every install failed with "No downloadable file found".
+     */
+    public function test_download_lookup_outage_fails_the_fetch_instead_of_caching_no_file(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/50/download' => Http::response('', 503),
+            'api.spiget.org/v2/resources/50/versions*' => Http::response([
+                ['id' => 3, 'name' => '1.2.0', 'releaseDate' => 1_700_000_000, 'downloads' => 4],
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+
+        $this->expectException(Exception::class);
+        $this->expectExceptionMessage('HTTP 503');
+
+        $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'versions', [
+            'project_id' => '50',
+            'resolve_downloads' => true,
+        ]), 2.0);
+    }
+
+    public function test_download_lookup_outage_is_a_latest_version_failure_not_an_unresolved_update(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/50/download' => Http::response('', 429),
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
+                'name' => '1.2.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 3,
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+
+        try {
+            $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'latest', [
+                'project_ids' => ['50'],
+            ]), 2.0);
+            self::fail('A failed download lookup must not be cached as a definitive result.');
+        } catch (PartialSourceFetchException $exception) {
+            $fallback = $exception->fallback();
+            self::assertSame([], $fallback['versions']);
+            self::assertArrayHasKey('50', $fallback['failures']);
+        }
+    }
+
+    /**
+     * Regression: array_merge() renumbered the numeric resource ids of
+     * per-resource failures, so a failed lookup was attributed to "0" and
+     * reported as an unresolved project instead of a failure.
+     */
+    public function test_latest_version_failures_keep_their_resource_id(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'api.spiget.org/v2/resources/28140/versions/latest*' => Http::response('', 500),
+            'api.spiget.org/v2/resources/28140?*' => Http::response('', 500),
+        ]);
+        $request = new LatestVersionLookupRequest('spigot', '28140', '1');
+
+        $result = $source->lookupLatestVersions([$request], Mockery::mock(Server::class), ProjectType::Plugin);
+
+        self::assertArrayHasKey($request->key(), $result->failures());
+        self::assertSame([], $result->versions());
     }
 
     public function test_only_the_current_version_uses_the_cdn_file(): void
