@@ -2041,8 +2041,9 @@ class ModManagerPage extends Page implements HasTable
             $primaryFile,
         );
 
-        Cache::forget(ModManager::getHashScanCacheKey($server, $type));
-        $this->setInstalledScanResult(null);
+        // The install transaction already applied this file to the cached
+        // scan result, so no rescan of the whole folder is needed.
+        $this->refreshInstalledScanDataReady();
         $this->warmInstalledStateIfMissing();
         $this->unknownFiles = array_values(
             array_filter($this->unknownFiles, fn (string $filename) => strtolower($filename) !== strtolower($safeNewFilename))
@@ -2080,8 +2081,9 @@ class ModManagerPage extends Page implements HasTable
             ])
             ->throw();
 
-        Cache::forget(ModManager::getHashScanCacheKey($server, $type));
-        $this->setInstalledScanResult(null);
+        // Reflect only the removed file; this runs under the operation lease.
+        ModManager::applyFileChangeToScanResult($server, $type, null, $safeFilename);
+        $this->refreshInstalledScanDataReady();
         $this->unknownFiles = array_values(
             array_filter($this->unknownFiles, fn (string $filename) => strtolower($filename) !== strtolower($safeFilename))
         );

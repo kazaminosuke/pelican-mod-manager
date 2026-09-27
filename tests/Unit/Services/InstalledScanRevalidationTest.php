@@ -94,6 +94,58 @@ final class InstalledScanRevalidationTest extends TestCase
         self::assertSame(1, $scan['service']->hashedFiles);
     }
 
+    public function test_file_recorded_by_an_install_is_trusted_by_its_signature(): void
+    {
+        $scan = $this->scanFixture(lookupCalls: 0, installedOverrides: [
+            // An install records the listed signature and only the hashes its
+            // source published.
+            'hashes' => ['sha512' => 'a512'],
+        ]);
+
+        $result = $scan['service']->scanAndImportModsResult($scan['server'], $scan['files'], ProjectType::Mod);
+
+        self::assertSame(0, $scan['service']->hashedFiles);
+        self::assertSame(['mystery.jar'], $result->unknownFiles);
+        self::assertSame(['sha512' => 'a512'], $scan['written']()->installedMods()[0]['hashes']);
+    }
+
+    public function test_changed_tracked_file_is_hashed_again(): void
+    {
+        $scan = $this->scanFixture(lookupCalls: 1, installedOverrides: [
+            'file_signature' => ['size' => 10, 'modified_at' => '2026-06-01T00:00:00Z'],
+        ]);
+
+        $scan['service']->scanAndImportModsResult($scan['server'], $scan['files'], ProjectType::Mod);
+
+        self::assertSame(1, $scan['service']->hashedFiles);
+    }
+
+    public function test_managed_change_patches_the_cached_result_instead_of_dropping_it(): void
+    {
+        $service = $this->scriptedService([InstalledScanResult::success(['mystery.jar'], 2)]);
+        $server = $this->server();
+        $service->scanAndImportModsResult($server, Mockery::mock(DaemonFileRepository::class), ProjectType::Mod);
+
+        $service->applyFileChangeToScanResult($server, ProjectType::Mod, 'sodium.jar', null);
+        $service->applyFileChangeToScanResult($server, ProjectType::Mod, null, 'mystery.jar');
+        $cached = InstalledScanResult::fromCache($this->cache->get($service->getHashScanCacheKey($server, ProjectType::Mod)));
+
+        self::assertSame(2, $cached?->diskFileCount);
+        self::assertSame([], $cached?->unknownFiles);
+        self::assertTrue($cached?->isFresh());
+        self::assertSame(1, $service->scanExecutions);
+    }
+
+    public function test_managed_change_without_a_cached_result_writes_nothing(): void
+    {
+        $service = $this->scriptedService([]);
+        $server = $this->server();
+
+        $service->applyFileChangeToScanResult($server, ProjectType::Mod, 'sodium.jar', null);
+
+        self::assertNull($this->cache->get($service->getHashScanCacheKey($server, ProjectType::Mod)));
+    }
+
     public function test_fresh_result_is_reused_and_a_stale_one_is_revalidated(): void
     {
         $service = $this->scriptedService([
@@ -186,9 +238,10 @@ final class InstalledScanRevalidationTest extends TestCase
 
     /**
      * @param  array<int, array<string, mixed>>  $extraListing
+     * @param  array<string, mixed>  $installedOverrides
      * @return array{service: RevalidationTestService, server: Server, files: DaemonFileRepository, document: InstalledMetadataDocument, written: Closure(): InstalledMetadataDocument}
      */
-    private function scanFixture(int $lookupCalls, array $extraListing = []): array
+    private function scanFixture(int $lookupCalls, array $extraListing = [], array $installedOverrides = []): array
     {
         $signatureA = ['size' => 10, 'modified_at' => '2026-07-01T00:00:00Z'];
         $signatureB = ['size' => 20, 'modified_at' => '2026-07-02T00:00:00Z'];
@@ -204,6 +257,7 @@ final class InstalledScanRevalidationTest extends TestCase
                 'installed_at' => '2026-07-01T00:00:00+00:00',
                 'file_signature' => $signatureA,
                 'hashes' => ['murmur2' => '1', 'sha512' => 'a512', 'sha256' => 'a256'],
+                ...$installedOverrides,
             ]])
             ->withUnresolvedFiles([[
                 'filename' => 'mystery.jar',

@@ -193,6 +193,56 @@ class InstalledProjectService
         }
     }
 
+    /**
+     * Reflect one managed install, update, or removal in the cached scan
+     * result instead of discarding it and rescanning the whole folder.
+     * Callers hold the installed-file operation lease, so no scan can write
+     * a result concurrently. Without a cached result there is nothing to
+     * patch; the next page load queues a scan as usual.
+     */
+    public function applyFileChangeToScanResult(
+        Server $server,
+        ProjectType $type,
+        ?string $addedFilename,
+        ?string $removedFilename,
+        bool $addedExisted = false,
+    ): void {
+        $cacheKey = $this->getHashScanCacheKey($server, $type);
+        $cached = InstalledScanResult::fromCache(Cache::get($cacheKey));
+
+        if ($cached === null) {
+            return;
+        }
+
+        Cache::put(
+            $cacheKey,
+            $cached->withFileChange($addedFilename, $removedFilename, $addedExisted)->toCachePayload(),
+            now()->addDays(self::HASH_SCAN_CACHE_DAYS),
+        );
+    }
+
+    /**
+     * The `{size, modified_at}` signature scans compare with, from one Wings
+     * directory-listing item.
+     *
+     * @param  array<string, mixed>  $item
+     * @return array{size: int, modified_at: string}|null
+     */
+    public static function fileSignatureFromListing(array $item): ?array
+    {
+        $size = $item['size'] ?? null;
+        $modified = $item['modified'] ?? null;
+
+        if (!is_numeric($size) || (!is_string($modified) && !is_numeric($modified))) {
+            return null;
+        }
+
+        return [
+            'size' => (int) $size,
+            'modified_at' => (string) $modified,
+        ];
+    }
+
     public function getHashScanCacheKey(Server $server, ?ProjectType $type = null): string
     {
         $resolvedType = $type ?? ProjectType::fromServer($server);
@@ -408,9 +458,13 @@ class InstalledProjectService
                 ? $this->reusableHashes($indexed, $diskFile['file_signature'])
                 : null;
 
-            if ($existingInstalled !== null && $reusableHashes !== null) {
-                $existingInstalled['file_signature'] = $diskFile['file_signature'];
-                $existingInstalled['hashes'] = $reusableHashes;
+            // A tracked file whose size and mtime still match the signature
+            // recorded by its install or last hash is unchanged. An install
+            // records only the hashes its source publishes, so a complete
+            // hash set is not required to trust the entry.
+            if ($existingInstalled !== null
+                && $diskFile['file_signature'] !== null
+                && ($existingInstalled['file_signature'] ?? null) === $diskFile['file_signature']) {
                 $scannedInstalled[] = $existingInstalled;
 
                 continue;
@@ -715,17 +769,7 @@ class InstalledProjectService
      */
     protected function normalizeFileSignature(array $item): ?array
     {
-        $size = $item['size'] ?? null;
-        $modified = $item['modified'] ?? null;
-
-        if (!is_numeric($size) || (!is_string($modified) && !is_numeric($modified))) {
-            return null;
-        }
-
-        return [
-            'size' => (int) $size,
-            'modified_at' => (string) $modified,
-        ];
+        return self::fileSignatureFromListing($item);
     }
 
     /**
@@ -1381,6 +1425,7 @@ class InstalledProjectService
         return $this->metadataRepository->read($server, $fileRepository, $folder);
     }
 
+    /** @param array<string, mixed> $fileDetails */
     public function saveModMetadata(
         Server $server,
         DaemonFileRepository $fileRepository,
@@ -1392,7 +1437,8 @@ class InstalledProjectService
         string $filename,
         ?string $author = null,
         ?ProjectType $type = null,
-        ProjectSourceKey $source = ProjectSourceKey::Modrinth
+        ProjectSourceKey $source = ProjectSourceKey::Modrinth,
+        array $fileDetails = [],
     ): bool {
         try {
             $folder = $this->resolveMetadataFolder($server, $fileRepository, $type);
@@ -1416,6 +1462,10 @@ class InstalledProjectService
         if ($author !== null) {
             $entry['author'] = $author;
         }
+
+        // file_signature / hashes let the next scan trust this file without
+        // downloading it again.
+        $entry += array_intersect_key($fileDetails, ['file_signature' => true, 'hashes' => true]);
 
         return $this->metadataRepository->mutate(
             $server,

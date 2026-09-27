@@ -4,7 +4,6 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
@@ -49,7 +48,6 @@ class InstalledProjectUpdateServiceTest extends TestCase
         $projects->shouldReceive('saveInstalledMetadataDocument')
             ->once()
             ->andReturnTrue();
-        $projects->shouldReceive('getHashScanCacheKey')->once()->andReturn('scan-key');
 
         $archives = Mockery::mock(InstalledArchiveTransaction::class);
         $archives->shouldReceive('installOrUpdate')
@@ -85,12 +83,10 @@ class InstalledProjectUpdateServiceTest extends TestCase
             ],
         ));
 
-        $cache = Mockery::mock(CacheRepository::class);
-        $cache->shouldReceive('forget')->once()->with('scan-key');
 
         $server = new Server();
         $server->forceFill(['id' => 4]);
-        $result = (new InstalledProjectUpdateService($projects, $archives, $versions, $cache))
+        $result = (new InstalledProjectUpdateService($projects, $archives, $versions))
             ->updateAll($server, Mockery::mock(DaemonFileRepository::class), ProjectType::Mod);
 
         self::assertSame(1, $result['updated']);

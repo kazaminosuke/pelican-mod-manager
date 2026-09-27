@@ -81,7 +81,10 @@ class InstalledArchiveTransaction
 
         try {
             $stat = $this->wings->pullForeground($fileRepository, $server, $url, $folder, $tempFilename);
-            $this->assertCompletedPull($fileRepository, $server, $folder, $tempFilename, $stat, $expectedSize);
+            $listed = $this->assertCompletedPull($fileRepository, $server, $folder, $tempFilename, $stat, $expectedSize);
+            // A rename keeps the size and mtime, so this is what the next scan
+            // lists for the activated file.
+            $fileDetails = $this->fileDetails($listed, $primaryFile);
 
             if ($destinationExists) {
                 $backupFilename = $this->uniqueHiddenName('prev');
@@ -114,6 +117,7 @@ class InstalledArchiveTransaction
                 $type,
                 $source,
                 $metadataSession,
+                $fileDetails,
             );
 
             if (!$saved) {
@@ -152,6 +156,14 @@ class InstalledArchiveTransaction
                 $this->wings->deleteQuietly($fileRepository, $server, $folder, $backupFilename);
                 $backupFilename = null;
             }
+
+            $this->projects->applyFileChangeToScanResult(
+                $server,
+                $type,
+                $newFilename,
+                $oldFilename !== null && strtolower($oldFilename) !== strtolower($newFilename) ? $oldFilename : null,
+                $destinationExists,
+            );
         } catch (Throwable $exception) {
             $this->wings->deleteQuietly($fileRepository, $server, $folder, $tempFilename);
 
@@ -169,6 +181,7 @@ class InstalledArchiveTransaction
 
     /**
      * @param  array<string, mixed>  $stat
+     * @return array<string, mixed> the listing item of the pulled file
      */
     private function assertCompletedPull(
         DaemonFileRepository $fileRepository,
@@ -177,7 +190,7 @@ class InstalledArchiveTransaction
         string $tempFilename,
         array $stat,
         ?int $expectedSize,
-    ): void {
+    ): array {
         $listed = $this->wings->findListedFile($fileRepository, $server, $folder, $tempFilename);
 
         if ($listed === null) {
@@ -193,6 +206,8 @@ class InstalledArchiveTransaction
         if ($expectedSize !== null && $size !== $expectedSize) {
             throw new Exception("Pulled archive size [{$size}] does not match expected size [{$expectedSize}].");
         }
+
+        return $listed;
     }
 
     private function rollbackActivatedArchive(
@@ -244,11 +259,13 @@ class InstalledArchiveTransaction
             $type,
             $source,
             $metadataSession,
+            array_intersect_key($installedMod, ['file_signature' => true, 'hashes' => true]),
         )) {
             report(new Exception('Failed to restore old mod metadata during rollback'));
         }
     }
 
+    /** @param  array<string, mixed>  $fileDetails */
     private function commitMetadataEntry(
         Server $server,
         DaemonFileRepository $fileRepository,
@@ -262,6 +279,7 @@ class InstalledArchiveTransaction
         ProjectType $type,
         ProjectSourceKey $source,
         ?InstalledMetadataWriteSession $metadataSession,
+        array $fileDetails = [],
     ): bool {
         $entry = [
             'source' => $source->value,
@@ -279,7 +297,7 @@ class InstalledArchiveTransaction
         }
 
         if ($metadataSession !== null) {
-            return $metadataSession->upsert($entry);
+            return $metadataSession->upsert($entry + $fileDetails);
         }
 
         return $this->projects->saveModMetadata(
@@ -294,7 +312,41 @@ class InstalledArchiveTransaction
             $author,
             $type,
             $source,
+            $fileDetails,
         );
+    }
+
+    /**
+     * The file signature scans compare against, plus the hashes the source
+     * published for this file (Modrinth's sha512 drives its update checks).
+     *
+     * @param  array<string, mixed>  $listed
+     * @param  array<string, mixed>  $primaryFile
+     * @return array<string, mixed>
+     */
+    private function fileDetails(array $listed, array $primaryFile): array
+    {
+        $details = [];
+        $signature = InstalledProjectService::fileSignatureFromListing($listed);
+
+        if ($signature !== null) {
+            $details['file_signature'] = $signature;
+        }
+
+        $hashes = [];
+        foreach ((array) ($primaryFile['hashes'] ?? []) as $algorithm => $hash) {
+            $algorithm = strtolower((string) $algorithm);
+
+            if (in_array($algorithm, ['murmur2', 'sha512', 'sha256'], true) && is_scalar($hash) && (string) $hash !== '') {
+                $hashes[$algorithm] = strtolower((string) $hash);
+            }
+        }
+
+        if ($hashes !== []) {
+            $details['hashes'] = $hashes;
+        }
+
+        return $details;
     }
 
     private function authoritativeDocument(

@@ -8,7 +8,6 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Http\Client\Factory;
@@ -292,7 +291,6 @@ class SpigotInstalledFlowTest extends TestCase
             InstalledMetadataReadStatus::Current,
         ));
         $projects->shouldReceive('saveInstalledMetadataDocument')->andReturnTrue();
-        $projects->shouldReceive('getHashScanCacheKey')->once()->andReturn('scan-key');
         $versions = Mockery::mock(VersionLookupCoordinator::class);
         $versions->shouldReceive('lookupInstalled')->once()->andReturnUsing(
             fn (array $mods, Server $server, ProjectType $type) => $source->lookupLatestVersions(
@@ -312,12 +310,10 @@ class SpigotInstalledFlowTest extends TestCase
                     && $primaryFile['url'] === 'https://cdn.spiget.org/file/spiget-resources/50.jar'
                     && $primaryFile['filename'] === 'FreePlugin-1.2.0.jar';
             });
-        $cache = Mockery::mock(CacheRepository::class);
-        $cache->shouldReceive('forget')->once()->with('scan-key');
         $server = new Server();
         $server->forceFill(['id' => 7]);
 
-        $result = (new InstalledProjectUpdateService($projects, $archives, $versions, $cache))
+        $result = (new InstalledProjectUpdateService($projects, $archives, $versions))
             ->updateAll($server, Mockery::mock(DaemonFileRepository::class), ProjectType::Plugin);
 
         self::assertSame(['total' => 2, 'updated' => 1, 'failed' => 0, 'skipped' => 1], $result);

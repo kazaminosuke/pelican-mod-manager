@@ -66,6 +66,45 @@ final class InstalledScanResult
             && ($now ?? time()) - $this->checkedAt < self::FRESH_SECONDS;
     }
 
+    /**
+     * Apply one managed file change (install, update, or removal) without a
+     * rescan. The count follows the directory: a filename that was not on
+     * disk adds a file, a removed one drops it, and replacing a file in place
+     * changes nothing. The freshness of the rest of the listing is kept.
+     */
+    public function withFileChange(?string $addedFilename, ?string $removedFilename, bool $addedExisted): self
+    {
+        $unknownFiles = $this->unknownFiles;
+        $diskFileCount = $this->diskFileCount;
+
+        foreach ([$addedFilename, $removedFilename] as $filename) {
+            if ($filename !== null) {
+                $unknownFiles = array_values(array_filter(
+                    $unknownFiles,
+                    static fn (string $unknown): bool => strtolower($unknown) !== strtolower($filename),
+                ));
+            }
+        }
+
+        if ($addedFilename !== null && !$addedExisted) {
+            $diskFileCount++;
+        }
+
+        if ($removedFilename !== null
+            && ($addedFilename === null || strtolower($addedFilename) !== strtolower($removedFilename))) {
+            $diskFileCount = max(0, $diskFileCount - 1);
+        }
+
+        return new self(
+            successful: $this->successful,
+            unknownFiles: $unknownFiles,
+            diskFileCount: $diskFileCount,
+            cacheHit: $this->cacheHit,
+            failure: $this->failure,
+            checkedAt: $this->checkedAt,
+        );
+    }
+
     /** @return array<string, mixed> */
     public function toCachePayload(): array
     {

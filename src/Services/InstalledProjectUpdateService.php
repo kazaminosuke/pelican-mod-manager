@@ -5,7 +5,6 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
@@ -19,7 +18,6 @@ final class InstalledProjectUpdateService
         private readonly InstalledProjectService $minecraft,
         private readonly InstalledArchiveTransaction $archives,
         private readonly VersionLookupCoordinator $versions,
-        private readonly CacheRepository $cache,
     ) {}
 
     /**
@@ -78,9 +76,8 @@ final class InstalledProjectUpdateService
             }
         }
 
-        if ($updated > 0) {
-            $this->cache->forget($this->minecraft->getHashScanCacheKey($server, $type));
-        }
+        // Each archive transaction has already applied its file change to
+        // the cached scan result, so a bulk update needs no folder rescan.
 
         return [
             'total' => $total,

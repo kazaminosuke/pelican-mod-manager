@@ -46,6 +46,13 @@ class InstalledArchiveTransactionTest extends TestCase
         self::assertSame('sodium.jar', $wings->activatedFilename);
         self::assertSame(['sodium.jar'], $wings->committedFilenames);
         self::assertSame([], $wings->deletedFilenames);
+        // The next scan trusts the file by its signature instead of
+        // downloading it again, and Modrinth update checks get its sha512.
+        self::assertSame([[
+            'file_signature' => ['size' => 2048, 'modified_at' => '2026-09-01T00:00:00Z'],
+            'hashes' => ['sha512' => 'def'],
+        ]], $wings->committedFileDetails);
+        self::assertSame([['added' => 'sodium.jar', 'removed' => null, 'existed' => false]], $wings->scanResultChanges);
     }
 
     public function test_operation_session_reuses_its_authoritative_document_without_another_get(): void
@@ -100,6 +107,7 @@ class InstalledArchiveTransactionTest extends TestCase
         );
         self::assertSame(['sodium-old.jar'], $wings->deletedFilenames);
         self::assertSame(['sodium.jar'], $wings->committedFilenames);
+        self::assertSame([['added' => 'sodium.jar', 'removed' => 'sodium-old.jar', 'existed' => false]], $wings->scanResultChanges);
     }
 
     public function test_same_name_update_swaps_via_backup_before_metadata_commit(): void
@@ -130,6 +138,8 @@ class InstalledArchiveTransactionTest extends TestCase
         self::assertSame('sodium.jar', $wings->renames[1]['to']);
         self::assertSame([$wings->renames[0]['to']], $wings->quietlyDeletedFilenames);
         self::assertSame([], $wings->deletedFilenames);
+        // Replacing a file in place leaves the directory's file count alone.
+        self::assertSame([['added' => 'sodium.jar', 'removed' => null, 'existed' => true]], $wings->scanResultChanges);
     }
 
     public function test_background_pull_does_not_commit_metadata_or_delete_old_archive(): void
@@ -204,6 +214,7 @@ class InstalledArchiveTransactionTest extends TestCase
         } finally {
             self::assertContains('sodium.jar', $wings->quietlyDeletedFilenames);
             self::assertSame([], $wings->deletedFilenames);
+            self::assertSame([], $wings->scanResultChanges);
         }
     }
 
@@ -232,6 +243,7 @@ class InstalledArchiveTransactionTest extends TestCase
 
         self::assertSame(['sodium.jar', 'sodium-old.jar'], $wings->committedFilenames);
         self::assertContains('sodium.jar', $wings->quietlyDeletedFilenames);
+        self::assertSame([], $wings->scanResultChanges);
     }
 
     public function test_other_project_filename_collision_is_rejected_before_pull(): void
@@ -318,8 +330,13 @@ class InstalledArchiveTransactionTest extends TestCase
             ->andReturnUsing(function () use ($wings, $saved): bool {
                 $wings->events[] = 'metadata';
                 $wings->committedFilenames[] = func_get_arg(7);
+                $wings->committedFileDetails[] = func_num_args() > 11 ? func_get_arg(11) : [];
 
                 return $saved;
+            });
+        $projects->shouldReceive('applyFileChangeToScanResult')
+            ->andReturnUsing(function (Server $server, ProjectType $type, ?string $added, ?string $removed, bool $existed) use ($wings): void {
+                $wings->scanResultChanges[] = ['added' => $added, 'removed' => $removed, 'existed' => $existed];
             });
 
         return $projects;
@@ -364,6 +381,7 @@ class InstalledArchiveTransactionTest extends TestCase
             'url' => 'https://example.test/sodium.jar',
             'filename' => 'sodium.jar',
             'size' => 2048,
+            'hashes' => ['sha1' => 'ABC', 'sha512' => 'DEF'],
         ];
     }
 
@@ -404,6 +422,12 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
     /** @var array<int, string> */
     public array $committedFilenames = [];
 
+    /** @var array<int, array<string, mixed>> */
+    public array $committedFileDetails = [];
+
+    /** @var array<int, array{added: ?string, removed: ?string, existed: bool}> */
+    public array $scanResultChanges = [];
+
     public bool $pulledInForeground = false;
 
     public bool $backgroundPull = false;
@@ -432,7 +456,7 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
             throw new Exception('Wings accepted a background pull; foreground completion is required.');
         }
 
-        $this->listed[$filename] = ['name' => $filename, 'size' => $this->pulledSize];
+        $this->listed[$filename] = ['name' => $filename, 'size' => $this->pulledSize, 'modified' => '2026-09-01T00:00:00Z'];
 
         return ['name' => $filename, 'size' => $this->pulledSize];
     }
