@@ -128,6 +128,48 @@ class SpigotInstalledFlowTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_externally_replaced_jar_is_re_identified_instead_of_keeping_its_old_version(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/11431/versions*' => Http::response([
+                ['id' => 88, 'name' => '7.0.9', 'releaseDate' => 1_700_000_000, 'downloads' => 1, 'resource' => 11431],
+                ['id' => 87, 'name' => '7.0.8', 'releaseDate' => 1_690_000_000, 'downloads' => 1, 'resource' => 11431],
+            ]),
+            'api.spiget.org/v2/resources/11431?*' => Http::response(['id' => 11431, 'name' => 'WorldGuard', 'version' => ['id' => 88]]),
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response(['id' => 11431, 'title' => 'WorldGuard']),
+        ]);
+        $service = $this->service([
+            'worldguard.jar' => new BukkitPluginDescriptor(
+                name: 'WorldGuard',
+                version: '7.0.9',
+                authors: [],
+                website: null,
+                main: null,
+                filename: 'worldguard.jar',
+            ),
+        ]);
+        $existing = [
+            'source' => 'spigot',
+            'project_id' => '11431',
+            'project_slug' => '11431',
+            'project_title' => 'WorldGuard',
+            'version_id' => '87',
+            'version_number' => '7.0.8',
+            'filename' => 'worldguard.jar',
+            'installed_at' => '2026-09-01T00:00:00+00:00',
+            'file_signature' => ['size' => 10, 'modified_at' => 'before'],
+        ];
+
+        $matched = $service->identify(['worldguard.jar'], [
+            'worldguard.jar' => ['file_signature' => ['size' => 12, 'modified_at' => 'after']],
+        ], ['worldguard.jar' => ['sha256' => str_repeat('cc', 32)]], ['worldguard.jar' => $existing]);
+
+        self::assertSame(1, $service->extractions);
+        self::assertSame('11431', $matched['worldguard.jar']['project_id']);
+        self::assertSame('88', $matched['worldguard.jar']['version_id']);
+        self::assertSame('7.0.9', $matched['worldguard.jar']['version_number']);
+    }
+
     public function test_plugin_yml_website_identifies_the_resource_with_official_metadata(): void
     {
         Http::fake([

@@ -1162,7 +1162,13 @@ class InstalledProjectService
             }
 
             $existing = $installedByFilename[strtolower($filename)] ?? null;
-            if ($this->isReusableSpigotIdentity($existing)) {
+            // A recorded signature that no longer matches means the JAR was
+            // replaced outside the manager, so its saved version is stale.
+            $replaced = is_array($existing)
+                && ($existing['file_signature'] ?? null) !== null
+                && $existing['file_signature'] !== ($filesToResolve[$filename]['file_signature'] ?? null);
+
+            if (!$replaced && $this->isReusableSpigotIdentity($existing)) {
                 $entry = $existing;
                 $entry['filename'] = $filename;
                 $entry['file_signature'] = $filesToResolve[$filename]['file_signature'] ?? ($existing['file_signature'] ?? null);
@@ -1195,10 +1201,10 @@ class InstalledProjectService
                 && is_string($existing['project_id'] ?? null)
                 && $existing['project_id'] !== '') {
                 $metadata['known_project_id'] = $existing['project_id'];
-                if (is_string($existing['version_id'] ?? null) && $existing['version_id'] !== '') {
+                if (!$replaced && is_string($existing['version_id'] ?? null) && $existing['version_id'] !== '') {
                     $metadata['known_version_id'] = $existing['version_id'];
                 }
-                if (is_string($existing['version_number'] ?? null) && $existing['version_number'] !== '') {
+                if (!$replaced && is_string($existing['version_number'] ?? null) && $existing['version_number'] !== '') {
                     $metadata['known_version_number'] = $existing['version_number'];
                 }
             }
