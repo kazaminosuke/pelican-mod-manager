@@ -138,7 +138,6 @@ class ScanInstalledProjectsTest extends TestCase
             $service,
             $this->operations,
             $this->leases,
-            $this->cache,
             new ProjectOperationAuthorizer(),
         );
     }

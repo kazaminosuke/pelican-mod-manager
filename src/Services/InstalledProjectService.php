@@ -28,7 +28,21 @@ use Throwable;
 
 class InstalledProjectService
 {
-    private const HASH_SCAN_CACHE_MINUTES = 10;
+    /**
+     * Retention of the last scan result. Freshness is tracked separately by
+     * InstalledScanResult::FRESH_SECONDS; an older result stays displayable
+     * while a background scan revalidates it.
+     */
+    private const HASH_SCAN_CACHE_DAYS = 7;
+
+    /** Recheck an unchanged unknown file against upstream sources this often. */
+    private const UNRESOLVED_RECHECK_SECONDS = 86400;
+
+    /** Failures after which the saved metadata still matches the directory. */
+    private const PARTIAL_SCAN_FAILURES = [
+        'hash_computation_partial_failure',
+        'hash_lookup_partial_failure',
+    ];
 
     private const HASH_SCAN_LOCK_SECONDS = 180;
 
@@ -83,8 +97,22 @@ class InstalledProjectService
         return MinecraftVersionResolver::resolve($server);
     }
 
-    public function scanAndImportModsResult(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): InstalledScanResult
-    {
+    /**
+     * Return the cached scan while it is fresh, otherwise reconcile the
+     * directory with the metadata document. Reconciling is incremental: a
+     * file whose size and modification time match its recorded signature is
+     * neither downloaded nor looked up again, so an unchanged folder costs one
+     * Wings directory listing and one metadata read.
+     *
+     * `$force` (an explicit rescan) ignores a fresh cache and re-identifies
+     * unknown files that were checked recently.
+     */
+    public function scanAndImportModsResult(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        ?ProjectType $type = null,
+        bool $force = false,
+    ): InstalledScanResult {
         set_time_limit(240);
 
         $this->debugTimingEnabled = (bool) config('pelican-mod-manager.debug_timing', false);
@@ -101,7 +129,7 @@ class InstalledProjectService
         $scanExecuted = false;
         $this->hashScanWingsGetCount = 0;
 
-        if ($cachedResult !== null) {
+        if (!$force && $cachedResult?->isFresh()) {
             $result = $cachedResult;
         } else {
             $lock = Cache::lock($cacheKey.':lock', self::HASH_SCAN_LOCK_SECONDS);
@@ -112,19 +140,12 @@ class InstalledProjectService
                 try {
                     $cachedAfterLock = InstalledScanResult::fromCache(Cache::get($cacheKey));
 
-                    if ($cachedAfterLock !== null) {
+                    if (!$force && $cachedAfterLock?->isFresh()) {
                         $result = $cachedAfterLock;
                     } else {
                         $scanExecuted = true;
-                        $result = $this->performScan($server, $fileRepository, $resolvedType);
-
-                        // A normal empty folder is a successful, authoritative
-                        // result and is cacheable. Transport errors and malformed
-                        // Wings responses are failures and must never poison the
-                        // Installed tab with a cached empty result.
-                        if ($result->successful) {
-                            Cache::put($cacheKey, $result->toCachePayload(), now()->addMinutes(self::HASH_SCAN_CACHE_MINUTES));
-                        }
+                        $result = $this->performScan($server, $fileRepository, $resolvedType, $force);
+                        $this->rememberScanResult($cacheKey, $result);
                     }
                 } finally {
                     $lock->release();
@@ -148,6 +169,30 @@ class InstalledProjectService
         return $result;
     }
 
+    /**
+     * A normal empty folder is a successful, authoritative result. A scan
+     * that saved metadata but could not identify every file (an upstream
+     * outage) still describes the directory correctly, so it is kept as a
+     * stale result: the page keeps showing it and retries in the background
+     * instead of queueing a visible scan on every render. Transport errors
+     * and malformed Wings responses never replace the cached result.
+     */
+    protected function rememberScanResult(string $cacheKey, InstalledScanResult $result): void
+    {
+        $cacheable = match (true) {
+            $result->successful => $result,
+            in_array($result->failure, self::PARTIAL_SCAN_FAILURES, true) => InstalledScanResult::success(
+                $result->unknownFiles,
+                $result->diskFileCount,
+            )->asStale(),
+            default => null,
+        };
+
+        if ($cacheable !== null) {
+            Cache::put($cacheKey, $cacheable->toCachePayload(), now()->addDays(self::HASH_SCAN_CACHE_DAYS));
+        }
+    }
+
     public function getHashScanCacheKey(Server $server, ?ProjectType $type = null): string
     {
         $resolvedType = $type ?? ProjectType::fromServer($server);
@@ -164,7 +209,7 @@ class InstalledProjectService
     /**
      * Deletes this server's current installed-mods metadata file and clears
      * the caches that would otherwise keep serving stale results
-     * afterwards: the hydration display cache and the 10-minute
+     * afterwards: the hydration display cache and the
      * scanAndImportModsResult() cache. Without clearing the latter, the next
      * "Installed" tab load would silently reuse a cached pre-deletion scan
      * result instead of noticing every file is now unknown again, which is
@@ -264,8 +309,12 @@ class InstalledProjectService
         return $properties;
     }
 
-    protected function performScan(Server $server, DaemonFileRepository $fileRepository, ?ProjectType $type = null): InstalledScanResult
-    {
+    protected function performScan(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        ?ProjectType $type = null,
+        bool $force = false,
+    ): InstalledScanResult {
         set_time_limit(120);
 
         $type ??= ProjectType::fromServer($server);
@@ -346,6 +395,8 @@ class InstalledProjectService
         }
 
         $scannedInstalled = [];
+        $keptUnresolved = [];
+        $keptUnknownFilenames = [];
         $filesToResolve = [];
         $hashesByFilename = [];
         $reusedHashCount = 0;
@@ -361,6 +412,19 @@ class InstalledProjectService
                 $existingInstalled['file_signature'] = $diskFile['file_signature'];
                 $existingInstalled['hashes'] = $reusableHashes;
                 $scannedInstalled[] = $existingInstalled;
+
+                continue;
+            }
+
+            // An unchanged unknown file that every source already missed
+            // recently would only repeat the same upstream lookups (and, for
+            // Plugins, re-download the JAR to read plugin.yml).
+            if (!$force
+                && $existingInstalled === null
+                && $reusableHashes !== null
+                && $this->wasCheckedRecently($indexed)) {
+                $keptUnresolved[] = $indexed;
+                $keptUnknownFilenames[] = $diskFile['filename'];
 
                 continue;
             }
@@ -587,7 +651,18 @@ class InstalledProjectService
             $unresolvedByFilename,
         );
         $scannedInstalled = array_merge($scannedInstalled, $resolvedUnmatched['installed']);
-        $scannedUnresolved = $resolvedUnmatched['unresolved'];
+        $scannedUnresolved = [...$resolvedUnmatched['unresolved'], ...$keptUnresolved];
+        $unknownLookup = array_fill_keys(
+            array_map('strtolower', [...$remainingFilenames, ...$keptUnknownFilenames]),
+            true,
+        );
+        $unknownFilenames = [];
+
+        foreach ($diskFiles as $key => $diskFile) {
+            if (isset($unknownLookup[$key])) {
+                $unknownFilenames[] = $diskFile['filename'];
+            }
+        }
 
         $metadataPersistenceStartedAt = $this->debugTimingEnabled ? microtime(true) : 0.0;
         $saved = $this->metadataRepository->mutate(
@@ -628,10 +703,10 @@ class InstalledProjectService
         }
 
         if ($failure !== null) {
-            return InstalledScanResult::failed($failure, $remainingFilenames, count($diskFiles));
+            return InstalledScanResult::failed($failure, $unknownFilenames, count($diskFiles));
         }
 
-        return InstalledScanResult::success($remainingFilenames, count($diskFiles));
+        return InstalledScanResult::success($unknownFilenames, count($diskFiles));
     }
 
     /**
@@ -733,7 +808,12 @@ class InstalledProjectService
                 $entry['hashes'] = $hashesByFilename[$filename];
             }
 
-            $entry['last_checked_at'] = $this->unresolvedLastCheckedAt($existingUnresolved, $entry);
+            // Only a completed identification attempt counts as a check. A
+            // file that could not be hashed or looked up is retried next scan.
+            if (!$transient) {
+                $entry['last_checked_at'] = $this->unresolvedLastCheckedAt($existingUnresolved, $entry);
+            }
+
             $unresolved[] = $entry;
         }
 
@@ -753,8 +833,10 @@ class InstalledProjectService
     }
 
     /**
-     * Reuse last_checked_at when the unresolved file has not changed so a
-     * cache-miss scan does not force a no-op Wings PUT.
+     * Reuse last_checked_at while an unchanged unresolved file is still
+     * within its recheck window, so a forced scan does not force a no-op
+     * Wings PUT. A due recheck records a new timestamp; otherwise the file
+     * would be looked up again on every later scan.
      *
      * @param  array<string, mixed>|null  $existing
      * @param  array<string, mixed>  $entry
@@ -764,12 +846,29 @@ class InstalledProjectService
         if (is_array($existing)
             && ($existing['file_signature'] ?? null) === ($entry['file_signature'] ?? null)
             && ($existing['hashes'] ?? null) === ($entry['hashes'] ?? null)
-            && is_string($existing['last_checked_at'] ?? null)
-            && $existing['last_checked_at'] !== '') {
+            && $this->wasCheckedRecently($existing)) {
             return $existing['last_checked_at'];
         }
 
         return now()->toIso8601String();
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $entry
+     *
+     * @phpstan-assert-if-true array{last_checked_at: string} $entry
+     */
+    protected function wasCheckedRecently(?array $entry): bool
+    {
+        $checkedAt = $entry['last_checked_at'] ?? null;
+
+        if (!is_string($checkedAt) || $checkedAt === '') {
+            return false;
+        }
+
+        $timestamp = strtotime($checkedAt);
+
+        return $timestamp !== false && time() - $timestamp < self::UNRESOLVED_RECHECK_SECONDS;
     }
 
     /**

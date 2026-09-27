@@ -15,7 +15,7 @@ final class InstalledCatalogWarmPage extends ModManagerPage
         $this->warmInstalledStateIfMissing();
     }
 
-    protected function dispatchInstalledScanIfMissing(): void
+    protected function dispatchInstalledScanIfDue(): void
     {
         $this->dispatches++;
     }

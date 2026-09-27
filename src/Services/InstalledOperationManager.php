@@ -11,6 +11,7 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
+use Kazaminosuke\ModManager\Support\InstalledScanResult;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Throwable;
 
@@ -29,6 +30,9 @@ final class InstalledOperationManager
      * operation lease TTL; a started job releases the marker itself.
      */
     private const PENDING_DISPATCH_TTL_SECONDS = InstalledOperationLease::TTL_SECONDS;
+
+    /** Minimum spacing between automatic (page-triggered) scans. */
+    public const AUTOMATIC_SCAN_INTERVAL_SECONDS = 300;
 
     /**
      * Persist running progress at most this often. The first update and the
@@ -238,6 +242,55 @@ final class InstalledOperationManager
             'reason' => null,
             'state' => $state,
         ];
+    }
+
+    /**
+     * Automatic scan for a page render. Nothing is queued while the cached
+     * result is fresh. A missing result queues a visible scan; a stale one a
+     * background revalidation that keeps the current data on screen.
+     *
+     * Automatic attempts are throttled per server/type, so a scan that keeps
+     * failing (Wings offline, upstream outage) is retried every few minutes
+     * instead of being queued again on every render and poll.
+     *
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'missing_actor'|'unsupported_type', state: ?InstalledOperationState}|null
+     *         null when no scan was due
+     */
+    public function dispatchScanIfDue(
+        Server|int $server,
+        ProjectType $projectType,
+        ?InstalledScanResult $cachedResult,
+        ?int $actorUserId,
+    ): ?array {
+        if ($cachedResult?->isFresh() || !$projectType->usesArchiveMetadata()) {
+            return null;
+        }
+
+        $serverId = $this->serverId($server);
+        $throttleKey = $this->cacheKey($serverId, $projectType, self::OPERATION_SCAN).':auto';
+
+        if (!$this->cache->add($throttleKey, true, self::AUTOMATIC_SCAN_INTERVAL_SECONDS)) {
+            return null;
+        }
+
+        $dispatch = $this->dispatchScan(
+            $serverId,
+            $projectType,
+            actorUserId: $actorUserId,
+            background: $cachedResult !== null,
+        );
+
+        // Only a scan that was queued (now or earlier) should hold back the
+        // next page load; a bulk update in progress must not delay it.
+        $scanQueued = $dispatch['dispatched']
+            || ($dispatch['reason'] === 'already_active'
+                && $dispatch['state']?->operation === self::OPERATION_SCAN);
+
+        if (!$scanQueued) {
+            $this->cache->forget($throttleKey);
+        }
+
+        return $dispatch;
     }
 
     /**

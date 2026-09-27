@@ -259,6 +259,12 @@ class ModManagerPage extends Page implements HasTable
     /** Whether a still-valid scan result already exists, independent of background-operation state. */
     public bool $installedScanDataReady = false;
 
+    /**
+     * The scan result read during this request. Not a Livewire property: it
+     * is only used to decide whether this request should queue a scan.
+     */
+    protected ?InstalledScanResult $loadedInstalledScanResult = null;
+
     /** Per-request timing state used only by temporary initial-load diagnostics. */
     protected bool $modManagerTimingEnabled = false;
 
@@ -780,19 +786,19 @@ class ModManagerPage extends Page implements HasTable
 
     /**
      * Warm installed state from any Catalog entry point, not only after the
-     * Installed tab is opened. The durable scan cache makes this a cheap no-op
-     * while fresh. On a cold miss, the existing per-server/type operation
-     * state, lease, and unique queued job coalesce concurrent page loads into
-     * one background Wings scan.
+     * Installed tab is opened. A fresh scan result makes this a cheap no-op.
+     * A missing result queues one visible scan; a stale result queues a
+     * background revalidation while the cached data stays on screen. The
+     * operation manager coalesces and throttles concurrent page loads.
      */
     protected function warmInstalledStateIfMissing(): void
     {
-        $this->dispatchInstalledScanIfMissing();
+        $this->dispatchInstalledScanIfDue();
     }
 
-    protected function dispatchInstalledScanIfMissing(): void
+    protected function dispatchInstalledScanIfDue(): void
     {
-        if ($this->installedScanDataReady || !$this->canScanInstalledProjects()) {
+        if (!$this->canScanInstalledProjects()) {
             return;
         }
 
@@ -814,18 +820,26 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
-        $dispatch = app(InstalledOperationManager::class)->dispatchScan(
+        $dispatch = app(InstalledOperationManager::class)->dispatchScanIfDue(
             $server,
             $type,
-            actorUserId: $actorUserId,
+            $this->loadedInstalledScanResult,
+            $actorUserId,
         );
+
+        if ($dispatch === null) {
+            return;
+        }
+
         $state = $dispatch['state'];
 
         if ($state !== null) {
             $this->setInstalledOperationState($state);
         }
 
-        if ($dispatch['reason'] === 'sync_queue') {
+        // Without a scheduler a stale result simply stays on screen; only a
+        // missing result needs the operator-facing warning.
+        if ($dispatch['reason'] === 'sync_queue' && $this->loadedInstalledScanResult === null) {
             $this->operationQueueWarningShown = true;
             $this->pollInstalledOperations = false;
 
@@ -843,6 +857,7 @@ class ModManagerPage extends Page implements HasTable
      */
     protected function setInstalledScanResult(?InstalledScanResult $scanResult): void
     {
+        $this->loadedInstalledScanResult = $scanResult;
         $installedFilesCount = $scanResult?->diskFileCount;
         $changed = $this->installedFilesCount !== $installedFilesCount
             || $this->installedScanDataReady !== ($scanResult !== null);
@@ -2494,15 +2509,18 @@ class ModManagerPage extends Page implements HasTable
 
                     $scanState = $snapshot['scan'];
 
-                    if ($scanResult === null && $scanState === null && $this->canScanInstalledProjects()) {
-                        $dispatch = $operations->dispatchScan(
-                            $server,
-                            $type,
-                            actorUserId: $this->actorUserIdForScan(),
-                        );
-                        $scanState = $dispatch['state'];
+                    // A fresh result queues nothing. A missing one queues a
+                    // visible scan; a stale one a background revalidation.
+                    $dispatch = !$scanState?->isActive() && $this->canScanInstalledProjects()
+                        ? $operations->dispatchScanIfDue($server, $type, $scanResult, $this->actorUserIdForScan())
+                        : null;
 
-                        if ($dispatch['reason'] === 'sync_queue' && !$this->operationQueueWarningShown) {
+                    if ($dispatch !== null) {
+                        $scanState = $dispatch['state'] ?? $scanState;
+
+                        if ($dispatch['reason'] === 'sync_queue'
+                            && $scanResult === null
+                            && !$this->operationQueueWarningShown) {
                             $this->operationQueueWarningShown = true;
                             Notification::make()
                                 ->title(trans('pelican-mod-manager::strings.operations.queue_required'))
@@ -4424,7 +4442,9 @@ class ModManagerPage extends Page implements HasTable
         $this->installedOperation = $state?->toCachePayload();
         $this->pollInstalledOperations = $this->shouldPollInstalledOperation($state);
 
-        if ($state?->operation !== InstalledOperationManager::OPERATION_SCAN || !$state->isActive()) {
+        if ($state?->operation !== InstalledOperationManager::OPERATION_SCAN
+            || !$state->isActive()
+            || $state->isBackground()) {
             return;
         }
 
@@ -4523,7 +4543,7 @@ class ModManagerPage extends Page implements HasTable
         // applied immediately.
         if ($state->isActive()
             && $state->operation === InstalledOperationManager::OPERATION_SCAN
-            && $this->activeTab !== 'installed') {
+            && ($this->activeTab !== 'installed' || $state->isBackground())) {
             return true;
         }
 
@@ -4652,7 +4672,9 @@ class ModManagerPage extends Page implements HasTable
 
         $operation = $this->getInstalledOperationDisplayPayload();
 
-        if (($operation['operation'] ?? null) !== InstalledOperationManager::OPERATION_SCAN) {
+        if (($operation['operation'] ?? null) !== InstalledOperationManager::OPERATION_SCAN
+            // A background revalidation refreshes data already on screen.
+            || (($operation['result']['background'] ?? false) === true)) {
             return false;
         }
 
@@ -4789,6 +4811,12 @@ class ModManagerPage extends Page implements HasTable
 
     protected function notifyInstalledOperationFinished(InstalledOperationState $state): void
     {
+        // A background revalidation keeps the previous data on screen and is
+        // retried automatically, so its outcome is not announced.
+        if ($state->isBackground()) {
+            return;
+        }
+
         if ($state->status === InstalledOperationState::STATUS_FAILED) {
             Notification::make()
                 ->title(trans('pelican-mod-manager::strings.operations.failed', [

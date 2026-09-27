@@ -6,7 +6,6 @@ use App\Models\Server;
 use App\Models\User;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -51,7 +50,6 @@ final class ScanInstalledProjects
         InstalledProjectService $service,
         InstalledOperationManager $operations,
         InstalledOperationLease $leases,
-        CacheRepository $cache,
         ProjectOperationAuthorizer $authorizer,
     ): void {
         $this->releaseAfterSeconds = null;
@@ -67,7 +65,7 @@ final class ScanInstalledProjects
             // A job queued by an older release held its lease from dispatch.
             // It must never run under a replacement owner's lease.
             if ($this->leaseToken !== null && $leases->refresh($this->serverId, $type, $this->leaseToken)) {
-                $this->scan($fileRepository, $service, $operations, $leases, $cache, $authorizer, $type, $force);
+                $this->scan($fileRepository, $service, $operations, $leases, $authorizer, $type, $force);
             }
 
             return;
@@ -89,7 +87,7 @@ final class ScanInstalledProjects
             $this->leaseToken = $claim['lease_token'];
             // An explicit rescan may have taken over this queued dispatch.
             $force = $force || ($claim['state']?->result['force'] ?? false) === true;
-            $this->scan($fileRepository, $service, $operations, $leases, $cache, $authorizer, $type, $force);
+            $this->scan($fileRepository, $service, $operations, $leases, $authorizer, $type, $force);
         } finally {
             if ($this->releaseAfterSeconds === null) {
                 $operations->releasePendingDispatch(
@@ -107,7 +105,6 @@ final class ScanInstalledProjects
         InstalledProjectService $service,
         InstalledOperationManager $operations,
         InstalledOperationLease $leases,
-        CacheRepository $cache,
         ProjectOperationAuthorizer $authorizer,
         ProjectType $type,
         bool $force,
@@ -150,11 +147,9 @@ final class ScanInstalledProjects
         );
 
         try {
-            if ($force) {
-                $cache->forget($service->getHashScanCacheKey($server, $type));
-            }
-
-            $result = $service->scanAndImportModsResult($server, $fileRepository, $type);
+            // A forced scan bypasses the fresh result instead of deleting it,
+            // so the page keeps its data if this scan fails.
+            $result = $service->scanAndImportModsResult($server, $fileRepository, $type, $force);
 
             if (!$result->successful && $result->failure === 'scan_in_progress') {
                 // Another process holds the scan lock. Give the lease back so

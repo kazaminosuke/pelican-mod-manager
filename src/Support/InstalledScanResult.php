@@ -4,6 +4,13 @@ namespace Kazaminosuke\ModManager\Support;
 
 final class InstalledScanResult
 {
+    /**
+     * A cached result younger than this is trusted as-is. An older one is
+     * still displayed, while a background scan compares the Wings directory
+     * listing with the recorded file signatures to pick up external changes.
+     */
+    public const FRESH_SECONDS = 600;
+
     /** @param array<int, string> $unknownFiles */
     public function __construct(
         public readonly bool $successful,
@@ -11,12 +18,13 @@ final class InstalledScanResult
         public readonly int $diskFileCount = 0,
         public readonly bool $cacheHit = false,
         public readonly ?string $failure = null,
+        public readonly ?int $checkedAt = null,
     ) {}
 
     /** @param array<int, string> $unknownFiles */
-    public static function success(array $unknownFiles, int $diskFileCount): self
+    public static function success(array $unknownFiles, int $diskFileCount, ?int $checkedAt = null): self
     {
-        return new self(true, array_values($unknownFiles), $diskFileCount);
+        return new self(true, array_values($unknownFiles), $diskFileCount, checkedAt: $checkedAt ?? time());
     }
 
     /** @param array<int, string> $unknownFiles */
@@ -33,7 +41,29 @@ final class InstalledScanResult
             diskFileCount: $this->diskFileCount,
             cacheHit: true,
             failure: $this->failure,
+            checkedAt: $this->checkedAt,
         );
+    }
+
+    /**
+     * A copy that describes the same files but must be revalidated soon,
+     * e.g. after a scan could only partly identify them.
+     */
+    public function asStale(): self
+    {
+        return new self(
+            successful: true,
+            unknownFiles: $this->unknownFiles,
+            diskFileCount: $this->diskFileCount,
+            cacheHit: $this->cacheHit,
+            checkedAt: null,
+        );
+    }
+
+    public function isFresh(?int $now = null): bool
+    {
+        return $this->checkedAt !== null
+            && ($now ?? time()) - $this->checkedAt < self::FRESH_SECONDS;
     }
 
     /** @return array<string, mixed> */
@@ -44,6 +74,7 @@ final class InstalledScanResult
             'successful' => $this->successful,
             'unknown_files' => $this->unknownFiles,
             'disk_file_count' => $this->diskFileCount,
+            'checked_at' => $this->checkedAt,
         ];
     }
 
@@ -65,10 +96,14 @@ final class InstalledScanResult
             }
         }
 
+        // Results written before checked_at existed are valid but stale.
+        $checkedAt = $payload['checked_at'] ?? null;
+
         return (new self(
             successful: true,
             unknownFiles: $unknownFiles,
             diskFileCount: $payload['disk_file_count'],
+            checkedAt: is_int($checkedAt) ? $checkedAt : null,
         ))->asCacheHit();
     }
 }

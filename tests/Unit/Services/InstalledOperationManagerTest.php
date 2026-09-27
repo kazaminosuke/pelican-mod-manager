@@ -14,6 +14,7 @@ use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
+use Kazaminosuke\ModManager\Support\InstalledScanResult;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -255,6 +256,68 @@ class InstalledOperationManagerTest extends TestCase
         self::assertFalse($explicit['state']?->isBackground());
         self::assertTrue($explicit['state']?->result['force']);
         self::assertCount(1, $runner->spawned);
+    }
+
+    public function test_fresh_scan_result_queues_nothing(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), new InstalledOperationLease($cache), $runner);
+
+        self::assertNull($manager->dispatchScanIfDue(42, ProjectType::Mod, InstalledScanResult::success([], 3), 7));
+        self::assertSame([], $runner->spawned);
+    }
+
+    public function test_missing_result_queues_a_visible_scan_and_stale_result_a_background_one(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), new InstalledOperationLease($cache), $runner);
+
+        $missing = $manager->dispatchScanIfDue(42, ProjectType::Mod, null, 7);
+        $stale = $manager->dispatchScanIfDue(43, ProjectType::Mod, InstalledScanResult::success([], 3)->asStale(), 7);
+
+        self::assertTrue($missing['dispatched'] ?? false);
+        self::assertFalse($missing['state']?->isBackground());
+        self::assertTrue($stale['dispatched'] ?? false);
+        self::assertTrue($stale['state']?->isBackground());
+        self::assertCount(2, $runner->spawned);
+    }
+
+    /**
+     * Regression: a failed scan result was never cached and its terminal
+     * state was forgotten after the notification, so the next render queued
+     * the same failing scan again, indefinitely.
+     */
+    public function test_automatic_scans_are_throttled_after_a_failure(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $leases = new InstalledOperationLease($cache);
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), $leases, $runner);
+
+        $manager->dispatchScanIfDue(42, ProjectType::Mod, null, 7);
+        $token = $runner->spawned[0]['payload']['dispatch_token'];
+        $claim = $manager->claimQueuedScan(42, ProjectType::Mod, $token);
+        $manager->fail(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN, 'wings_directory_unavailable', leaseToken: $claim['lease_token']);
+        $manager->releasePendingDispatch(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN, $token);
+        $manager->forget(42, ProjectType::Mod, InstalledOperationManager::OPERATION_SCAN);
+
+        self::assertNull($manager->dispatchScanIfDue(42, ProjectType::Mod, null, 7));
+        self::assertCount(1, $runner->spawned);
+
+        // An explicit rescan is never throttled.
+        self::assertTrue($manager->dispatchScan(42, ProjectType::Mod, force: true, actorUserId: 7)['dispatched']);
+    }
+
+    public function test_automatic_scan_that_could_not_be_queued_does_not_hold_the_throttle(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake();
+        $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), new InstalledOperationLease($cache), $runner);
+
+        self::assertSame('missing_actor', $manager->dispatchScanIfDue(42, ProjectType::Mod, null, null)['reason'] ?? null);
+        self::assertTrue($manager->dispatchScanIfDue(42, ProjectType::Mod, null, 7)['dispatched'] ?? false);
     }
 
     public function test_terminal_state_keeps_the_background_flag(): void

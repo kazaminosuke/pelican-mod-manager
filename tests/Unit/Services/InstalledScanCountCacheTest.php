@@ -48,6 +48,7 @@ final class InstalledScanCountCacheTest extends TestCase
                     Server $server,
                     DaemonFileRepository $fileRepository,
                     ?ProjectType $type = null,
+                    bool $force = false,
                 ): InstalledScanResult {
                     $this->scanExecutions++;
 

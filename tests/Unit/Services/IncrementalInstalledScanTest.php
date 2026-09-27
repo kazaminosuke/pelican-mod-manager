@@ -222,11 +222,12 @@ class IncrementalInstalledScanTest extends TestCase
         $service = new TestableInstalledProjectService();
         $signature = ['size' => 123, 'modified_at' => '2026-07-30T00:00:00Z'];
         $hashes = ['murmur2' => '1', 'sha512' => 'two', 'sha256' => 'three'];
+        $checkedAt = gmdate('Y-m-d\TH:i:s\Z', time() - 3600);
         $existing = [
             'filename' => 'unknown.jar',
             'file_signature' => $signature,
             'hashes' => $hashes,
-            'last_checked_at' => '2026-08-01T00:00:00Z',
+            'last_checked_at' => $checkedAt,
         ];
         $entry = [
             'filename' => 'unknown.jar',
@@ -234,14 +235,55 @@ class IncrementalInstalledScanTest extends TestCase
             'hashes' => $hashes,
         ];
 
-        self::assertSame('2026-08-01T00:00:00Z', $service->exposeUnresolvedLastCheckedAt($existing, $entry));
+        self::assertSame($checkedAt, $service->exposeUnresolvedLastCheckedAt($existing, $entry));
         self::assertNotSame(
-            '2026-08-01T00:00:00Z',
+            $checkedAt,
             $service->exposeUnresolvedLastCheckedAt($existing, [
                 ...$entry,
                 'file_signature' => ['size' => 124, 'modified_at' => $signature['modified_at']],
             ]),
         );
+    }
+
+    public function test_a_due_recheck_records_a_new_last_checked_timestamp(): void
+    {
+        $service = new TestableInstalledProjectService();
+        $signature = ['size' => 123, 'modified_at' => '2026-07-30T00:00:00Z'];
+        $hashes = ['murmur2' => '1', 'sha512' => 'two', 'sha256' => 'three'];
+        $expired = gmdate('Y-m-d\TH:i:s\Z', time() - 2 * 86400);
+        $existing = [
+            'filename' => 'unknown.jar',
+            'file_signature' => $signature,
+            'hashes' => $hashes,
+            'last_checked_at' => $expired,
+        ];
+
+        self::assertNotSame($expired, $service->exposeUnresolvedLastCheckedAt($existing, [
+            'filename' => 'unknown.jar',
+            'file_signature' => $signature,
+            'hashes' => $hashes,
+        ]));
+    }
+
+    public function test_transient_failure_does_not_mark_a_new_unknown_file_as_checked(): void
+    {
+        $service = new TestableInstalledProjectService();
+        $resolved = $service->exposeResolveUnmatched(
+            remainingFilenames: ['mystery.jar'],
+            hashFailures: [],
+            lookupFailures: ['modrinth'],
+            filesToResolve: [
+                'mystery.jar' => ['file_signature' => ['size' => 11, 'modified_at' => 't']],
+            ],
+            hashesByFilename: [
+                'mystery.jar' => ['murmur2' => '1', 'sha512' => '2', 'sha256' => '3'],
+            ],
+            installedByFilename: [],
+            unresolvedByFilename: [],
+        );
+
+        self::assertSame(['mystery.jar'], array_column($resolved['unresolved'], 'filename'));
+        self::assertArrayNotHasKey('last_checked_at', $resolved['unresolved'][0]);
     }
 
     public function test_transient_hash_or_lookup_failure_keeps_known_installed_entries(): void

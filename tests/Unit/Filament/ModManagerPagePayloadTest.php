@@ -470,6 +470,50 @@ class ModManagerPagePayloadTest extends TestCase
         self::assertSame([], $page->operationStatusAttributesForTest());
     }
 
+    /**
+     * Regression: an expired scan cache queued a scan on every page load
+     * and showed "Scanning installed files queued" although nothing changed.
+     * A background revalidation now stays out of the UI entirely.
+     */
+    public function test_background_scan_revalidation_is_not_rendered_or_announced(): void
+    {
+        $page = new TestableModManagerPage();
+        $page->activeTab = 'installed';
+        $scan = InstalledOperationState::queued(
+            InstalledOperationManager::OPERATION_SCAN,
+            42,
+            ProjectType::Mod,
+            ['background' => true],
+        );
+
+        $page->applyInstalledOperationForTest($scan);
+
+        self::assertFalse($page->shouldShowOperationStatusForTest());
+        self::assertTrue($page->pollInstalledOperations);
+        self::assertTrue($page->shouldSkipInstalledOperationPollRenderForTest($page->installedOperation, $scan->running()));
+
+        $completed = $scan->running()->completed(['background' => true]);
+        $page->applyInstalledOperationForTest($completed);
+        $page->rememberScanCompletionForTest($completed);
+
+        self::assertFalse($page->shouldShowOperationStatusForTest());
+    }
+
+    public function test_explicit_scan_status_is_still_rendered(): void
+    {
+        $page = new TestableModManagerPage();
+        $page->activeTab = 'installed';
+
+        $page->applyInstalledOperationForTest(InstalledOperationState::queued(
+            InstalledOperationManager::OPERATION_SCAN,
+            42,
+            ProjectType::Mod,
+            ['background' => false],
+        ));
+
+        self::assertTrue($page->shouldShowOperationStatusForTest());
+    }
+
     public function test_bulk_update_status_remains_rendered(): void
     {
         $page = new TestableModManagerPage();
