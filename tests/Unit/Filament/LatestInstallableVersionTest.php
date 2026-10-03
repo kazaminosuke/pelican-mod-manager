@@ -7,6 +7,7 @@ use Exception;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -35,12 +36,11 @@ final class LatestInstallableVersionTest extends TestCase
         $source = Mockery::mock(ProjectSourceInterface::class.', '.SourceFetchAuthoritativeInterface::class);
         $source->shouldNotReceive('getVersions');
         $source->shouldReceive('getVersionsAuthoritatively')->once()->andReturn([
-            // e.g. a Spigot version Spiget has not mirrored yet
             ['id' => '4', 'version_number' => '1.3.0', 'files' => []],
             ['id' => '3', 'version_number' => '1.2.0', 'files' => [[
                 'primary' => true,
                 'filename' => 'Plugin-1.2.0.jar',
-                'url' => 'https://cdn.spiget.org/file/spiget-resources/50.jar',
+                'url' => 'https://www.spigotmc.org/resources/50/download?version=3',
             ]]],
         ]);
 
@@ -58,6 +58,46 @@ final class LatestInstallableVersionTest extends TestCase
         $this->expectExceptionMessage('temporarily unavailable');
 
         (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '50');
+    }
+
+    public function test_external_spigot_version_is_not_reported_as_a_missing_url(): void
+    {
+        $source = Mockery::mock(ProjectSourceInterface::class.', '.SourceFetchAuthoritativeInterface::class);
+        $source->shouldReceive('getVersionsAuthoritatively')->once()->andReturn([
+            [
+                'id' => '606394',
+                'project_id' => '2124',
+                'version_number' => 'latest',
+                'files' => [],
+                'download_unavailable' => DownloadUnavailableException::EXTERNAL,
+            ],
+        ]);
+
+        try {
+            (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '2124');
+            self::fail('An external resource must not be installed.');
+        } catch (DownloadUnavailableException $exception) {
+            self::assertSame(DownloadUnavailableException::EXTERNAL, $exception->reason());
+        }
+    }
+
+    public function test_premium_spigot_version_is_not_reported_as_a_missing_url(): void
+    {
+        $source = Mockery::mock(ProjectSourceInterface::class.', '.SourceFetchAuthoritativeInterface::class);
+        $source->shouldReceive('getVersionsAuthoritatively')->andReturn([
+            [
+                'id' => '7',
+                'project_id' => '99',
+                'version_number' => '1.0.0',
+                'files' => [],
+                'download_unavailable' => DownloadUnavailableException::PREMIUM,
+            ],
+        ]);
+
+        $this->expectException(DownloadUnavailableException::class);
+        $this->expectExceptionMessage('premium');
+
+        (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '99');
     }
 
     public function test_versions_without_any_downloadable_file_are_rejected(): void

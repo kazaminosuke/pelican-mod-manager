@@ -201,6 +201,8 @@ return [
         'update_all_plugins' => 'Alle Plugins aktualisieren',
         'update_all_datapacks' => 'Alle Datapacks aktualisieren',
         'install_latest' => 'Neueste Version installieren',
+        'install_external_unavailable' => 'Extern gehostet. Eine automatische Installation ist nicht verfügbar.',
+        'install_premium_unavailable' => 'Premium-Ressource. Eine automatische Installation ist nicht verfügbar.',
         'install' => 'Installieren',
         'installed' => 'Installiert',
         'update' => 'Aktualisieren',
@@ -238,6 +240,9 @@ return [
     'notifications' => [
         'install_success' => 'Installation abgeschlossen',
         'install_success_body' => ':name Version :version erfolgreich installiert',
+        'download_unavailable' => 'Automatischer Download ist nicht verfügbar',
+        'download_unavailable_external' => 'Dieses Plugin wird außerhalb von Spigot gehostet und kann nicht automatisch installiert werden.',
+        'download_unavailable_premium' => 'Dieses Premium-Plugin kann nicht automatisch installiert werden.',
         'install_failed' => 'Installation fehlgeschlagen',
         'install_failed_body' => 'Bei der Installation ist ein Fehler aufgetreten. Bitte versuche es erneut oder wende dich an den Support, wenn das Problem weiterhin besteht.',
         'update_success' => 'Aktualisierung abgeschlossen',

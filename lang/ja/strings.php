@@ -201,6 +201,8 @@ return [
         'update_all_plugins' => 'すべてのPluginを更新',
         'update_all_datapacks' => 'すべてのDatapackを更新',
         'install_latest' => '最新バージョンをインストール',
+        'install_external_unavailable' => 'Spigot外で配布されているため、自動インストールできません。',
+        'install_premium_unavailable' => '有料リソースのため、自動インストールできません。',
         'install' => 'インストール',
         'installed' => 'インストール済み',
         'update' => '更新',
@@ -238,6 +240,9 @@ return [
     'notifications' => [
         'install_success' => 'インストールが完了しました',
         'install_success_body' => ':name のバージョン :version を正常にインストールしました',
+        'download_unavailable' => '自動ダウンロードは利用できません',
+        'download_unavailable_external' => 'このプラグインはSpigot外で配布されているため、自動インストールできません。',
+        'download_unavailable_premium' => 'この有料プラグインは自動インストールできません。',
         'install_failed' => 'インストールに失敗しました',
         'install_failed_body' => 'インストール中にエラーが発生しました。もう一度お試しいただくか、問題が解決しない場合はサポートにお問い合わせください。',
         'update_success' => '更新が完了しました',

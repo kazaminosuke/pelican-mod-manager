@@ -49,6 +49,7 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
 use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
@@ -1880,10 +1881,12 @@ class ModManagerPage extends Page implements HasTable
      *
      * The list is read for this action (fresh when possible, never an empty
      * list standing in for a slow or failing source). Some listed versions
-     * have no downloadable file: Spiget mirrors only a resource's current
-     * JAR, CurseForge authors can disable third-party downloads, and a
-     * GitHub release may carry no JAR. Those are skipped, matching the
-     * update checks, which only offer installable versions.
+     * have no downloadable file: a Spigot resource can be premium or hosted
+     * outside Spigot, CurseForge authors can disable third-party downloads,
+     * and a GitHub release may carry no JAR. Those are skipped, matching the
+     * update checks, which only offer installable versions. A Spigot resource
+     * that was refused on purpose raises {@see DownloadUnavailableException}
+     * instead of looking like a URL that disappeared.
      *
      * @return array<string, mixed>
      *
@@ -1903,13 +1906,48 @@ class ModManagerPage extends Page implements HasTable
             throw new Exception('No compatible versions found');
         }
 
+        $blocked = [];
+
         foreach ($versions as $version) {
             if (is_array($version) && ProjectPrimaryFile::fromVersion($version) !== null) {
                 return $version;
             }
+
+            $reason = is_array($version) ? ($version['download_unavailable'] ?? null) : null;
+            if ($reason === DownloadUnavailableException::PREMIUM || $reason === DownloadUnavailableException::EXTERNAL) {
+                $blocked[$reason] = true;
+            }
+        }
+
+        if ($blocked === [DownloadUnavailableException::PREMIUM => true]) {
+            throw new DownloadUnavailableException(DownloadUnavailableException::PREMIUM);
+        }
+
+        if ($blocked === [DownloadUnavailableException::EXTERNAL => true]) {
+            throw new DownloadUnavailableException(DownloadUnavailableException::EXTERNAL);
         }
 
         throw new Exception('No downloadable file found');
+    }
+
+    /**
+     * Catalog rows from Spiget record when an automatic install must not be
+     * offered. Compact rows omit the field and stay installable until the
+     * action resolves the resource.
+     *
+     * @param  array<string, mixed>  $record
+     */
+    protected function spigotDownloadBlock(array $record): ?string
+    {
+        if (($record['source'] ?? null) !== ProjectSourceKey::Spigot->value) {
+            return null;
+        }
+
+        $block = $record['spigot_download_block'] ?? null;
+
+        return $block === DownloadUnavailableException::PREMIUM || $block === DownloadUnavailableException::EXTERNAL
+            ? $block
+            : null;
     }
 
     /**
@@ -3129,7 +3167,14 @@ class ModManagerPage extends Page implements HasTable
                         return $sections;
                     }),
                 CatalogRowAction::compact('install_latest', 'success')
-                    ->tooltip(trans('pelican-mod-manager::strings.actions.install_latest'))
+                    ->tooltip(function (array $record): string {
+                        return match ($this->spigotDownloadBlock($record)) {
+                            DownloadUnavailableException::PREMIUM => trans('pelican-mod-manager::strings.actions.install_premium_unavailable'),
+                            DownloadUnavailableException::EXTERNAL => trans('pelican-mod-manager::strings.actions.install_external_unavailable'),
+                            default => trans('pelican-mod-manager::strings.actions.install_latest'),
+                        };
+                    })
+                    ->disabled(fn (array $record): bool => $this->spigotDownloadBlock($record) !== null)
                     ->authorize(fn (): bool => $this->canManageCurrentInstallOrUpdate())
                     ->hidden(fn (array $record): bool => $record['untracked'] ?? false)
                     ->visible(function (array $record) {
@@ -4906,6 +4951,18 @@ class ModManagerPage extends Page implements HasTable
         if ($exception instanceof InstalledOperationBusyException) {
             Notification::make()
                 ->title(trans('pelican-mod-manager::strings.operations.already_active'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($exception instanceof DownloadUnavailableException) {
+            Notification::make()
+                ->title(trans('pelican-mod-manager::strings.notifications.download_unavailable'))
+                ->body(trans($exception->reason() === DownloadUnavailableException::PREMIUM
+                    ? 'pelican-mod-manager::strings.notifications.download_unavailable_premium'
+                    : 'pelican-mod-manager::strings.notifications.download_unavailable_external'))
                 ->warning()
                 ->send();
 

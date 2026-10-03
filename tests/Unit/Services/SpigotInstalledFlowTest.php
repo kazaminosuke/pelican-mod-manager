@@ -288,13 +288,9 @@ class SpigotInstalledFlowTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_bulk_update_installs_the_cdn_file_and_skips_uninstallable_spigot_updates(): void
+    public function test_bulk_update_installs_the_official_file_and_skips_uninstallable_spigot_updates(): void
     {
         Http::fake([
-            'api.spiget.org/v2/resources/50/download' => Http::response('', 302, [
-                'X-Spiget-File-Source' => 'cdn',
-                'Location' => 'https://cdn.spiget.org/file/spiget-resources/50.jar',
-            ]),
             'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
                 'name' => '1.2.0',
                 'releaseDate' => 1_700_000_000,
@@ -349,7 +345,7 @@ class SpigotInstalledFlowTest extends TestCase
 
                 return $record['project_id'] === '50'
                     && $version['id'] === '3'
-                    && $primaryFile['url'] === 'https://cdn.spiget.org/file/spiget-resources/50.jar'
+                    && $primaryFile['url'] === 'https://www.spigotmc.org/resources/50/download?version=3'
                     && $primaryFile['filename'] === 'FreePlugin-1.2.0.jar';
             });
         $server = new Server();

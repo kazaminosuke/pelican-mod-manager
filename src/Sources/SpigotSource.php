@@ -15,6 +15,7 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchHandlerInterface;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Support\BukkitPluginDescriptor;
@@ -34,18 +35,18 @@ use Throwable;
  * Plugin catalog source for SpigotMC resources.
  *
  * Canonical per-resource metadata (Installed rows, identification, project
- * lookups) comes from the official Spigot Simple API. Catalog listings and
- * search, version listings, and public-file download redirects come from
- * Spiget because those operations are not exposed by the official API.
- * Premium, buyer-only, and externally hosted files are never downloaded.
+ * lookups) comes from the official Spigot Simple API. Catalog listings,
+ * search, and version listings come from Spiget because those operations are
+ * not exposed by the official API. Spiget is not used as a file host.
+ * Install and update URLs are the official Spigot download address for the
+ * version id Spiget reports. Premium, buyer-only, and externally hosted
+ * files are never downloaded.
  */
 class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLatestVersionSourceInterface, ProjectMetadataPeekManyInterface, ProjectSourceInterface, SourceFetchAuthoritativeInterface, SourceFetchHandlerInterface
 {
     protected const OFFICIAL_API = 'https://api.spigotmc.org/simple/0.2/index.php';
 
     protected const SPIGET_API = 'https://api.spiget.org/v2';
-
-    protected const CDN_HOST = 'cdn.spiget.org';
 
     protected const SPIGET_MAX_AGE_SECONDS = 3600;
 
@@ -67,7 +68,9 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      * changes shape or meaning so entries written by an older release are
      * refetched instead of served for their remaining TTL.
      */
-    private const CACHE_SCHEMA = 2;
+    private const CACHE_SCHEMA = 4;
+
+    private const OPERATION_CURRENT = 'current';
 
     private const OPERATION_LATEST = 'latest';
 
@@ -131,6 +134,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         return match ($spec->operation) {
+            self::OPERATION_CURRENT => $this->fetchCurrentInstallable($spec, $timeoutSeconds),
             self::OPERATION_LATEST => $this->fetchLatestVersions($spec, $timeoutSeconds),
             self::OPERATION_PROJECT => $this->fetchProject($spec, $timeoutSeconds),
             self::OPERATION_SEARCH => $this->fetchSearch($spec, $timeoutSeconds),
@@ -145,7 +149,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             self::OPERATION_PROJECT => null,
             self::OPERATION_LATEST => $this->emptyLatestVersions($spec),
             self::OPERATION_SEARCH => ['hits' => [], 'total_hits' => 0],
-            self::OPERATION_VERSIONS => [],
+            self::OPERATION_CURRENT, self::OPERATION_VERSIONS => [],
             default => [],
         };
     }
@@ -278,9 +282,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
-     * Spiget's CDN serves only the resource's current file. An install
-     * prefers a fresh version list so the version it records matches the
-     * file it downloads; a stale list is only used when Spiget is down.
+     * The version an install or update can download.
+     *
+     * Built from the resource and /versions/latest. The file URL is the
+     * official Spigot download for that version id. The historical version
+     * list is not consulted, and Spiget's CDN is not used.
      *
      * @return array<int, mixed>
      */
@@ -292,7 +298,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         $versions = $this->sourceCache->swrForAction(
-            $this->versionsSpec($resourceId, resolveDownloads: true),
+            $this->currentSpec($resourceId),
             CacheProfile::InstalledLatest,
         );
 
@@ -628,6 +634,35 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         return $resolved;
     }
 
+    /**
+     * Current installable version. Premium and external resources are
+     * returned without a URL so the caller rejects them.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected function fetchCurrentInstallable(SourceFetchSpec $spec, float $timeoutSeconds): array
+    {
+        $projectId = $this->normalizeResourceId((string) ($spec->arguments['project_id'] ?? ''));
+        if ($projectId === null) {
+            throw new Exception('Invalid Spigot versions parameters.');
+        }
+
+        $deadline = microtime(true) + max(0.1, $timeoutSeconds);
+        $responses = $this->pool([
+            'resource' => $this->spigetResourceUrl($projectId),
+            'latest' => $this->spigetResourceUrl($projectId, '/versions/latest'),
+        ], $this->remainingTimeout($deadline));
+
+        $resource = $this->poolJson($responses['resource'] ?? null, $projectId);
+        $latest = $this->poolJson($responses['latest'] ?? null, $projectId);
+        $version = $this->normalizeSpigetVersion($projectId, $latest, $resource);
+        if ($version === null) {
+            return [];
+        }
+
+        return [$this->withOfficialDownloadUrl($version, $resource)];
+    }
+
     /** @return array<int, array<string, mixed>> */
     protected function fetchVersions(SourceFetchSpec $spec, float $timeoutSeconds): array
     {
@@ -658,18 +693,6 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         $firstPage = $this->poolJson($responses['versions'] ?? null, $projectId);
-        $currentFileUrl = null;
-
-        if ($resolveDownloads && $resource !== null && $this->isDirectlyDownloadable($resource)) {
-            [$fileUrls, $fileFailures] = $this->resolveCurrentFileUrls([$projectId], $this->remainingTimeout($deadline));
-
-            if ($fileFailures !== []) {
-                throw new Exception(implode('; ', $fileFailures));
-            }
-
-            $currentFileUrl = $fileUrls[$projectId] ?? null;
-        }
-
         $versions = [];
 
         for ($page = 1; $page <= self::VERSION_MAX_PAGES; $page++) {
@@ -684,7 +707,9 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             foreach ($payload as $version) {
                 $normalized = is_array($version) ? $this->normalizeSpigetVersion($projectId, $version, $resource) : null;
                 if ($normalized !== null) {
-                    $versions[] = $this->withCurrentFileUrl($normalized, $resource, $currentFileUrl);
+                    $versions[] = $resolveDownloads
+                        ? $this->withOfficialDownloadUrl($normalized, $resource)
+                        : $this->withoutDownloadUrl($normalized);
                 }
             }
 
@@ -756,8 +781,9 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
     /**
      * Resolve each resource's current version. Spiget's resource payload has
-     * the premium/external flags and current version id but no version name,
-     * so it is paired with /versions/latest in the same pool.
+     * the premium/external flags but no version name, so it is paired with
+     * /versions/latest in the same pool. The download URL is built from
+     * those ids and is not looked up from Spiget.
      *
      * @param array<int, string> $projectIds
      * @return array{0: array<string, array<string, mixed>>, 1: array<string, string>}
@@ -802,37 +828,14 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
         }
 
-        $downloadable = array_keys(array_filter(
-            $candidates,
-            fn (array $candidate): bool => $this->isCurrentVersion($candidate['version'], $candidate['resource'])
-                && $this->isDirectlyDownloadable($candidate['resource']),
-        ));
-        $fileUrls = [];
-
-        if ($downloadable !== []) {
-            // A failed download lookup is a fetch failure for that resource,
-            // not proof that it has no installable update.
-            try {
-                [$fileUrls, $fileFailures] = $this->resolveCurrentFileUrls(
-                    array_map('strval', $downloadable),
-                    $this->remainingTimeout($deadline),
-                );
-            } catch (Throwable $exception) {
-                report($exception);
-                $fileFailures = array_fill_keys(array_map('strval', $downloadable), $exception->getMessage());
-            }
-
-            $failures = array_replace($failures, $fileFailures);
-        }
-
         // The Installed tab offers an update for any resolved latest version,
-        // so a premium, external, or not yet mirrored file stays unresolved
-        // rather than surfacing an update that cannot be installed.
+        // so a premium or external file stays unresolved rather than
+        // surfacing an update that cannot be installed.
         $resolved = [];
         foreach ($candidates as $projectId => $candidate) {
-            $fileUrl = $fileUrls[$projectId] ?? null;
-            if ($fileUrl !== null) {
-                $resolved[$projectId] = $this->withCurrentFileUrl($candidate['version'], $candidate['resource'], $fileUrl);
+            $version = $this->withOfficialDownloadUrl($candidate['version'], $candidate['resource']);
+            if ($version['files'] !== []) {
+                $resolved[$projectId] = $version;
             }
         }
 
@@ -1086,95 +1089,59 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
-     * Spiget mirrors only a free resource's current JAR on its CDN, via
-     * /resources/{id}/download. Version-specific download routes redirect to
-     * spigotmc.org, which needs a browser session, so they are never used.
-     * Only a redirect to the CDN is accepted; external links, premium
-     * files, and anything hosted elsewhere yield no URL.
-     *
-     * A transport error, rate limit, or server error is reported as a
-     * failure rather than as "no file": otherwise one timeout would be
-     * cached as a resource without a downloadable version.
-     *
-     * @param array<int, string> $resourceIds
-     * @return array{0: array<string, string>, 1: array<string, string>} [urls, failures] keyed by resource id
-     */
-    private function resolveCurrentFileUrls(array $resourceIds, float $timeoutSeconds): array
-    {
-        $urls = [];
-        foreach ($resourceIds as $resourceId) {
-            $urls[$resourceId] = self::SPIGET_API."/resources/{$resourceId}/download";
-        }
-
-        $resolved = [];
-        $failures = [];
-        foreach ($this->pool($urls, $timeoutSeconds, followRedirects: false) as $resourceId => $response) {
-            $resourceId = (string) $resourceId;
-
-            if ($response instanceof Throwable) {
-                $failures[$resourceId] = $response->getMessage();
-
-                continue;
-            }
-
-            if (!$response instanceof Response) {
-                $failures[$resourceId] = "No Spiget download response for resource [$resourceId].";
-
-                continue;
-            }
-
-            if ($response->status() === 429 || $response->serverError()) {
-                $failures[$resourceId] = "Spiget download lookup for resource [$resourceId] returned HTTP {$response->status()}.";
-
-                continue;
-            }
-
-            if (!$response->redirect()
-                || strtolower((string) $response->header('X-Spiget-File-Source')) === 'external') {
-                continue;
-            }
-
-            $location = $response->header('Location');
-            if (str_starts_with($location, '//')) {
-                $location = 'https:'.$location;
-            }
-
-            if ($this->isAllowedDownloadUrl($location)) {
-                $resolved[$resourceId] = $location;
-            }
-        }
-
-        return [$resolved, $failures];
-    }
-
-    /**
-     * Attach the current-file URL to the version it belongs to. Every other
-     * version keeps no downloadable file.
+     * Attach the official Spigot download URL for this version. Premium and
+     * external resources keep no file, and record why, so an install is not
+     * reported as a missing URL. Spiget's CDN is never used.
      *
      * @param  array<string, mixed>  $version
      * @param  array<string, mixed>|null  $resource
      * @return array<string, mixed>
      */
-    private function withCurrentFileUrl(array $version, ?array $resource, ?string $currentFileUrl): array
+    private function withOfficialDownloadUrl(array $version, ?array $resource): array
     {
-        if ($resource !== null && $currentFileUrl !== null && $this->isCurrentVersion($version, $resource)) {
-            $version['files'][0]['url'] = $currentFileUrl;
-        } else {
-            $version['files'] = [];
+        if (!is_array($resource) || !$this->isDirectlyDownloadable($resource)) {
+            return $this->withoutDownloadUrl($version, $this->downloadBlock(is_array($resource) ? $resource : []));
         }
+
+        $url = $this->officialDownloadUrl((string) ($version['project_id'] ?? ''), (string) ($version['id'] ?? ''));
+        if ($url === null) {
+            return $this->withoutDownloadUrl($version, 'invalid');
+        }
+
+        unset($version['download_unavailable']);
+        $version['files'][0]['url'] = $url;
 
         return $version;
     }
 
     /**
      * @param  array<string, mixed>  $version
-     * @param  array<string, mixed>  $resource
+     * @return array<string, mixed>
      */
-    private function isCurrentVersion(array $version, array $resource): bool
+    private function withoutDownloadUrl(array $version, ?string $reason = null): array
     {
-        $currentId = $resource['version']['id'] ?? null;
+        $version['files'] = [];
 
-        return is_scalar($currentId) && (string) $currentId === (string) ($version['id'] ?? '');
+        if ($reason === DownloadUnavailableException::PREMIUM
+            || $reason === DownloadUnavailableException::EXTERNAL
+            || $reason === 'invalid') {
+            $version['download_unavailable'] = $reason;
+        } else {
+            unset($version['download_unavailable']);
+        }
+
+        return $version;
+    }
+
+    private function officialDownloadUrl(string $resourceId, string $versionId): ?string
+    {
+        $resourceId = $this->normalizeResourceId($resourceId);
+        $versionId = trim($versionId);
+        if ($resourceId === null || preg_match('/^[1-9]\d*$/', $versionId) !== 1) {
+            return null;
+        }
+
+        return 'https://www.spigotmc.org/resources/'.$resourceId.'/download?version='.$versionId;
     }
 
     /**
@@ -1188,15 +1155,6 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         return self::SPIGET_API."/resources/{$resourceId}{$path}?".http_build_query($query + [
             '_' => intdiv(time(), self::SPIGET_MAX_AGE_SECONDS) * self::SPIGET_MAX_AGE_SECONDS,
         ]);
-    }
-
-    private function isAllowedDownloadUrl(string $url): bool
-    {
-        $parts = parse_url($url);
-        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
-        $host = strtolower((string) ($parts['host'] ?? ''));
-
-        return $scheme === 'https' && $host === self::CDN_HOST;
     }
 
     /**
@@ -1246,8 +1204,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         $downloads = $resource['downloads'] ?? null;
-
-        return [
+        $project = [
             'project_id' => $projectId,
             'slug' => $projectId,
             'title' => (string) ($resource['name'] ?? $projectId),
@@ -1260,6 +1217,41 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             'project_type' => ProjectType::Plugin->value,
             'source' => ProjectSourceKey::Spigot->value,
         ];
+        $block = $this->downloadBlock($resource);
+        if ($block !== null) {
+            $project['spigot_download_block'] = $block;
+        }
+
+        return $project;
+    }
+
+    /**
+     * Why this resource must not receive an automatic file URL.
+     *
+     * Compact catalog rows omit the premium/external fields. Those stay
+     * unmarked so the install action can resolve them instead of hiding a
+     * download that might exist.
+     *
+     * @param  array<string, mixed>  $resource
+     */
+    private function downloadBlock(array $resource): ?string
+    {
+        $known = array_key_exists('premium', $resource)
+            || array_key_exists('external', $resource)
+            || array_key_exists('file', $resource);
+        if (!$known) {
+            return null;
+        }
+
+        if ($this->isPremium($resource)) {
+            return DownloadUnavailableException::PREMIUM;
+        }
+
+        if ($this->isExternal($resource)) {
+            return DownloadUnavailableException::EXTERNAL;
+        }
+
+        return null;
     }
 
     /**
@@ -1580,6 +1572,13 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         return $this->spec(self::OPERATION_VERSIONS, [
             'project_id' => $projectId,
             'resolve_downloads' => $resolveDownloads,
+        ]);
+    }
+
+    private function currentSpec(string $projectId): SourceFetchSpec
+    {
+        return $this->spec(self::OPERATION_CURRENT, [
+            'project_id' => $projectId,
         ]);
     }
 }

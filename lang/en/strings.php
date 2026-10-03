@@ -201,6 +201,8 @@ return [
         'update_all_plugins' => 'Update all plugins',
         'update_all_datapacks' => 'Update all datapacks',
         'install_latest' => 'Install latest version',
+        'install_external_unavailable' => 'Hosted outside Spigot. Automatic install is not available.',
+        'install_premium_unavailable' => 'Premium resource. Automatic install is not available.',
         'install' => 'Install',
         'installed' => 'Installed',
         'update' => 'Update',
@@ -238,6 +240,9 @@ return [
     'notifications' => [
         'install_success' => 'Installation completed',
         'install_success_body' => 'Successfully installed :name version :version',
+        'download_unavailable' => 'Automatic download is not available',
+        'download_unavailable_external' => 'This plugin is hosted outside Spigot, so it cannot be installed automatically.',
+        'download_unavailable_premium' => 'This premium plugin cannot be installed automatically.',
         'install_failed' => 'Installation failed',
         'install_failed_body' => 'An error occurred during installation. Please try again or contact support if the issue persists.',
         'update_success' => 'Update completed',
