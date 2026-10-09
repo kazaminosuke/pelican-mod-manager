@@ -509,7 +509,8 @@ class SpigotSourceTest extends TestCase
         self::assertSame('648014', $luckPerms['id']);
         self::assertSame('5.5.71', $luckPerms['version_number']);
         self::assertSame('2026-08-06T19:38:34+00:00', $luckPerms['date_published']);
-        self::assertSame('https://www.spigotmc.org/resources/28140/download?version=648014', $luckPerms['files'][0]['url']);
+        self::assertSame('https://cdn.spiget.org/file/spiget-resources/28140.jar', $luckPerms['files'][0]['url']);
+        self::assertSame('spiget_cdn', $luckPerms['files'][0]['download_channel']);
         self::assertSame('LuckPerms-5.5.71.jar', $luckPerms['files'][0]['filename']);
         // An external file cannot be installed, so it is not offered as an update.
         self::assertArrayNotHasKey('9089', $result['versions']);
@@ -535,7 +536,7 @@ class SpigotSourceTest extends TestCase
 
         self::assertSame('4', $result['versions']['50']['id']);
         self::assertSame(
-            'https://www.spigotmc.org/resources/50/download?version=4',
+            'https://cdn.spiget.org/file/spiget-resources/50.jar',
             $result['versions']['50']['files'][0]['url'],
         );
         self::assertSame([], $result['unresolved']);
@@ -561,7 +562,7 @@ class SpigotSourceTest extends TestCase
 
         $latest = $first->versions()[$request->key()];
         self::assertSame('3', $latest['id']);
-        self::assertSame('https://www.spigotmc.org/resources/50/download?version=3', $latest['files'][0]['url']);
+        self::assertSame('https://cdn.spiget.org/file/spiget-resources/50.jar', $latest['files'][0]['url']);
         self::assertSame($first->versions(), $second->versions());
         self::assertSame([], $second->pendingKeys());
         Http::assertSentCount(2);
@@ -596,11 +597,10 @@ class SpigotSourceTest extends TestCase
     }
 
     /**
-     * Regression: an install read the historical version list, and a missing
-     * CDN file made every install fail. The installable version is built
-     * from the resource and /versions/latest, with the official Spigot URL.
+     * The current hosted file comes from the SpiGet CDN. Metadata resolution
+     * still does not request that object or Spiget's /download redirect.
      */
-    public function test_authoritative_install_resolves_the_official_file_without_version_history(): void
+    public function test_authoritative_install_resolves_the_current_cdn_file_without_version_history(): void
     {
         $source = $this->sourceWithExecutor();
         Http::fake([
@@ -624,7 +624,7 @@ class SpigotSourceTest extends TestCase
         self::assertSame('648014', $versions[0]['id']);
         self::assertSame('5.5.71', $versions[0]['version_number']);
         self::assertSame(
-            'https://www.spigotmc.org/resources/28140/download?version=648014',
+            'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
         );
         self::assertSame('LuckPerms-5.5.71.jar', ProjectPrimaryFile::fromVersion($versions[0])['filename'] ?? null);
@@ -671,7 +671,7 @@ class SpigotSourceTest extends TestCase
         $versions = $source->getVersionsAuthoritatively('28140', $server, ProjectType::Plugin);
 
         self::assertSame(
-            'https://www.spigotmc.org/resources/28140/download?version=648014',
+            'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
         );
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download')
@@ -776,6 +776,76 @@ class SpigotSourceTest extends TestCase
             || str_contains($request->url(), 'spigotmc.org/resources/'));
     }
 
+    public function test_hosted_jar_with_a_relative_file_url_is_not_treated_as_missing_or_external(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/2/versions/latest*' => Http::response([
+                'name' => '1.0',
+                'releaseDate' => 1_515_903_349,
+                'id' => 203285,
+            ]),
+            'api.spiget.org/v2/resources/2?*' => Http::response([
+                'id' => 2,
+                'name' => 'HubKick',
+                'premium' => false,
+                'price' => 0,
+                'external' => false,
+                'existenceStatus' => 1,
+                'file' => [
+                    'type' => '.jar',
+                    'size' => 37.7,
+                    'sizeUnit' => 'KB',
+                    'url' => 'resources/hubkick.2/download?version=203285',
+                ],
+            ]),
+        ]);
+
+        $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'latest', [
+            'project_ids' => ['2'],
+        ]), 2.0);
+
+        self::assertSame('203285', $result['versions']['2']['id']);
+        self::assertSame(
+            'https://cdn.spiget.org/file/spiget-resources/2.jar',
+            $result['versions']['2']['files'][0]['url'],
+        );
+        self::assertSame('spiget_cdn', $result['versions']['2']['files'][0]['download_channel']);
+        self::assertArrayNotHasKey('download_unavailable', $result['versions']['2']);
+        self::assertSame([], $result['unresolved']);
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'cdn.spiget.org')
+            || str_contains($request->url(), '/download'));
+    }
+
+    public function test_positive_top_level_price_is_premium_even_when_the_flag_is_false(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources/77/versions/latest*' => Http::response([
+                'name' => '1.0.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 9,
+            ]),
+            'api.spiget.org/v2/resources/77?*' => Http::response([
+                'id' => 77,
+                'name' => 'Paid',
+                'premium' => false,
+                'price' => 9.99,
+                'external' => false,
+                'file' => [
+                    'type' => '.jar',
+                    'url' => 'resources/paid.77/download?version=9',
+                ],
+            ]),
+        ]);
+
+        $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'latest', [
+            'project_ids' => ['77'],
+        ]), 2.0);
+
+        self::assertArrayNotHasKey('77', $result['versions']);
+        self::assertSame(['77'], $result['unresolved']);
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download'));
+    }
+
     public function test_a_non_numeric_version_id_does_not_become_an_official_download_url(): void
     {
         $source = $this->sourceWithExecutor();
@@ -861,7 +931,7 @@ class SpigotSourceTest extends TestCase
 
         self::assertSame('3', $versions[0]['id']);
         self::assertSame(
-            'https://www.spigotmc.org/resources/50/download?version=3',
+            'https://cdn.spiget.org/file/spiget-resources/50.jar',
             ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
         );
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download')
@@ -886,7 +956,7 @@ class SpigotSourceTest extends TestCase
         $versions = $source->getVersionsAuthoritatively('28140', $server, ProjectType::Plugin);
 
         self::assertSame(
-            'https://www.spigotmc.org/resources/28140/download?version=648014',
+            'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
         );
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download')

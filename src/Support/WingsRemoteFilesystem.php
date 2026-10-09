@@ -135,6 +135,48 @@ class WingsRemoteFilesystem
         return null;
     }
 
+    /**
+     * Read only the start of a file. Callers use this to reject an HTML
+     * error page before renaming it over a live archive.
+     */
+    public function readPrefix(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $directory,
+        string $filename,
+        int $bytes = 4,
+    ): string {
+        $directory = trim($directory, '/');
+        $path = $directory === '' ? $filename : $directory.'/'.$filename;
+        $response = $fileRepository
+            ->setServer($server)
+            ->getHttpClient()
+            ->withOptions(['stream' => true])
+            ->get("/api/servers/{$server->uuid}/files/contents", ['file' => $path]);
+        $response->throw();
+
+        $body = $response->toPsrResponse()->getBody();
+        try {
+            $prefix = $body->read(max(1, $bytes));
+        } finally {
+            $body->close();
+        }
+
+        return is_string($prefix) ? $prefix : '';
+    }
+
+    public function put(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $path,
+        string $contents,
+    ): void {
+        $response = $fileRepository->setServer($server)->putContent(ltrim($path, '/'), $contents);
+        if ($response->failed()) {
+            throw new Exception("Failed to write [{$path}].");
+        }
+    }
+
     public function listedFileSize(array $item): ?int
     {
         $size = $item['size'] ?? null;

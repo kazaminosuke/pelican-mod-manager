@@ -17,15 +17,22 @@ final class DownloadUnavailableException extends Exception
 
     public const EXTERNAL = 'external';
 
+    public const INVALID = 'invalid';
+
+    public const DISTRIBUTION = 'distribution';
+
     public function __construct(private readonly string $reason)
     {
-        if ($reason !== self::PREMIUM && $reason !== self::EXTERNAL) {
+        if (!in_array($reason, [self::PREMIUM, self::EXTERNAL, self::INVALID, self::DISTRIBUTION], true)) {
             throw new InvalidArgumentException('Unknown download block ['.$reason.'].');
         }
 
-        parent::__construct($reason === self::PREMIUM
-            ? 'This resource is premium and cannot be downloaded automatically.'
-            : 'This resource is hosted externally and cannot be downloaded automatically.');
+        parent::__construct(match ($reason) {
+            self::PREMIUM => 'This resource is premium and cannot be downloaded automatically.',
+            self::EXTERNAL => 'This resource is hosted externally and cannot be downloaded automatically.',
+            self::INVALID => 'This resource does not have a usable download address.',
+            self::DISTRIBUTION => 'Third-party download is disabled for this file.',
+        });
     }
 
     public function reason(): string

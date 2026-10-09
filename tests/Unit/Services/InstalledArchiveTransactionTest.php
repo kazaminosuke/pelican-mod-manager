@@ -169,6 +169,34 @@ class InstalledArchiveTransactionTest extends TestCase
         self::assertNotEmpty($wings->quietlyDeletedFilenames);
     }
 
+    public function test_non_archive_pull_does_not_replace_an_existing_file(): void
+    {
+        $wings = new RecordingWingsRemoteFilesystem();
+        $wings->existingFilenames = ['sodium.jar'];
+        $wings->pulledHeader = '<!DOCTYPE html>';
+        $projects = $this->projects($wings, saved: true, installedMods: [$this->installed('sodium.jar')]);
+        $transaction = new InstalledArchiveTransaction($projects, $wings);
+
+        $this->expectException(Exception::class);
+        $this->expectExceptionMessage('Pulled archive is not a valid ZIP or JAR.');
+
+        try {
+            $transaction->installOrUpdate(
+                $this->server(),
+                Mockery::mock(DaemonFileRepository::class),
+                ProjectType::Mod,
+                $this->record(),
+                $this->version(),
+                $this->primaryFile(),
+                $this->installed('sodium.jar'),
+            );
+        } finally {
+            self::assertSame([], $wings->committedFilenames);
+            self::assertSame([], $wings->renames);
+            self::assertNotEmpty($wings->quietlyDeletedFilenames);
+        }
+    }
+
     public function test_empty_pull_does_not_commit_metadata(): void
     {
         $wings = new RecordingWingsRemoteFilesystem();
@@ -218,7 +246,7 @@ class InstalledArchiveTransactionTest extends TestCase
         }
     }
 
-    public function test_old_archive_delete_failure_restores_previous_metadata(): void
+    public function test_old_archive_delete_failure_restores_previous_metadata_when_the_old_file_remains(): void
     {
         $wings = new RecordingWingsRemoteFilesystem();
         $wings->existingFilenames = ['sodium-old.jar'];
@@ -236,7 +264,7 @@ class InstalledArchiveTransactionTest extends TestCase
                 $this->primaryFile(),
                 $this->installed('sodium-old.jar'),
             );
-            self::fail('Old archive delete failure must fail the transaction.');
+            self::fail('A previous archive that is still present must be restored.');
         } catch (Exception $exception) {
             self::assertSame('cannot delete old archive', $exception->getMessage());
         }
@@ -244,6 +272,28 @@ class InstalledArchiveTransactionTest extends TestCase
         self::assertSame(['sodium.jar', 'sodium-old.jar'], $wings->committedFilenames);
         self::assertContains('sodium.jar', $wings->quietlyDeletedFilenames);
         self::assertSame([], $wings->scanResultChanges);
+    }
+
+    public function test_old_archive_delete_failure_keeps_the_new_archive_when_the_old_file_is_already_gone(): void
+    {
+        $wings = new RecordingWingsRemoteFilesystem();
+        $wings->failDeletes = ['sodium-old.jar'];
+        $projects = $this->projects($wings, saved: true);
+        $transaction = new InstalledArchiveTransaction($projects, $wings);
+
+        $transaction->installOrUpdate(
+            $this->server(),
+            Mockery::mock(DaemonFileRepository::class),
+            ProjectType::Mod,
+            $this->record(),
+            $this->version(),
+            $this->primaryFile(),
+            $this->installed('sodium-old.jar'),
+        );
+
+        self::assertSame(['sodium.jar'], $wings->committedFilenames);
+        self::assertNotContains('sodium.jar', $wings->quietlyDeletedFilenames);
+        self::assertSame([['added' => 'sodium.jar', 'removed' => 'sodium-old.jar', 'existed' => false]], $wings->scanResultChanges);
     }
 
     public function test_other_project_filename_collision_is_rejected_before_pull(): void
@@ -430,6 +480,8 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
 
     public bool $pulledInForeground = false;
 
+    public string $pulledHeader = "PK\x03\x04";
+
     public bool $backgroundPull = false;
 
     public int $pulledSize = 2048;
@@ -459,6 +511,16 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
         $this->listed[$filename] = ['name' => $filename, 'size' => $this->pulledSize, 'modified' => '2026-09-01T00:00:00Z'];
 
         return ['name' => $filename, 'size' => $this->pulledSize];
+    }
+
+    public function readPrefix(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $directory,
+        string $filename,
+        int $bytes = 4,
+    ): string {
+        return $this->pulledHeader;
     }
 
     public function move(

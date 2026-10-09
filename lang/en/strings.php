@@ -209,6 +209,8 @@ return [
         'uninstall' => 'Uninstall',
         'versions' => 'Version Selection',
         'track_github_repo' => 'Track GitHub Repository',
+        'install_modpack' => 'Install modpack',
+        'install_modpack_project' => 'Modpack',
     ],
 
     'badges' => [
@@ -220,11 +222,14 @@ return [
         'update_description' => 'This will replace version :old_version with version :new_version. The old file will be deleted.',
         'uninstall_heading' => 'Uninstall managed item',
         'uninstall_description' => 'Are you sure you want to uninstall :name? This will permanently delete the file from your server.',
+        'install_modpack_heading' => 'Install a modpack',
+        'install_modpack_description' => 'Search Modrinth and CurseForge modpacks, then install the newest pack that matches this server. Client-only files are skipped. Worlds, server.properties, bans, and the server JAR are left untouched. Existing config files are kept; mods from the pack replace files at the same path. If installation fails, files added by this attempt are removed. If this egg installs a modpack on startup, that script can still replace these files.',
     ],
 
     'operations' => [
         'scan' => 'Installed-file scan',
         'bulk_update' => 'Bulk update',
+        'modpack_install' => 'Modpack install',
         'checking' => 'Checking installed data…',
         'queued' => ':operation is queued.',
         'running' => ':operation is running…',
@@ -243,6 +248,10 @@ return [
         'download_unavailable' => 'Automatic download is not available',
         'download_unavailable_external' => 'This plugin is hosted outside Spigot, so it cannot be installed automatically.',
         'download_unavailable_premium' => 'This premium plugin cannot be installed automatically.',
+        'download_unavailable_invalid' => 'This resource does not have a usable download address, so it cannot be installed automatically.',
+        'download_unavailable_distribution' => 'The author has disabled third-party downloads for this file, so it cannot be installed automatically.',
+        'modpack_install_success' => 'Modpack installed',
+        'modpack_install_success_body' => ':name :version placed :installed file(s). :skipped file(s) were skipped because they already existed, are client-only, or are protected.',
         'install_failed' => 'Installation failed',
         'install_failed_body' => 'An error occurred during installation. Please try again or contact support if the issue persists.',
         'update_success' => 'Update completed',
@@ -257,5 +266,25 @@ return [
         'bulk_update_partial' => ':updated updated, :failed failed.',
         'bulk_update_none' => 'All items are already up to date.',
         'reset_metadata_failed' => 'Reset failed. Please try again.',
+    ],
+
+    'modpacks' => [
+        'create_step' => 'Modpack',
+        'use_modpack' => 'Install a modpack',
+        'use_modpack_helper' => 'Optional. Choose a pack and this step selects a compatible egg and fills the startup variables that install it.',
+        'pack' => 'Modpack',
+        'version' => 'Version',
+        'choose_egg' => 'Compatible egg',
+        'choose_egg_helper' => 'More than one egg could run this pack. Choose one of these compatible eggs.',
+        'plan' => 'Provisioning plan',
+        'plan_unavailable' => 'The modpack details could not be loaded.',
+        'confirm_egg_change' => 'I understand this changes the server egg and reinstalls it. Worlds and other server files are not deleted.',
+        'provision_queued' => 'Modpack provisioning started',
+    ],
+
+    'diagnostics' => [
+        'heading' => 'Diagnostics',
+        'description' => 'Checks provider APIs, the SpiGet CDN sample, cache schema, and this server egg. It does not install files or change the server.',
+        'run' => 'Run diagnostics',
     ],
 ];

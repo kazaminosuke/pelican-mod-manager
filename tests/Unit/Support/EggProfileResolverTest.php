@@ -143,6 +143,43 @@ class EggProfileResolverTest extends TestCase
         self::assertSame('name_signature', $resolved->source);
     }
 
+    public function test_current_paper_variable_set_is_not_identified_as_folia(): void
+    {
+        $path = dirname(__DIR__, 3).'/resources/egg-profiles.json';
+        $data = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+        EggProfileRegistry::seed($data['profiles']);
+        EggProfileResolver::clear();
+
+        $variables = ['BUILD_NUMBER', 'DL_PATH', 'MINECRAFT_VERSION', 'PROJECT', 'SERVER_JARFILE', 'USER_AGENT'];
+        $paper = EggProfileResolver::resolve($this->server($this->egg(90, uuid: null, name: 'PaperMC', variables: $variables)));
+        $folia = EggProfileResolver::resolve($this->server($this->egg(91, uuid: null, name: 'Folia', variables: $variables)));
+
+        self::assertNotSame('folia', $paper->loader);
+        self::assertNotSame('signature', $paper->source);
+        self::assertSame('folia', $folia->loader);
+        self::assertSame('name_signature', $folia->source);
+    }
+
+    public function test_current_velocity_variable_set_resolves_a_renamed_egg(): void
+    {
+        $path = dirname(__DIR__, 3).'/resources/egg-profiles.json';
+        $data = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+        EggProfileRegistry::seed($data['profiles']);
+        EggProfileResolver::clear();
+
+        $resolved = EggProfileResolver::resolve($this->server($this->egg(
+            92,
+            uuid: null,
+            name: 'Custom Proxy',
+            tags: [],
+            variables: ['BUILD_NUMBER', 'DL_PATH', 'PROJECT', 'SERVER_JARFILE', 'USER_AGENT', 'VELOCITY_VERSION'],
+        )));
+
+        self::assertSame('velocity', $resolved->loader);
+        self::assertSame('signature', $resolved->source);
+        self::assertFalse($resolved->supportsDatapacks);
+    }
+
     public function test_colliding_signature_alone_is_never_adopted(): void
     {
         // A name that matches nothing, carrying the paper/folia-colliding

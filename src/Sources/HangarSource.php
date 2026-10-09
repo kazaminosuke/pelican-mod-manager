@@ -186,7 +186,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         // authoritative for the selected platform.
         $automaticVersion = !$hasVersionList || $requestedVersions === []
             ? (($selectedPlatform === '' || $selectedPlatform === $automaticPlatform)
-            ? MinecraftVersionResolver::resolve($server)
+            ? $this->automaticPlatformVersion($server, $platform)
             : null)
             : null;
         $params = ['platform' => $platform];
@@ -401,9 +401,12 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
 
         $params = [
             'platform' => $platform,
-            'platformVersion' => MinecraftVersionResolver::resolve($server),
             'limit' => self::PAGE_SIZE,
         ];
+        $platformVersion = $this->automaticPlatformVersion($server, $platform);
+        if ($platformVersion !== null) {
+            $params['platformVersion'] = $platformVersion;
+        }
 
         return $this->spec(self::OPERATION_VERSIONS, [
             'project_id' => $projectId,
@@ -440,9 +443,12 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
 
         $params = [
             'platform' => $platform,
-            'platformVersion' => MinecraftVersionResolver::resolve($server),
             'limit' => self::PAGE_SIZE,
         ];
+        $platformVersion = $this->automaticPlatformVersion($server, $platform);
+        if ($platformVersion !== null) {
+            $params['platformVersion'] = $platformVersion;
+        }
         $requestsByProject = [];
 
         foreach ($requests as $request) {
@@ -492,9 +498,12 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
 
         $params = [
             'platform' => $platform,
-            'platformVersion' => MinecraftVersionResolver::resolve($server),
             'limit' => self::PAGE_SIZE,
         ];
+        $platformVersion = $this->automaticPlatformVersion($server, $platform);
+        if ($platformVersion !== null) {
+            $params['platformVersion'] = $platformVersion;
+        }
         $requestsByProject = [];
 
         foreach ($requests as $request) {
@@ -961,6 +970,27 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
      * forks (Purpur, Folia) are treated as PAPER. Spigot/Bukkit/Bungeecord and
      * other loaders have no Hangar equivalent.
      */
+    /**
+     * Velocity's catalog versions are proxy releases (3.x), not Minecraft
+     * releases. A panel default such as 26.1.2 would make the search empty.
+     */
+    private function automaticPlatformVersion(Server $server, string $platform): ?string
+    {
+        if ($platform !== 'VELOCITY') {
+            return MinecraftVersionResolver::resolve($server);
+        }
+
+        $values = $server->variables()
+            ->whereIn('env_variable', ['VELOCITY_VERSION'])
+            ->pluck('server_value', 'env_variable');
+        $version = trim((string) ($values['VELOCITY_VERSION'] ?? ''));
+        if ($version === '' || strcasecmp($version, 'latest') === 0) {
+            return null;
+        }
+
+        return preg_match('/^[0-9A-Za-z._+\-]{1,32}$/', $version) === 1 ? $version : null;
+    }
+
     protected function platformFor(Server $server): ?string
     {
         return match (MinecraftLoader::fromServer($server)) {

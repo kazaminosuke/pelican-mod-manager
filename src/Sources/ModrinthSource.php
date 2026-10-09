@@ -12,6 +12,7 @@ use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchHandlerInterface;
+use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
@@ -21,6 +22,8 @@ use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackFileSelector;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Kazaminosuke\ModManager\Support\UpstreamHttp;
@@ -129,6 +132,145 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
     public function search(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): array
     {
         return $this->cachedSearch->search($this->buildSearchSpec($server, $type, $page, $search, $filters));
+    }
+
+    /**
+     * Modpack catalog. A missing loader still returns packs for the server's
+     * Minecraft version; it does not use the mod/plugin facet.
+     *
+     * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
+     */
+    public function searchModpacks(Server $server, int $page = 1, ?string $search = null, bool $constrainToServer = true): array
+    {
+        $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer));
+
+        return is_array($result) && is_array($result['hits'] ?? null)
+            ? ['hits' => $result['hits'], 'total_hits' => (int) ($result['total_hits'] ?? 0)]
+            : ['hits' => [], 'total_hits' => 0];
+    }
+
+    /**
+     * Newest .mrpack whose loader matches the server when the loader is known.
+     *
+     * @return array{version_id: string, version_number: string, filename: string, url: string}|null
+     */
+    public function latestModpackDownload(Server $server, string $projectId): ?array
+    {
+        $projectId = trim($projectId);
+        if ($projectId === '' || !preg_match('/^[A-Za-z0-9]+$/', $projectId)) {
+            return null;
+        }
+
+        $query = ['include_changelog' => 'false'];
+        $version = MinecraftVersionResolver::resolve($server);
+        if ($version !== null) {
+            $query['game_versions'] = json_encode([$version], JSON_THROW_ON_ERROR);
+        }
+        $loader = MinecraftLoader::fromServer($server)?->value;
+        if (in_array($loader, ['fabric', 'forge', 'neoforge', 'quilt'], true)) {
+            $query['loaders'] = json_encode([$loader], JSON_THROW_ON_ERROR);
+        }
+
+        $versions = $this->http(20.0)
+            ->throw()
+            ->get(self::BASE_URL."/project/{$projectId}/version", $query)
+            ->json();
+
+        return is_array($versions) ? ModpackFileSelector::modrinthMrpack($versions) : null;
+    }
+
+    /**
+     * Recent modpack versions without filtering them to the current server.
+     * Server creation does not have a loader yet, and an explicit version
+     * must stay the version the operator chose.
+     *
+     * @return list<array{id: string, label: string, minecraft: ?string, loader: ?string}>
+     */
+    public function listModpackVersions(string $projectId): array
+    {
+        $projectId = trim($projectId);
+        if ($projectId === '' || preg_match('/^[A-Za-z0-9]+$/', $projectId) !== 1) {
+            return [];
+        }
+
+        $versions = $this->http(15.0)
+            ->throw()
+            ->get(self::BASE_URL."/project/{$projectId}/version", ['include_changelog' => 'false'])
+            ->json();
+
+        if (!is_array($versions)) {
+            return [];
+        }
+
+        $choices = [];
+        foreach (array_slice($versions, 0, 25) as $version) {
+            if (!is_array($version)) {
+                continue;
+            }
+
+            $id = trim((string) ($version['id'] ?? ''));
+            $number = trim((string) ($version['version_number'] ?? ''));
+            if ($id === '' || $number === '') {
+                continue;
+            }
+
+            $gameVersions = is_array($version['game_versions'] ?? null) ? $version['game_versions'] : [];
+            $loaders = is_array($version['loaders'] ?? null) ? $version['loaders'] : [];
+            $minecraft = count($gameVersions) === 1 ? trim((string) $gameVersions[0]) : null;
+            $loader = count($loaders) === 1 ? ModpackLoader::normalize($loaders[0]) : null;
+            $label = $number;
+            if ($minecraft !== null && $minecraft !== '') {
+                $label .= ' · '.$minecraft;
+            }
+            if ($loader !== null) {
+                $label .= ' · '.$loader;
+            }
+
+            $choices[] = [
+                'id' => $id,
+                'label' => $label,
+                'minecraft' => $minecraft !== '' ? $minecraft : null,
+                'loader' => $loader,
+            ];
+        }
+
+        return $choices;
+    }
+
+    /**
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string}|null
+     */
+    public function modpackDownloadById(string $projectId, string $versionId): ?array
+    {
+        $projectId = trim($projectId);
+        $versionId = trim($versionId);
+        if ($projectId === '' || $versionId === ''
+            || preg_match('/^[A-Za-z0-9]+$/', $projectId) !== 1
+            || preg_match('/^[A-Za-z0-9]+$/', $versionId) !== 1) {
+            return null;
+        }
+
+        $version = $this->http(15.0)
+            ->throw()
+            ->get(self::BASE_URL.'/version/'.$versionId)
+            ->json();
+
+        if (!is_array($version) || (string) ($version['project_id'] ?? '') !== $projectId) {
+            return null;
+        }
+
+        $download = ModpackFileSelector::modrinthMrpack([$version]);
+        if ($download === null) {
+            return null;
+        }
+
+        $gameVersions = is_array($version['game_versions'] ?? null) ? $version['game_versions'] : [];
+        $loaders = is_array($version['loaders'] ?? null) ? $version['loaders'] : [];
+
+        return $download + [
+            'minecraft' => count($gameVersions) === 1 ? (trim((string) $gameVersions[0]) ?: null) : null,
+            'loader' => count($loaders) === 1 ? ModpackLoader::normalize($loaders[0]) : null,
+        ];
     }
 
     /** @return array<string, string> */
@@ -405,6 +547,35 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         }
 
         return $this->spec(self::OPERATION_SEARCH, ['query' => $data]);
+    }
+
+    private function buildModpackSearchSpec(Server $server, int $page, ?string $search, bool $constrainToServer = true): SourceFetchSpec
+    {
+        $page = max(1, $page);
+        $facetGroups = [['project_type:modpack']];
+        if ($constrainToServer) {
+            $version = MinecraftVersionResolver::resolve($server);
+            if ($version !== null) {
+                $facetGroups[] = ["versions:{$version}"];
+            }
+            $loader = MinecraftLoader::fromServer($server)?->value;
+            if (in_array($loader, ['fabric', 'forge', 'neoforge', 'quilt'], true)) {
+                $facetGroups[] = ["categories:{$loader}"];
+            }
+        }
+
+        $data = [
+            'offset' => ($page - 1) * 20,
+            'limit' => 20,
+            'facets' => json_encode($facetGroups, JSON_THROW_ON_ERROR),
+            'index' => 'downloads',
+        ];
+        $search = trim((string) $search);
+        if ($search !== '') {
+            $data['query'] = $search;
+        }
+
+        return $this->spec(self::OPERATION_SEARCH, ['query' => $data, 'catalog' => 'modpack']);
     }
 
     /** @return array<int, string> */

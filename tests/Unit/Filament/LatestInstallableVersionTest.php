@@ -100,6 +100,46 @@ final class LatestInstallableVersionTest extends TestCase
         (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '99');
     }
 
+    public function test_invalid_spigot_version_is_not_reported_as_a_missing_url(): void
+    {
+        $source = Mockery::mock(ProjectSourceInterface::class.', '.SourceFetchAuthoritativeInterface::class);
+        $source->shouldReceive('getVersionsAuthoritatively')->andReturn([
+            [
+                'id' => '0',
+                'version_number' => '1.0.0',
+                'files' => [],
+                'download_unavailable' => DownloadUnavailableException::INVALID,
+            ],
+        ]);
+
+        try {
+            (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '50');
+            self::fail('An invalid download address must not be installed.');
+        } catch (DownloadUnavailableException $exception) {
+            self::assertSame(DownloadUnavailableException::INVALID, $exception->reason());
+        }
+    }
+
+    public function test_disabled_third_party_download_is_not_reported_as_a_missing_url(): void
+    {
+        $source = Mockery::mock(ProjectSourceInterface::class.', '.SourceFetchAuthoritativeInterface::class);
+        $source->shouldReceive('getVersionsAuthoritatively')->andReturn([
+            [
+                'id' => '15',
+                'version_number' => '1.0.0',
+                'files' => [],
+                'download_unavailable' => DownloadUnavailableException::DISTRIBUTION,
+            ],
+        ]);
+
+        try {
+            (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '15');
+            self::fail('A file with third-party downloads disabled must not be installed.');
+        } catch (DownloadUnavailableException $exception) {
+            self::assertSame(DownloadUnavailableException::DISTRIBUTION, $exception->reason());
+        }
+    }
+
     public function test_versions_without_any_downloadable_file_are_rejected(): void
     {
         $source = Mockery::mock(ProjectSourceInterface::class);

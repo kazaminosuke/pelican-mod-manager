@@ -209,6 +209,8 @@ return [
         'uninstall' => 'Deinstallieren',
         'versions' => 'Versionsauswahl',
         'track_github_repo' => 'GitHub-Repository verfolgen',
+        'install_modpack' => 'Modpack installieren',
+        'install_modpack_project' => 'Modpack',
     ],
 
     'badges' => [
@@ -220,11 +222,14 @@ return [
         'update_description' => 'Dies ersetzt Version :old_version durch Version :new_version. Die alte Datei wird gelöscht.',
         'uninstall_heading' => 'Verwaltetes Element deinstallieren',
         'uninstall_description' => 'Möchtest du :name wirklich deinstallieren? Dies wird die Datei dauerhaft von deinem Server löschen.',
+        'install_modpack_heading' => 'Modpack installieren',
+        'install_modpack_description' => 'Durchsucht Modrinth- und CurseForge-Modpacks und installiert das neueste Paket, das zu diesem Server passt. Nur-Client-Dateien werden übersprungen. Welten, server.properties, Sperrlisten und das Server-JAR bleiben unverändert. Vorhandene Konfigurationsdateien bleiben erhalten; Mods aus dem Paket ersetzen Dateien am selben Pfad. Schlägt die Installation fehl, werden die dabei hinzugefügten Dateien entfernt. Wenn dieses Egg beim Start selbst ein Modpack installiert, kann dieses Skript die Dateien weiterhin ersetzen.',
     ],
 
     'operations' => [
         'scan' => 'Scan installierter Dateien',
         'bulk_update' => 'Massenaktualisierung',
+        'modpack_install' => 'Modpack-Installation',
         'checking' => 'Installierte Daten werden geprüft…',
         'queued' => ':operation wurde eingereiht.',
         'running' => ':operation wird ausgeführt…',
@@ -243,6 +248,10 @@ return [
         'download_unavailable' => 'Automatischer Download ist nicht verfügbar',
         'download_unavailable_external' => 'Dieses Plugin wird außerhalb von Spigot gehostet und kann nicht automatisch installiert werden.',
         'download_unavailable_premium' => 'Dieses Premium-Plugin kann nicht automatisch installiert werden.',
+        'download_unavailable_invalid' => 'Für diese Ressource gibt es keine verwendbare Download-Adresse, daher kann sie nicht automatisch installiert werden.',
+        'download_unavailable_distribution' => 'Der Autor hat Downloads durch Dritte für diese Datei deaktiviert, daher kann sie nicht automatisch installiert werden.',
+        'modpack_install_success' => 'Modpack installiert',
+        'modpack_install_success_body' => ':name :version hat :installed Datei(en) abgelegt. :skipped Datei(en) wurden übersprungen, weil sie bereits vorhanden, nur für den Client oder geschützt sind.',
         'install_failed' => 'Installation fehlgeschlagen',
         'install_failed_body' => 'Bei der Installation ist ein Fehler aufgetreten. Bitte versuche es erneut oder wende dich an den Support, wenn das Problem weiterhin besteht.',
         'update_success' => 'Aktualisierung abgeschlossen',
@@ -257,5 +266,25 @@ return [
         'bulk_update_partial' => ':updated aktualisiert, :failed fehlgeschlagen.',
         'bulk_update_none' => 'Alle Elemente sind bereits aktuell.',
         'reset_metadata_failed' => 'Zurücksetzen fehlgeschlagen. Bitte versuche es erneut.',
+    ],
+
+    'modpacks' => [
+        'create_step' => 'Modpack',
+        'use_modpack' => 'Modpack installieren',
+        'use_modpack_helper' => 'Optional. Ein gewähltes Paket bestimmt ein passendes Egg und füllt die Startvariablen, die es installieren.',
+        'pack' => 'Modpack',
+        'version' => 'Version',
+        'choose_egg' => 'Passendes Egg',
+        'choose_egg_helper' => 'Mehr als ein Egg kann dieses Paket ausführen. Wähle eines aus dieser kompatiblen Menge.',
+        'plan' => 'Bereitstellung',
+        'plan_unavailable' => 'Die Modpack-Daten konnten nicht geladen werden.',
+        'confirm_egg_change' => 'Ich verstehe, dass dadurch das Server-Egg geändert und neu installiert wird. Welten und andere Dateien werden nicht gelöscht.',
+        'provision_queued' => 'Modpack-Bereitstellung gestartet',
+    ],
+
+    'diagnostics' => [
+        'heading' => 'Diagnose',
+        'description' => 'Prüft Anbieter-APIs, eine SpiGet-CDN-Probe, das Cache-Schema und das Egg dieses Servers. Es installiert nichts und ändert den Server nicht.',
+        'run' => 'Diagnose ausführen',
     ],
 ];

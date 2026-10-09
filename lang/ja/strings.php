@@ -209,6 +209,8 @@ return [
         'uninstall' => 'アンインストール',
         'versions' => 'バージョン選択',
         'track_github_repo' => 'GitHubリポジトリを追跡',
+        'install_modpack' => 'Modpackをインストール',
+        'install_modpack_project' => 'Modpack',
     ],
 
     'badges' => [
@@ -220,11 +222,14 @@ return [
         'update_description' => 'バージョン :old_version を バージョン :new_version に置き換えます。古いファイルは削除されます。',
         'uninstall_heading' => '管理対象をアンインストール',
         'uninstall_description' => ':name を本当にアンインストールしますか?サーバーからファイルが完全に削除されます。',
+        'install_modpack_heading' => 'Modpackをインストール',
+        'install_modpack_description' => 'Modrinth と CurseForge の Modpack を検索し、このサーバーに合う最新のパックをインストールします。クライアント専用ファイルは入れません。ワールド、server.properties、BAN リスト、サーバー JAR は変更しません。既存の設定ファイルは残し、同じパスの Mod だけ置き換えます。失敗したときは、この操作で追加したファイルを削除します。この egg が起動時に自分で Modpack を入れる場合、そのスクリプトがファイルを上書きすることがあります。',
     ],
 
     'operations' => [
         'scan' => 'インストール済みファイルのスキャン',
         'bulk_update' => '一括更新',
+        'modpack_install' => 'Modpackのインストール',
         'checking' => 'インストール済みデータを確認しています…',
         'queued' => ':operation をキューに追加しました。',
         'running' => ':operation を実行中です…',
@@ -243,6 +248,10 @@ return [
         'download_unavailable' => '自動ダウンロードは利用できません',
         'download_unavailable_external' => 'このプラグインはSpigot外で配布されているため、自動インストールできません。',
         'download_unavailable_premium' => 'この有料プラグインは自動インストールできません。',
+        'download_unavailable_invalid' => 'このリソースには使えるダウンロード先がないため、自動インストールできません。',
+        'download_unavailable_distribution' => '作者が第三者によるダウンロードを無効にしているため、自動インストールできません。',
+        'modpack_install_success' => 'Modpackをインストールしました',
+        'modpack_install_success_body' => ':name :version のファイルを :installed 件配置しました。:skipped 件は既存、クライアント専用、または保護対象のためスキップしました。',
         'install_failed' => 'インストールに失敗しました',
         'install_failed_body' => 'インストール中にエラーが発生しました。もう一度お試しいただくか、問題が解決しない場合はサポートにお問い合わせください。',
         'update_success' => '更新が完了しました',
@@ -257,5 +266,25 @@ return [
         'bulk_update_partial' => ':updated 件を更新、:failed 件が失敗しました。',
         'bulk_update_none' => 'すべてのアイテムは既に最新です。',
         'reset_metadata_failed' => 'リセットに失敗しました。もう一度お試しください。',
+    ],
+
+    'modpacks' => [
+        'create_step' => 'Modpack',
+        'use_modpack' => 'Modpackを導入する',
+        'use_modpack_helper' => '任意です。パックを選ぶと、対応するEggと、導入に必要な起動変数が自動で設定されます。',
+        'pack' => 'Modpack',
+        'version' => 'バージョン',
+        'choose_egg' => '対応するEgg',
+        'choose_egg_helper' => 'このパックを動かせるEggが複数あります。その中から選んでください。',
+        'plan' => '導入プラン',
+        'plan_unavailable' => 'Modpackの情報を読み込めませんでした。',
+        'confirm_egg_change' => 'この操作でサーバーのEggを変更し、再インストールすることを理解しました。ワールドなどのファイルは削除しません。',
+        'provision_queued' => 'Modpackの導入を開始しました',
+    ],
+
+    'diagnostics' => [
+        'heading' => '診断',
+        'description' => 'プロバイダAPI、SpiGet CDNのサンプル、キャッシュスキーマ、このサーバーのEggを確認します。ファイルの導入やサーバーの変更は行いません。',
+        'run' => '診断を実行',
     ],
 ];

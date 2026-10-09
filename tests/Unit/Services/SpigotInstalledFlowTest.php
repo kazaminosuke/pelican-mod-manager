@@ -345,7 +345,7 @@ class SpigotInstalledFlowTest extends TestCase
 
                 return $record['project_id'] === '50'
                     && $version['id'] === '3'
-                    && $primaryFile['url'] === 'https://www.spigotmc.org/resources/50/download?version=3'
+                    && $primaryFile['url'] === 'https://cdn.spiget.org/file/spiget-resources/50.jar'
                     && $primaryFile['filename'] === 'FreePlugin-1.2.0.jar';
             });
         $server = new Server();

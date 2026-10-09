@@ -7,12 +7,14 @@ use Filament\Actions\Action;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\ToggleButtons;
+use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Actions;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs\Tab;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\ModManagerPlugin;
+use Kazaminosuke\ModManager\Services\ModManagerDiagnostics;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\NavigationSort;
@@ -75,6 +77,27 @@ final class ServerModManagerTab
             })
             ->saveRelationshipsWhenHidden()
             ->schema([
+                Section::make(fn (): string => trans('pelican-mod-manager::strings.diagnostics.heading'))
+                    ->description(fn (): string => trans('pelican-mod-manager::strings.diagnostics.description'))
+                    ->columnSpanFull()
+                    ->schema([
+                        Actions::make([
+                            Action::make('run_mod_manager_diagnostics')
+                                ->label(fn (): string => trans('pelican-mod-manager::strings.diagnostics.run'))
+                                ->action(function (Server $record): void {
+                                    $checks = app(ModManagerDiagnostics::class)->run($record);
+                                    $lines = array_map(
+                                        static fn (array $check): string => strtoupper((string) $check['status']).': '.$check['summary'],
+                                        $checks,
+                                    );
+                                    Notification::make()
+                                        ->title(trans('pelican-mod-manager::strings.diagnostics.heading'))
+                                        ->body(implode("\n", $lines))
+                                        ->success()
+                                        ->send();
+                                }),
+                        ]),
+                    ]),
                 Section::make(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.access'))
                     ->description(fn (): string => trans('pelican-mod-manager::strings.server_mod_manager.access_helper'))
                     // EditServer renders tabs inside a six-column grid; without

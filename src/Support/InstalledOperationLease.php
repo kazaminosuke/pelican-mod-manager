@@ -19,6 +19,8 @@ final class InstalledOperationLease
 
     public const OPERATION_BULK_UPDATE = 'bulk_update';
 
+    public const OPERATION_MODPACK = 'modpack_install';
+
     public const OPERATION_INSTALL = 'install';
 
     public const OPERATION_UPDATE = 'update';
@@ -194,6 +196,7 @@ final class InstalledOperationLease
      * install that races a brief background scan succeed instead of failing.
      *
      * @template T
+     *
      * @param  Closure(): T  $callback
      * @return T
      *
@@ -232,6 +235,7 @@ final class InstalledOperationLease
      * retained for narrow unit doubles implementing only the cache contract.
      *
      * @template T
+     *
      * @param Closure(): T $callback
      * @return T
      */

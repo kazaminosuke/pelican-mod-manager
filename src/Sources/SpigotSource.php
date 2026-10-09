@@ -37,10 +37,10 @@ use Throwable;
  * Canonical per-resource metadata (Installed rows, identification, project
  * lookups) comes from the official Spigot Simple API. Catalog listings,
  * search, and version listings come from Spiget because those operations are
- * not exposed by the official API. Spiget is not used as a file host.
- * Install and update URLs are the official Spigot download address for the
- * version id Spiget reports. Premium, buyer-only, and externally hosted
- * files are never downloaded.
+ * not exposed by the official API. The SpiGet CDN stores the resource's
+ * current hosted file, so it is used only when the requested install is that
+ * current version. An older version id keeps the official Spigot download
+ * URL. Premium, buyer-only, and externally hosted files are never downloaded.
  */
 class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLatestVersionSourceInterface, ProjectMetadataPeekManyInterface, ProjectSourceInterface, SourceFetchAuthoritativeInterface, SourceFetchHandlerInterface
 {
@@ -660,7 +660,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return [];
         }
 
-        return [$this->withOfficialDownloadUrl($version, $resource)];
+        return [$this->withDownloadUrl($version, $resource, true)];
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -708,7 +708,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 $normalized = is_array($version) ? $this->normalizeSpigetVersion($projectId, $version, $resource) : null;
                 if ($normalized !== null) {
                     $versions[] = $resolveDownloads
-                        ? $this->withOfficialDownloadUrl($normalized, $resource)
+                        ? $this->withDownloadUrl($normalized, $resource, false)
                         : $this->withoutDownloadUrl($normalized);
                 }
             }
@@ -783,7 +783,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      * Resolve each resource's current version. Spiget's resource payload has
      * the premium/external flags but no version name, so it is paired with
      * /versions/latest in the same pool. The download URL is built from
-     * those ids and is not looked up from Spiget.
+     * The download URL is built from those ids. The CDN object is used only
+     * because this call asked Spiget for /versions/latest.
      *
      * @param array<int, string> $projectIds
      * @return array{0: array<string, array<string, mixed>>, 1: array<string, string>}
@@ -833,7 +834,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         // surfacing an update that cannot be installed.
         $resolved = [];
         foreach ($candidates as $projectId => $candidate) {
-            $version = $this->withOfficialDownloadUrl($candidate['version'], $candidate['resource']);
+            $version = $this->withDownloadUrl($candidate['version'], $candidate['resource'], true);
             if ($version['files'] !== []) {
                 $resolved[$projectId] = $version;
             }
@@ -1089,15 +1090,16 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
-     * Attach the official Spigot download URL for this version. Premium and
-     * external resources keep no file, and record why, so an install is not
-     * reported as a missing URL. Spiget's CDN is never used.
+     * Attach a download URL. The SpiGet CDN object is the resource's current
+     * file, so it is used only for the version returned by /versions/latest.
+     * An explicitly selected older version keeps the official Spigot URL.
+     * Premium and external resources keep no file.
      *
      * @param  array<string, mixed>  $version
      * @param  array<string, mixed>|null  $resource
      * @return array<string, mixed>
      */
-    private function withOfficialDownloadUrl(array $version, ?array $resource): array
+    private function withDownloadUrl(array $version, ?array $resource, bool $currentFile): array
     {
         if (!is_array($resource) || !$this->isDirectlyDownloadable($resource)) {
             return $this->withoutDownloadUrl($version, $this->downloadBlock(is_array($resource) ? $resource : []));
@@ -1105,13 +1107,48 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
         $url = $this->officialDownloadUrl((string) ($version['project_id'] ?? ''), (string) ($version['id'] ?? ''));
         if ($url === null) {
-            return $this->withoutDownloadUrl($version, 'invalid');
+            return $this->withoutDownloadUrl($version, DownloadUnavailableException::INVALID);
+        }
+
+        $channel = 'spigot_official';
+        if ($currentFile) {
+            $cdn = $this->spigetCdnUrl($resource);
+            if ($cdn !== null) {
+                $url = $cdn;
+                $channel = 'spiget_cdn';
+            }
         }
 
         unset($version['download_unavailable']);
         $version['files'][0]['url'] = $url;
+        $version['files'][0]['download_channel'] = $channel;
 
         return $version;
+    }
+
+    /**
+     * @param  array<string, mixed>  $resource
+     */
+    private function spigetCdnUrl(array $resource): ?string
+    {
+        $resourceId = $this->normalizeResourceId((string) ($resource['id'] ?? ''));
+        $file = $resource['file'] ?? null;
+        $type = strtolower(trim((string) (is_array($file) ? ($file['type'] ?? '') : '')));
+        if ($resourceId === null || preg_match('/^\.[a-z0-9]{1,8}$/', $type) !== 1) {
+            return null;
+        }
+
+        return 'https://cdn.spiget.org/file/spiget-resources/'.$resourceId.$type;
+    }
+
+    /**
+     * @param  array<string, mixed>  $version
+     * @param  array<string, mixed>|null  $resource
+     * @return array<string, mixed>
+     */
+    private function withOfficialDownloadUrl(array $version, ?array $resource): array
+    {
+        return $this->withDownloadUrl($version, $resource, false);
     }
 
     /**
@@ -1124,7 +1161,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
         if ($reason === DownloadUnavailableException::PREMIUM
             || $reason === DownloadUnavailableException::EXTERNAL
-            || $reason === 'invalid') {
+            || $reason === DownloadUnavailableException::INVALID
+            || $reason === DownloadUnavailableException::DISTRIBUTION) {
             $version['download_unavailable'] = $reason;
         } else {
             unset($version['download_unavailable']);
@@ -1310,7 +1348,15 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return true;
         }
 
-        return is_array($premium) && (float) ($premium['price'] ?? 0) > 0;
+        if (is_array($premium) && (float) ($premium['price'] ?? 0) > 0) {
+            return true;
+        }
+
+        // SpiGet also publishes a top-level price. A positive price is premium
+        // even when the boolean flag is missing or false.
+        $price = $resource['price'] ?? 0;
+
+        return is_numeric($price) && (float) $price > 0;
     }
 
     /**
@@ -1323,8 +1369,18 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         $file = $resource['file'] ?? null;
+        if (!is_array($file)) {
+            return false;
+        }
 
-        return is_array($file) && (($file['external'] ?? false) === true || ($file['type'] ?? null) === 'external');
+        if (($file['external'] ?? false) === true) {
+            return true;
+        }
+
+        // Hosted files use extensions such as ".jar". Only the literal
+        // external type is an off-site file. A relative file.url is not a
+        // CDN object and must not be treated as missing.
+        return strtolower((string) ($file['type'] ?? '')) === 'external';
     }
 
     /**

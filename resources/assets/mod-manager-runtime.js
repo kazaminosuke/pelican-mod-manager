@@ -28,7 +28,9 @@
         catalogViewFrame = null;
         const wrapper = document.querySelector('.mmr-table-scroll-ctn');
         const toggle = document.querySelector('[data-mmr-view-toggle]');
-        if (!wrapper || !toggle) {
+        // The toggle stays in the DOM on Installed, hidden with x-show.
+        // Panel layout is only for the catalog columns.
+        if (!wrapper || !toggle || getComputedStyle(toggle).display === 'none') {
             wrapper?.removeAttribute('data-mmr-catalog-view');
             return;
         }

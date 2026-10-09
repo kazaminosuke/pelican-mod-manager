@@ -6,12 +6,23 @@ use App\Models\Role;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\ServiceProvider;
+use Kazaminosuke\ModManager\Console\Commands\DiagnoseCommand;
 use Kazaminosuke\ModManager\Console\Commands\ProcessBackgroundJobsCommand;
 use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
 use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
+use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
+use Kazaminosuke\ModManager\Services\ModManagerDiagnostics;
+use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
+use Kazaminosuke\ModManager\Services\ModpackProvisioningPlanner;
+use Kazaminosuke\ModManager\Services\ServerEggMigration;
+use Kazaminosuke\ModManager\Sources\AtlauncherModpackSource;
+use Kazaminosuke\ModManager\Sources\FtbModpackSource;
+use Kazaminosuke\ModManager\Sources\TechnicModpackSource;
+use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Services\InstalledMetadataResetService;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
@@ -86,6 +97,16 @@ class ModManagerServiceProvider extends ServiceProvider
             ServerModManagerSettingRepository::class,
             ServerModManagerSettings::class,
             WarmRequestThrottle::class,
+            EggCompatibilityEngine::class,
+            FtbModpackSource::class,
+            TechnicModpackSource::class,
+            AtlauncherModpackSource::class,
+            ModpackCatalog::class,
+            ModpackProvisioningPlanner::class,
+            InstalledEggCatalog::class,
+            ServerEggMigration::class,
+            ModpackInstallCoordinator::class,
+            ModManagerDiagnostics::class,
         ] as $service) {
             $this->app->singleton($service);
         }
@@ -94,6 +115,7 @@ class ModManagerServiceProvider extends ServiceProvider
             $this->commands([
                 WarmCatalogCacheCommand::class,
                 ProcessBackgroundJobsCommand::class,
+                DiagnoseCommand::class,
             ]);
         }
     }

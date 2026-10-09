@@ -11,6 +11,7 @@ use App\Traits\Filament\BlockAccessInConflict;
 use Exception;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -24,6 +25,7 @@ use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\TextSize;
 use Filament\Support\Enums\Width;
@@ -59,6 +61,9 @@ use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
+use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
+use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
@@ -1914,17 +1919,25 @@ class ModManagerPage extends Page implements HasTable
             }
 
             $reason = is_array($version) ? ($version['download_unavailable'] ?? null) : null;
-            if ($reason === DownloadUnavailableException::PREMIUM || $reason === DownloadUnavailableException::EXTERNAL) {
+            if (in_array($reason, [
+                DownloadUnavailableException::PREMIUM,
+                DownloadUnavailableException::EXTERNAL,
+                DownloadUnavailableException::INVALID,
+                DownloadUnavailableException::DISTRIBUTION,
+            ], true)) {
                 $blocked[$reason] = true;
             }
         }
 
-        if ($blocked === [DownloadUnavailableException::PREMIUM => true]) {
-            throw new DownloadUnavailableException(DownloadUnavailableException::PREMIUM);
-        }
-
-        if ($blocked === [DownloadUnavailableException::EXTERNAL => true]) {
-            throw new DownloadUnavailableException(DownloadUnavailableException::EXTERNAL);
+        foreach ([
+            DownloadUnavailableException::PREMIUM,
+            DownloadUnavailableException::EXTERNAL,
+            DownloadUnavailableException::INVALID,
+            DownloadUnavailableException::DISTRIBUTION,
+        ] as $reason) {
+            if ($blocked === [$reason => true]) {
+                throw new DownloadUnavailableException($reason);
+            }
         }
 
         throw new Exception('No downloadable file found');
@@ -4070,6 +4083,92 @@ class ModManagerPage extends Page implements HasTable
             && in_array(ProjectSourceKey::GitHubReleases->value, $availableSourceKeys, true);
 
         return [
+            Action::make('install_modpack')
+                ->label(trans('pelican-mod-manager::strings.actions.install_modpack'))
+                ->icon('tabler-packages')
+                ->modalHeading(trans('pelican-mod-manager::strings.modals.install_modpack_heading'))
+                ->modalDescription(trans('pelican-mod-manager::strings.modals.install_modpack_description'))
+                ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.actions.install'))
+                ->schema([
+                    Select::make('project')
+                        ->label(trans('pelican-mod-manager::strings.actions.install_modpack_project'))
+                        ->searchable()
+                        ->required()
+                        ->live()
+                        ->getSearchResultsUsing(function (string $search) use ($server): array {
+                            return app(ModpackCatalog::class)->searchOptions($server, $search);
+                        })
+                        ->getOptionLabelUsing(function ($value) use ($server): ?string {
+                            $options = app(ModpackCatalog::class)->searchOptions($server, (string) $value);
+
+                            return $options[$value] ?? (is_string($value) ? $value : null);
+                        })
+                        ->afterStateUpdated(fn (callable $set) => $set('version', null)),
+                    Select::make('version')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.version'))
+                        ->required()
+                        ->live()
+                        ->visible(fn (Get $get): bool => filled($get('project')))
+                        ->options(fn (Get $get): array => app(ModpackCatalog::class)->versionOptions((string) $get('project'))),
+                    Select::make('target_egg')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.choose_egg'))
+                        ->helperText(trans('pelican-mod-manager::strings.modpacks.choose_egg_helper'))
+                        ->live()
+                        ->visible(function (Get $get) use ($server): bool {
+                            return $this->modpackPreview($server, $get)?->disposition === CompatibilityDisposition::Ambiguous;
+                        })
+                        ->options(function (Get $get) use ($server): array {
+                            $result = $this->modpackPreview($server, $get);
+                            $options = [];
+                            foreach ($result->alternatives ?? [] as $egg) {
+                                $options[(string) $egg->id] = $egg->name.' · '.($egg->profileId ?? $egg->loader ?? 'custom');
+                            }
+
+                            return $options;
+                        }),
+                    TextEntry::make('modpack_plan')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.plan'))
+                        ->visible(fn (Get $get): bool => filled($get('project')) && filled($get('version')))
+                        ->state(function (Get $get) use ($server): string {
+                            $result = $this->modpackPreview($server, $get, $get('target_egg'));
+
+                            return $result === null
+                                ? trans('pelican-mod-manager::strings.modpacks.plan_unavailable')
+                                : $result->reasonDetail;
+                        }),
+                    Checkbox::make('confirm_egg_change')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.confirm_egg_change'))
+                        ->visible(function (Get $get) use ($server): bool {
+                            $result = $this->modpackPreview($server, $get, $get('target_egg'));
+
+                            return $result !== null && $result->requiresConfirmation;
+                        }),
+                ])
+                ->action(function (array $data) use ($server): void {
+                    try {
+                        $this->authorizeProjectOperation($server, ProjectOperation::Install);
+                        $outcome = app(ModpackInstallCoordinator::class)->install(
+                            $server,
+                            (string) ($data['project'] ?? ''),
+                            isset($data['version']) ? (string) $data['version'] : null,
+                            isset($data['target_egg']) && $data['target_egg'] !== '' ? $data['target_egg'] : null,
+                            (bool) ($data['confirm_egg_change'] ?? false),
+                        );
+                        if ($outcome['dispatched']) {
+                            $this->notifyInstalledOperationDispatched(['dispatched' => true, 'reason' => null, 'state' => null]);
+                        } else {
+                            Notification::make()
+                                ->title(trans('pelican-mod-manager::strings.modpacks.provision_queued'))
+                                ->body($outcome['message'])
+                                ->success()
+                                ->send();
+                        }
+                    } catch (Exception $exception) {
+                        $this->notifyProjectOperationFailure($exception, 'install_failed');
+                    }
+                })
+                ->visible(fn () => $type === ProjectType::Mod
+                    && $this->canManageProjectOperation($server, ProjectOperation::Install)),
             Action::make('open_folder')
                 ->label(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->tooltip(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
@@ -4189,6 +4288,26 @@ class ModManagerPage extends Page implements HasTable
                     && static::detectProjectType($server) !== ProjectType::ResourcePack
                     && $this->canScanInstalledProjects()),
         ];
+    }
+
+    private function modpackPreview(Server $server, Get $get, mixed $explicitEggId = null): ?\Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult
+    {
+        $project = (string) $get('project');
+        $version = $get('version');
+        if ($project === '' || $version === null || $version === '') {
+            return null;
+        }
+
+        try {
+            return app(ModpackInstallCoordinator::class)->preview(
+                $server,
+                $project,
+                (string) $version,
+                is_scalar($explicitEggId) && (string) $explicitEggId !== '' ? $explicitEggId : null,
+            )['result'];
+        } catch (Exception) {
+            return null;
+        }
     }
 
     public function content(Schema $schema): Schema
@@ -4688,13 +4807,26 @@ class ModManagerPage extends Page implements HasTable
 
         $operations = app(InstalledOperationManager::class);
 
+        $modpackState = null;
         if (!$preloaded) {
             $fetched = $operations->states($server, $type, [
                 InstalledOperationManager::OPERATION_SCAN,
                 InstalledOperationManager::OPERATION_BULK_UPDATE,
+                InstalledOperationManager::OPERATION_MODPACK,
             ]);
             $scanState = $fetched[InstalledOperationManager::OPERATION_SCAN];
             $bulkState = $fetched[InstalledOperationManager::OPERATION_BULK_UPDATE];
+            $modpackState = $fetched[InstalledOperationManager::OPERATION_MODPACK];
+        } else {
+            $modpackState = $operations->states($server, $type, [
+                InstalledOperationManager::OPERATION_MODPACK,
+            ])[InstalledOperationManager::OPERATION_MODPACK] ?? null;
+        }
+
+        if ($modpackState?->isActive()) {
+            $this->setInstalledOperationState($modpackState);
+
+            return $modpackState;
         }
 
         // Scan and bulk update are mutually exclusive. The common active
@@ -4733,7 +4865,10 @@ class ModManagerPage extends Page implements HasTable
      */
     protected function shouldShowInstalledOperationStatus(): bool
     {
-        if (($this->installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_BULK_UPDATE) {
+        if (in_array($this->installedOperation['operation'] ?? null, [
+            InstalledOperationManager::OPERATION_BULK_UPDATE,
+            InstalledOperationManager::OPERATION_MODPACK,
+        ], true)) {
             return in_array($this->installedOperation['status'] ?? null, [
                 InstalledOperationState::STATUS_QUEUED,
                 InstalledOperationState::STATUS_RUNNING,
@@ -4853,6 +4988,17 @@ class ModManagerPage extends Page implements HasTable
         return $this->handledInstalledOperation !== $state->operation.':'.($state->finishedAt ?? '');
     }
 
+    protected function installedOperationLabel(string $operation): string
+    {
+        $key = match ($operation) {
+            InstalledOperationManager::OPERATION_BULK_UPDATE => 'bulk_update',
+            InstalledOperationManager::OPERATION_MODPACK => 'modpack_install',
+            default => 'scan',
+        };
+
+        return trans('pelican-mod-manager::strings.operations.'.$key);
+    }
+
     protected function installedOperationStatus(): string
     {
         $installedOperation = $this->getInstalledOperationDisplayPayload();
@@ -4863,11 +5009,7 @@ class ModManagerPage extends Page implements HasTable
                 : 'pelican-mod-manager::strings.operations.checking');
         }
 
-        $operation = trans(
-            $installedOperation['operation'] === InstalledOperationManager::OPERATION_BULK_UPDATE
-                ? 'pelican-mod-manager::strings.operations.bulk_update'
-                : 'pelican-mod-manager::strings.operations.scan',
-        );
+        $operation = $this->installedOperationLabel((string) ($installedOperation['operation'] ?? ''));
         $status = $installedOperation['status'] ?? null;
         $progress = (int) ($installedOperation['progress'] ?? 0);
         $total = $installedOperation['total'] ?? null;
@@ -4894,13 +5036,26 @@ class ModManagerPage extends Page implements HasTable
         if ($state->status === InstalledOperationState::STATUS_FAILED) {
             Notification::make()
                 ->title(trans('pelican-mod-manager::strings.operations.failed', [
-                    'operation' => trans(
-                        $state->operation === InstalledOperationManager::OPERATION_BULK_UPDATE
-                            ? 'pelican-mod-manager::strings.operations.bulk_update'
-                            : 'pelican-mod-manager::strings.operations.scan',
-                    ),
+                    'operation' => $this->installedOperationLabel($state->operation),
                 ]))
                 ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($state->operation === InstalledOperationManager::OPERATION_MODPACK) {
+            $installed = (int) ($state->result['installed'] ?? 0);
+            $skipped = (int) ($state->result['skipped'] ?? 0);
+            Notification::make()
+                ->title(trans('pelican-mod-manager::strings.notifications.modpack_install_success'))
+                ->body(trans('pelican-mod-manager::strings.notifications.modpack_install_success_body', [
+                    'name' => (string) ($state->result['name'] ?? ''),
+                    'version' => (string) ($state->result['version'] ?? ''),
+                    'installed' => $installed,
+                    'skipped' => $skipped,
+                ]))
+                ->success()
                 ->send();
 
             return;
@@ -4958,11 +5113,15 @@ class ModManagerPage extends Page implements HasTable
         }
 
         if ($exception instanceof DownloadUnavailableException) {
+            $bodyKey = match ($exception->reason()) {
+                DownloadUnavailableException::PREMIUM => 'download_unavailable_premium',
+                DownloadUnavailableException::INVALID => 'download_unavailable_invalid',
+                DownloadUnavailableException::DISTRIBUTION => 'download_unavailable_distribution',
+                default => 'download_unavailable_external',
+            };
             Notification::make()
                 ->title(trans('pelican-mod-manager::strings.notifications.download_unavailable'))
-                ->body(trans($exception->reason() === DownloadUnavailableException::PREMIUM
-                    ? 'pelican-mod-manager::strings.notifications.download_unavailable_premium'
-                    : 'pelican-mod-manager::strings.notifications.download_unavailable_external'))
+                ->body(trans('pelican-mod-manager::strings.notifications.'.$bodyKey))
                 ->warning()
                 ->send();
 

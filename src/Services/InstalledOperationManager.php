@@ -21,6 +21,8 @@ final class InstalledOperationManager
 
     public const OPERATION_BULK_UPDATE = 'bulk_update';
 
+    public const OPERATION_MODPACK = 'modpack_install';
+
     private const CACHE_PREFIX = 'mod_manager_operation:v1';
 
     private const CACHE_TTL_MINUTES = 120;
@@ -636,6 +638,7 @@ final class InstalledOperationManager
                 InstalledOperationLease::OPERATION_CLEAR,
             ], true),
             self::OPERATION_BULK_UPDATE => $leaseOperation === InstalledOperationLease::OPERATION_BULK_UPDATE,
+            self::OPERATION_MODPACK => $leaseOperation === InstalledOperationLease::OPERATION_MODPACK,
             default => false,
         };
 
@@ -779,6 +782,109 @@ final class InstalledOperationManager
                     $serverId,
                     $projectType,
                     self::OPERATION_BULK_UPDATE,
+                    'dispatch_failed',
+                    leaseToken: $leaseToken,
+                );
+            } catch (Throwable $stateException) {
+                report($stateException);
+            }
+
+            return [
+                'dispatched' => false,
+                'reason' => 'dispatch_failed',
+                'state' => $state,
+            ];
+        }
+
+        return [
+            'dispatched' => true,
+            'reason' => null,
+            'state' => $state,
+        ];
+    }
+
+    /**
+     * Queue a modpack install. The job downloads the pack and places files.
+     * Only mod servers accept it; the mod catalog itself is unchanged.
+     *
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'unsupported_type', state: ?InstalledOperationState}
+     */
+    public function dispatchModpackInstall(
+        Server|int $server,
+        ProjectType $projectType,
+        string $source,
+        string $projectId,
+        ?string $versionId = null,
+        ?int $deferSeconds = null,
+    ): array {
+        $serverId = $this->serverId($server);
+        $source = trim($source);
+        $projectId = trim($projectId);
+
+        if ($projectType !== ProjectType::Mod || $source === '' || $projectId === '' || str_contains($projectId, ':')) {
+            return [
+                'dispatched' => false,
+                'reason' => 'unsupported_type',
+                'state' => null,
+            ];
+        }
+
+        $current = $this->operationStateOrActive($serverId, $projectType, self::OPERATION_MODPACK);
+        if ($current?->isActive()) {
+            return [
+                'dispatched' => false,
+                'reason' => 'already_active',
+                'state' => $current,
+            ];
+        }
+
+        if (!$this->supportsAsyncDispatch()) {
+            return [
+                'dispatched' => false,
+                'reason' => 'sync_queue',
+                'state' => $current,
+            ];
+        }
+
+        $leaseToken = $this->leases->tryAcquire(
+            $serverId,
+            $projectType,
+            InstalledOperationLease::OPERATION_MODPACK,
+        );
+        if ($leaseToken === null) {
+            return [
+                'dispatched' => false,
+                'reason' => 'already_active',
+                'state' => $current,
+            ];
+        }
+
+        $state = $current;
+
+        try {
+            $state = $this->queue($serverId, $projectType, self::OPERATION_MODPACK);
+            if (!$this->runner->run(
+                BackgroundJob::MODPACK,
+                [
+                    'server_id' => $serverId,
+                    'project_type' => $projectType->value,
+                    'source' => $source,
+                    'project_id' => $projectId,
+                    'lease_token' => $leaseToken,
+                    'version_id' => $versionId !== null ? trim($versionId) : '',
+                    'defer_until' => $deferSeconds !== null && $deferSeconds > 0 ? time() + $deferSeconds : 0,
+                ],
+            )) {
+                throw new \RuntimeException('Unable to start the modpack install.');
+            }
+        } catch (Throwable $exception) {
+            report($exception);
+
+            try {
+                $state = $this->fail(
+                    $serverId,
+                    $projectType,
+                    self::OPERATION_MODPACK,
                     'dispatch_failed',
                     leaseToken: $leaseToken,
                 );

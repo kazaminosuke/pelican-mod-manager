@@ -7,6 +7,7 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as LaravelCacheRepository;
 use Illuminate\Config\Repository as LaravelConfigRepository;
 use Illuminate\Container\Container;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Facade;
@@ -149,6 +150,59 @@ class HangarSourceSearchCacheTest extends TestCase
             'platform' => 'VELOCITY',
             'tag' => 'LIBRARY',
         ]);
+    }
+
+    public function test_velocity_server_search_uses_its_proxy_version(): void
+    {
+        $variables = Mockery::mock(HasMany::class);
+        $variables->shouldReceive('whereIn')->with('env_variable', ['VELOCITY_VERSION'])->andReturnSelf();
+        $variables->shouldReceive('pluck')->with('server_value', 'env_variable')->andReturn(collect(['VELOCITY_VERSION' => '3.4.0']));
+        $server = Mockery::mock(Server::class);
+        $server->shouldReceive('variables')->andReturn($variables);
+        CatalogCompatibilityOverride::set($server, '26.1.2', 'velocity');
+
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                self::assertSame('VELOCITY', $spec->arguments['params']['platform']);
+                self::assertSame('3.4.0', $spec->arguments['params']['version']);
+                self::assertArrayNotHasKey('platformVersion', $spec->arguments['params']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $source = new HangarSource(new SourceCache($cache, new InstalledOperationManager($cache, app('config')), $executor));
+
+        $source->search($server, ProjectType::Plugin);
+    }
+
+    public function test_velocity_latest_alias_omits_the_version_filter(): void
+    {
+        $variables = Mockery::mock(HasMany::class);
+        $variables->shouldReceive('whereIn')->with('env_variable', ['VELOCITY_VERSION'])->andReturnSelf();
+        $variables->shouldReceive('pluck')->with('server_value', 'env_variable')->andReturn(collect(['VELOCITY_VERSION' => 'latest']));
+        $server = Mockery::mock(Server::class);
+        $server->shouldReceive('variables')->andReturn($variables);
+        CatalogCompatibilityOverride::set($server, '26.1.2', 'velocity');
+
+        $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+        $executor->shouldReceive('fetch')
+            ->once()
+            ->withArgs(function ($spec): bool {
+                self::assertSame('VELOCITY', $spec->arguments['params']['platform']);
+                self::assertArrayNotHasKey('version', $spec->arguments['params']);
+
+                return true;
+            })
+            ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $source = new HangarSource(new SourceCache($cache, new InstalledOperationManager($cache, app('config')), $executor));
+
+        $source->search($server, ProjectType::Plugin);
     }
 
     public function test_hash_lookup_404_is_a_normal_miss_without_a_failure_marker(): void

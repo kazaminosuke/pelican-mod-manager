@@ -9,6 +9,16 @@ the complete matching version section and adds the comparison information to the
 
 #### 変更
 
+- Mod サーバーに Modrinth（.mrpack）と CurseForge の Modpack を検索してインストールできるようにした。クライアント専用ファイルは入れず、ワールド、server.properties、BAN リスト、サーバー JAR は変更しない。既存の設定ファイルは残し、同じパスの Mod は置き換える。失敗したときは、その操作で追加したファイルを戻す
+- サーバー作成時に Modpack を選べるようにした。対応する Egg が一つに定まるときだけ自動選択し、曖昧なときは候補だけを表示する。既存サーバーでは、必要な場合に確認のうえで Egg を切り替え、ワールドなどのファイルは削除しない
+- FTB は FTB Server Egg の起動変数で導入する。Technic は、サーバー配布物の URL が既存のパック専用 Egg と一致するときだけ導入する。ATLauncher は公開 API にローダーもサーバー配布物もないため、導入しない
+- Spigot の最新の無料ホスト版は SpiGet CDN から取得する。選んだ過去バージョンは公式の Spigot URL のままにする
+- 管理者向けの診断コマンド `mod-manager:diagnose` を追加した
+- ダウンロードした JAR / ZIP が正しいアーカイブでない場合は、既存ファイルを置き換える前に失敗するようにした
+- 更新時に、すでに消えている古いファイルの削除が失敗しても、新しいファイルを消さないようにした。古いファイルがまだ残っているときは、両方読み込まれないよう新しいファイルを戻す
+- 現在の Paper egg と同じ起動変数を持つサーバーを Folia と誤認しないようにした
+- Velocity の Hangar 検索に Minecraft のバージョンを渡して一覧が空になる問題を修正した
+- Spigot のダウンロード先が不正な場合と、CurseForge で第三者配布が無効なファイルを、通常のダウンロード失敗と区別して表示するようにした
 - ファイルに変更がないのに「インストール済みファイルのスキャンをキューに追加しました」が繰り返し表示される問題を修正（スキャン結果を 10 分で破棄せず保持し、古くなった結果は表示したままバックグラウンドで静かに再検証。自動スキャンは間隔を空けて再試行し、失敗したスキャンが繰り返しキューに入らないように変更）
 - インストール・更新・削除のたびにフォルダ全体を再スキャンしないように変更（変更したファイルだけをスキャン結果に反映し、インストール時にファイルのサイズ・更新日時を記録して再ダウンロード・再ハッシュを省略）
 - 変更のないフォルダの再検証では、既知のファイルと最近確認済みの未識別ファイルを再ハッシュ・再照会しないように変更（未識別ファイルの再確認は 1 日 1 回、または手動スキャン時）
@@ -24,6 +34,16 @@ the complete matching version section and adds the comparison information to the
 
 #### Changed
 
+- Mod servers can search and install Modrinth (.mrpack) and CurseForge modpacks. Client-only files are skipped. Worlds, server.properties, ban lists, and the server JAR are left untouched. Existing config files are kept, while pack mods replace a file at the same path. A failed install removes the files added by that attempt
+- Server creation can select a modpack. An egg is chosen automatically only when one high-confidence match exists; otherwise the compatible eggs are listed. An existing server can change eggs after confirmation when a pack requires it, without deleting worlds or other server files
+- FTB packs are provisioned by the FTB Server egg variables. Technic packs are provisioned only when the server archive URL matches a pack-specific egg. ATLauncher packs are not installed because the public API has no loader or server archive and there is no ATLauncher egg
+- The current hosted-free Spigot file is downloaded from the SpiGet CDN. An explicitly selected older version keeps the official Spigot URL
+- Added the administrator command `mod-manager:diagnose` for non-destructive provider and egg checks
+- A downloaded JAR or ZIP that is not a valid archive now fails before it replaces an existing file
+- An update no longer deletes the new file when removal of an already-missing previous filename fails. If that previous file is still present, the new file is rolled back so both copies are not loaded
+- A server with the current Paper egg variables is no longer identified as Folia
+- Hangar searches on Velocity no longer send a Minecraft version, which had emptied the catalog
+- An unusable Spigot download address and a CurseForge file with third-party downloads disabled are reported separately from an ordinary download failure
 - Fixed "Scanning installed files queued" appearing repeatedly although no file changed. Scan results are kept instead of expiring after ten minutes; a stale result stays on screen while a background scan quietly revalidates it, and automatic scans are spaced out so a failing scan is not queued again on every page load
 - Installing, updating, or removing a project no longer rescans the whole folder. Only the changed file is applied to the scan result, and an install records the file's size and modification time so it is not downloaded and hashed again
 - Revalidating an unchanged folder no longer re-hashes or re-identifies tracked files or recently checked unknown files (unknown files are rechecked once a day or on a manual scan)

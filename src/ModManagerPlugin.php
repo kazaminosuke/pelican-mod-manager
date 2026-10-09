@@ -3,7 +3,9 @@
 namespace Kazaminosuke\ModManager;
 
 use App\Contracts\Plugins\HasPluginSettings;
+use App\Enums\StepPosition;
 use App\Enums\TabPosition;
+use App\Filament\Admin\Resources\Servers\Pages\CreateServer;
 use App\Filament\Admin\Resources\Servers\Pages\EditServer;
 use App\Models\Egg;
 use App\Models\Server;
@@ -26,6 +28,7 @@ use Filament\View\PanelsRenderHook;
 use Illuminate\Support\HtmlString;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
 use Kazaminosuke\ModManager\Filament\Admin\ServerModManagerTab;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
@@ -55,6 +58,9 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
 
         if ($panel->getId() === 'admin') {
             EditServer::registerCustomTabs(TabPosition::After, ServerModManagerTab::make());
+            if (class_exists(CreateServer::class) && class_exists(StepPosition::class)) {
+                CreateServer::registerCustomSteps(StepPosition::Before, ModpackCreationStep::step());
+            }
 
             return;
         }

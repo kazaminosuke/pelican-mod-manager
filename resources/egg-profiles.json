@@ -138,7 +138,8 @@
                     "019bbf16-a3f3-470a-9c0b-f3995b5e032a"
                 ],
                 "update_url_contains": [
-                    "java/curseforge/egg-curse-forge-generic.json"
+                    "java/curseforge/egg-curse-forge-generic.json",
+                    "java/curseforge/egg-curse-forge-generic.yaml"
                 ],
                 "name_aliases": [
                     "curseforgegeneric"
@@ -777,6 +778,14 @@
                         "BUILD_NUMBER",
                         "DL_PATH",
                         "MINECRAFT_VERSION",
+                        "PROJECT",
+                        "SERVER_JARFILE",
+                        "USER_AGENT"
+                    ],
+                    [
+                        "BUILD_NUMBER",
+                        "DL_PATH",
+                        "MINECRAFT_VERSION",
                         "SERVER_JARFILE"
                     ]
                 ]
@@ -1362,6 +1371,14 @@
                     "velocity"
                 ],
                 "variable_signatures": [
+                    [
+                        "BUILD_NUMBER",
+                        "DL_PATH",
+                        "PROJECT",
+                        "SERVER_JARFILE",
+                        "USER_AGENT",
+                        "VELOCITY_VERSION"
+                    ],
                     [
                         "BUILD_NUMBER",
                         "DL_PATH",

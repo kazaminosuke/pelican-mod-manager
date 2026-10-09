@@ -32,13 +32,17 @@ final class EggProfileRegistry
             return null;
         }
 
+        $matches = [];
         foreach (self::load() as $profile) {
             if (in_array($uuid, $profile->uuids, true)) {
-                return $profile;
+                $matches[] = $profile;
             }
         }
 
-        return null;
+        // The current FTB Server egg and the outdated modpacks.ch egg were
+        // published with the same uuid. A uuid that belongs to more than one
+        // profile is not an exact match; update_url or name has to decide.
+        return count($matches) === 1 ? $matches[0] : null;
     }
 
     public static function findByUpdateUrl(?string $updateUrl): ?EggProfile
@@ -173,6 +177,14 @@ final class EggProfileRegistry
         sort($normalized);
 
         return $normalized;
+    }
+
+    /**
+     * @return list<EggProfile>
+     */
+    public static function all(): array
+    {
+        return self::load();
     }
 
     /** Test-only: forces the next call to reload from disk. */

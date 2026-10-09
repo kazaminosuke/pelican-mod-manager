@@ -17,6 +17,7 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchHandlerInterface;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
 use Kazaminosuke\ModManager\Support\CachedSearchOperations;
@@ -25,6 +26,9 @@ use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackFileSelector;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
@@ -55,6 +59,9 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
 
     /** Resource Packs share CurseForge's Texture Packs classId with datapacks. */
     protected const CLASS_ID_RESOURCE_PACK = 12;
+
+    /** CurseForge classId for Minecraft modpacks. */
+    public const CLASS_ID_MODPACK = 4471;
 
     protected const CATEGORY_ID_DATAPACK = 5193;
 
@@ -155,6 +162,182 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         return $this->cachedSearch->warm($this->buildSearchSpec($server, $type, $page, $search, $filters));
     }
 
+    /**
+     * Modpack catalog. This is separate from mod search: a missing loader does
+     * not hide the catalog, and the class id is the modpack class.
+     *
+     * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
+     */
+    public function searchModpacks(Server $server, int $page = 1, ?string $search = null, bool $constrainToServer = true): array
+    {
+        $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer));
+
+        return $this->normalizeSearchResult($result);
+    }
+
+    /**
+     * Newest installable pack zip. A server pack is preferred over the
+     * client installer when CurseForge publishes one.
+     *
+     * @return array{version_id: string, version_number: string, filename: string, url: string}|null
+     */
+    public function latestModpackDownload(Server $server, string $projectId): ?array
+    {
+        if (!$this->isConfigured() || !ctype_digit($projectId)) {
+            return null;
+        }
+
+        $params = ['pageSize' => 50];
+        $version = MinecraftVersionResolver::resolve($server);
+        if ($version !== null) {
+            $params['gameVersion'] = $version;
+        }
+        $loader = $this->modLoaderTypeFor($server);
+        if ($loader !== null) {
+            $params['modLoaderType'] = $loader;
+        }
+
+        $response = $this->getJson('/mods/'.$projectId.'/files', $params);
+        $files = is_array($response['data'] ?? null) ? $response['data'] : [];
+        $selected = ModpackFileSelector::curseForgeServerPack($files);
+        if ($selected === null) {
+            return null;
+        }
+
+        if (($selected['lookup'] ?? false) === true) {
+            $selected = $this->modpackFile((int) $projectId, (int) $selected['id']);
+        }
+
+        return $this->modpackZipDownload(is_array($selected) ? $selected : null);
+    }
+
+    /**
+     * @return list<array{id: string, label: string, minecraft: ?string, loader: ?string}>
+     */
+    public function listModpackVersions(string $projectId): array
+    {
+        if (!$this->isConfigured() || !ctype_digit($projectId)) {
+            return [];
+        }
+
+        $response = $this->getJson('/mods/'.$projectId.'/files', ['pageSize' => 30]);
+        $files = is_array($response['data'] ?? null) ? $response['data'] : [];
+        $choices = [];
+        foreach ($files as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+
+            $name = strtolower((string) ($file['fileName'] ?? ''));
+            $id = trim((string) ($file['id'] ?? ''));
+            if ($id === '' || !str_ends_with($name, '.zip')) {
+                continue;
+            }
+
+            [$minecraft, $loader] = $this->curseForgeFileTargets($file);
+            $display = trim((string) ($file['displayName'] ?? ''));
+            $label = $display !== '' ? $display : (string) $file['fileName'];
+            if ($minecraft !== null) {
+                $label .= ' · '.$minecraft;
+            }
+            if ($loader !== null) {
+                $label .= ' · '.$loader;
+            }
+
+            $choices[] = [
+                'id' => $id,
+                'label' => $label,
+                'minecraft' => $minecraft,
+                'loader' => $loader,
+            ];
+        }
+
+        return $choices;
+    }
+
+    /**
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string}|null
+     */
+    public function modpackDownloadById(string $projectId, string $fileId): ?array
+    {
+        if (!$this->isConfigured() || !ctype_digit($projectId) || !ctype_digit($fileId)) {
+            return null;
+        }
+
+        $file = $this->modpackFile((int) $projectId, (int) $fileId);
+        $download = $this->modpackZipDownload($file);
+        if ($download === null || !is_array($file)) {
+            return null;
+        }
+
+        [$minecraft, $loader] = $this->curseForgeFileTargets($file);
+
+        return $download + [
+            'minecraft' => $minecraft,
+            'loader' => $loader,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $file
+     * @return array{0: ?string, 1: ?string}
+     */
+    private function curseForgeFileTargets(array $file): array
+    {
+        $minecraft = [];
+        $loaders = [];
+        foreach (is_array($file['gameVersions'] ?? null) ? $file['gameVersions'] : [] as $token) {
+            if (!is_scalar($token)) {
+                continue;
+            }
+
+            $value = trim((string) $token);
+            $loader = ModpackLoader::normalize($value);
+            if ($loader !== null) {
+                $loaders[] = $loader;
+                continue;
+            }
+
+            if (preg_match('/^\d+\.\d+(?:\.\d+)?$/', $value) === 1) {
+                $minecraft[] = $value;
+            }
+        }
+
+        return [
+            count(array_unique($minecraft)) === 1 ? $minecraft[0] : null,
+            count(array_unique($loaders)) === 1 ? $loaders[0] : null,
+        ];
+    }
+
+    /**
+     * Resolve one manifest dependency to a mods/ path and HTTPS URL.
+     *
+     * @return array{path: string, url: string, size: ?int}|null
+     */
+    public function modpackDependencyDownload(int $projectId, int $fileId): ?array
+    {
+        if (!$this->isConfigured() || $projectId < 1 || $fileId < 1) {
+            return null;
+        }
+
+        $file = $this->modpackFile($projectId, $fileId);
+        if ($file === null) {
+            return null;
+        }
+
+        $filename = ModpackPaths::safeRelative((string) ($file['fileName'] ?? ''));
+        $url = $file['downloadUrl'] ?? null;
+        if ($filename === null || str_contains($filename, '/') || !is_string($url) || !str_starts_with($url, 'https://')) {
+            return null;
+        }
+
+        return [
+            'path' => 'mods/'.$filename,
+            'url' => $url,
+            'size' => is_numeric($file['fileLength'] ?? null) ? (int) $file['fileLength'] : null,
+        ];
+    }
+
     /** @param array<string, mixed> $filters */
     private function buildSearchSpec(Server $server, ProjectType $type, int $page, ?string $search, array $filters): ?SourceFetchSpec
     {
@@ -253,6 +436,85 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         );
     }
 
+    private function buildModpackSearchSpec(Server $server, int $page, ?string $search, bool $constrainToServer = true): ?SourceFetchSpec
+    {
+        if (!$this->isConfigured()) {
+            return null;
+        }
+
+        $page = min(max(1, $page), intdiv(self::MAX_SEARCH_RESULTS, self::SEARCH_PAGE_SIZE));
+        $params = [
+            'gameId' => self::GAME_ID,
+            'classId' => self::CLASS_ID_MODPACK,
+            'index' => ($page - 1) * self::SEARCH_PAGE_SIZE,
+            'pageSize' => self::SEARCH_PAGE_SIZE,
+            'sortField' => self::SORT_FIELD_TOTAL_DOWNLOADS,
+            'sortOrder' => 'desc',
+        ];
+        if ($constrainToServer) {
+            $version = MinecraftVersionResolver::resolve($server);
+            if ($version !== null) {
+                $params['gameVersion'] = $version;
+            }
+            $loader = $this->modLoaderTypeFor($server);
+            if ($loader !== null) {
+                $params['modLoaderType'] = $loader;
+            }
+        }
+        $search = trim((string) $search);
+        if ($search !== '') {
+            $params['searchFilter'] = $search;
+        }
+
+        // project_type stays "mod" so the shared search handler can resolve the
+        // enum. The class id is what makes the cached payload a modpack search,
+        // and hits are relabeled before they are stored.
+        return new SourceFetchSpec(
+            sourceKey: $this->getKey()->value,
+            operation: 'search',
+            arguments: [
+                'params' => $params,
+                'project_type' => ProjectType::Mod->value,
+            ],
+        );
+    }
+
+    /** @return array<string, mixed>|null */
+    private function modpackFile(int $projectId, int $fileId): ?array
+    {
+        $response = $this->getJson("/mods/{$projectId}/files/{$fileId}");
+        $file = $response['data'] ?? null;
+
+        return is_array($file) ? $file : null;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $file
+     * @return array{version_id: string, version_number: string, filename: string, url: string}|null
+     */
+    private function modpackZipDownload(?array $file): ?array
+    {
+        if ($file === null) {
+            return null;
+        }
+
+        $filename = trim((string) ($file['fileName'] ?? ''));
+        $url = $file['downloadUrl'] ?? null;
+        $id = trim((string) ($file['id'] ?? ''));
+        if ($id === '' || $filename === '' || !str_ends_with(strtolower($filename), '.zip') || !is_string($url) || !str_starts_with($url, 'https://')) {
+            return null;
+        }
+
+        $version = trim((string) ($file['displayName'] ?? ''));
+
+        return [
+            'version_id' => $id,
+            'version_number' => $version !== '' ? $version : $filename,
+            'filename' => $filename,
+            'url' => $url,
+        ];
+    }
+
     /**
      * @param array<string, int|string> $params
      * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
@@ -277,11 +539,20 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
                 throw new Exception('Invalid CurseForge search response');
             }
 
+            $isModpack = (int) ($params['classId'] ?? 0) === self::CLASS_ID_MODPACK;
+
             return $this->normalizeSearchResult([
                 'hits' => collect($payload['data'] ?? [])
                     ->filter(fn ($mod) => is_array($mod))
                     ->filter(fn (array $mod) => $this->includeSearchHit($mod, $type))
-                    ->map(fn (array $mod) => $this->normalizeProject($mod, $type))
+                    ->map(function (array $mod) use ($type, $isModpack): array {
+                        $project = $this->normalizeProject($mod, $type);
+                        if ($isModpack) {
+                            $project['project_type'] = 'modpack';
+                        }
+
+                        return $project;
+                    })
                     ->values()
                     ->all(),
                 'total_hits' => (int) ($payload['pagination']['totalCount'] ?? 0),
@@ -1398,7 +1669,10 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             }
         }
 
-        return [
+        $downloadUrl = $file['downloadUrl'] ?? null;
+        $distributionDisabled = array_key_exists('downloadUrl', $file)
+            && (!is_string($downloadUrl) || $downloadUrl === '');
+        $version = [
             'id' => (string) ($file['id'] ?? ''),
             'version_number' => $file['displayName'] ?? $file['fileName'] ?? '',
             'version_type' => $releaseType,
@@ -1411,16 +1685,20 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             // avoid an N+1 request per version when listing.
             'changelog' => null,
             'featured' => false,
-            'files' => [
+            'files' => $distributionDisabled ? [] : [
                 [
                     'primary' => true,
                     'filename' => $file['fileName'] ?? '',
-                    // Null when the mod author disabled third-party download links.
-                    'url' => $file['downloadUrl'] ?? null,
+                    'url' => is_string($downloadUrl) ? $downloadUrl : null,
                     'hashes' => $hashes,
                 ],
             ],
         ];
+        if ($distributionDisabled) {
+            $version['download_unavailable'] = DownloadUnavailableException::DISTRIBUTION;
+        }
+
+        return $version;
     }
 
     private function http(float $timeoutSeconds): PendingRequest

@@ -23,6 +23,8 @@ final class BackgroundJob
 
     public const BULK_UPDATE = 'bulk_update';
 
+    public const MODPACK = 'modpack_install';
+
     public const RESET_METADATA = 'reset_metadata';
 
     public const WARM_SEARCH = 'warm_search';
@@ -48,6 +50,10 @@ final class BackgroundJob
 
         if ($type === self::SCAN) {
             return self::executeScan($payload);
+        }
+
+        if ($type === self::MODPACK) {
+            return self::executeModpack($payload);
         }
 
         match ($type) {
@@ -112,6 +118,34 @@ final class BackgroundJob
             self::reportQuietly($exception);
             $job->failed($exception);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private static function executeModpack(array $payload): ?int
+    {
+        $job = new InstallModpack(
+            serverId: self::int($payload, 'server_id'),
+            projectType: self::string($payload, 'project_type'),
+            source: self::string($payload, 'source'),
+            projectId: self::string($payload, 'project_id'),
+            leaseToken: self::string($payload, 'lease_token'),
+            versionId: self::optionalString($payload, 'version_id') ?? '',
+            deferUntil: is_numeric($payload['defer_until'] ?? null) ? (int) $payload['defer_until'] : 0,
+        );
+
+        try {
+            return Container::getInstance()->call([$job, 'handle']);
+        } catch (Throwable $exception) {
+            self::reportQuietly($exception);
+            $job->failed($exception);
+        }
+
+        return null;
     }
 
     /**

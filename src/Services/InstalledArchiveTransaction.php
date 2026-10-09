@@ -5,8 +5,10 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Support\ArchiveSignature;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
@@ -137,18 +139,28 @@ class InstalledArchiveTransaction
                 try {
                     $this->wings->delete($fileRepository, $server, $folder, $oldFilename);
                 } catch (Throwable $deleteException) {
-                    $this->rollbackActivatedArchive(
-                        $fileRepository,
-                        $server,
-                        $folder,
-                        $newFilename,
-                        $backupFilename,
-                    );
-                    $backupFilename = null;
+                    // A failed delete of a file that is already gone must not
+                    // remove the new archive: there is nothing to roll back to.
+                    // If the previous file is still listed, remove the new one
+                    // so the server does not load both copies.
+                    if ($this->wings->findListedFile($fileRepository, $server, $folder, $oldFilename) === null) {
+                        if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
+                            report($deleteException);
+                        }
+                    } else {
+                        $this->rollbackActivatedArchive(
+                            $fileRepository,
+                            $server,
+                            $folder,
+                            $newFilename,
+                            $backupFilename,
+                        );
+                        $backupFilename = null;
 
-                    $this->restoreInstalledMetadata($server, $fileRepository, $installedMod, $type, $metadataSession);
+                        $this->restoreInstalledMetadata($server, $fileRepository, $installedMod, $type, $metadataSession);
 
-                    throw $deleteException;
+                        throw $deleteException;
+                    }
                 }
             }
 
@@ -205,6 +217,11 @@ class InstalledArchiveTransaction
 
         if ($expectedSize !== null && $size !== $expectedSize) {
             throw new Exception("Pulled archive size [{$size}] does not match expected size [{$expectedSize}].");
+        }
+
+        $header = $this->wings->readPrefix($fileRepository, $server, $folder, $tempFilename);
+        if (!ArchiveSignature::isZip($header)) {
+            throw new Exception('Pulled archive is not a valid ZIP or JAR.');
         }
 
         return $listed;
