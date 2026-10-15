@@ -218,5 +218,4 @@ class InstalledMetadataRepository
 
         return $folder === '' ? $filename : "{$folder}/{$filename}";
     }
-
 }

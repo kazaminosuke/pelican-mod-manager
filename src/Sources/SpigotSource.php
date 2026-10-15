@@ -1265,16 +1265,6 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
     /**
      * @param  array<string, mixed>  $version
-     * @param  array<string, mixed>|null  $resource
-     * @return array<string, mixed>
-     */
-    private function withOfficialDownloadUrl(array $version, ?array $resource): array
-    {
-        return $this->withDownloadUrl($version, $resource, false);
-    }
-
-    /**
-     * @param  array<string, mixed>  $version
      * @return array<string, mixed>
      */
     private function withoutDownloadUrl(array $version, ?string $reason = null): array

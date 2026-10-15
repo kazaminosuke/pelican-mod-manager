@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Services;
 
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
+use Kazaminosuke\ModManager\Support\Compatibility\ClassifiedEgg;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
@@ -79,7 +80,7 @@ final class ModpackProvisioningPlanner
     }
 
     /**
-     * @param  list<\Kazaminosuke\ModManager\Support\Compatibility\ClassifiedEgg>  $eggs
+     * @param  list<ClassifiedEgg>  $eggs
      * @param  array<string, string>  $currentVariables
      */
     public function select(

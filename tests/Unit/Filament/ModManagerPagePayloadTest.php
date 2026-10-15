@@ -14,6 +14,7 @@ use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
+use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
@@ -725,7 +726,7 @@ class ModManagerPagePayloadTest extends TestCase
             ],
         ]);
         $container->instance('config', $config);
-        $settings = Mockery::mock(new ServerModManagerSettings(new \Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository()));
+        $settings = Mockery::mock(new ServerModManagerSettings(new ServerModManagerSettingRepository()));
         $settings->shouldReceive('navigationSort')
             ->andReturnUsing(static fn (Server $server, ProjectType $type): int => (int) $config->get('pelican-mod-manager.navigation_sort.'.$type->value));
         $container->instance(ServerModManagerSettings::class, $settings);

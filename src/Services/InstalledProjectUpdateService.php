@@ -7,8 +7,8 @@ use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
-use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
+use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 use Throwable;
 

@@ -26,7 +26,7 @@ final class ServerPropertiesTest extends TestCase
         self::assertSame(
             "motd=Example\nresource-pack=https://example.test/pack.zip\nresource-pack-sha1=0123456789abcdef0123456789abcdef01234567",
             ServerProperties::withResourcePack(
-                "motd=Example",
+                'motd=Example',
                 'https://example.test/pack.zip',
                 '0123456789abcdef0123456789abcdef01234567',
             ),

@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Console\Commands;
 
+use App\Models\Server;
 use Illuminate\Console\Command;
 use Kazaminosuke\ModManager\Services\ModManagerDiagnostics;
 
@@ -16,7 +17,7 @@ final class DiagnoseCommand extends Command
         $server = null;
         $serverId = $this->argument('server');
         if ($serverId !== null && $serverId !== '') {
-            $server = \App\Models\Server::query()->with('egg.variables')->find($serverId);
+            $server = Server::query()->with('egg.variables')->find($serverId);
             if ($server === null) {
                 $this->error('Server not found.');
 

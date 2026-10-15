@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use GuzzleHttp\Psr7\Response as PsrResponse;
+use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Http\Client\Response;
 use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Mockery;
@@ -29,7 +30,7 @@ final class ResourcePackServiceTest extends TestCase
 
         $repository->shouldReceive('setServer')->once()->with($server)->andReturnSelf();
         $repository->shouldReceive('getContent')->once()->with('server.properties')->andReturn($oldProperties);
-        $repository->shouldReceive('putContent')->twice()->withArgs(function (string $path, string $content) use ($response): bool {
+        $repository->shouldReceive('putContent')->twice()->withArgs(function (string $path, string $content): bool {
             if ($path === 'server.properties') {
                 self::assertStringContainsString('resource-pack=https://example.test/pack.zip', $content);
                 self::assertStringContainsString('resource-pack-sha1=0123456789abcdef0123456789abcdef01234567', $content);
@@ -77,7 +78,7 @@ final class ResourcePackServiceTest extends TestCase
         $repository->shouldReceive('getContent')
             ->once()
             ->with(ResourcePackService::METADATA_FILENAME)
-            ->andThrow(new \Illuminate\Contracts\Filesystem\FileNotFoundException('missing'));
+            ->andThrow(new FileNotFoundException('missing'));
 
         self::assertNull((new ResourcePackService())->getInstalled($server, $repository));
     }
