@@ -588,6 +588,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
 
         $results = [];
         $generation = CacheVersion::hangarHash();
+        $specsByHash = [];
 
         foreach (array_unique(array_values($hashesByFilename)) as $hash) {
             $hash = strtolower((string) $hash);
@@ -596,10 +597,17 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
                 continue;
             }
 
-            $spec = $this->spec(self::OPERATION_HASH_MATCH, [
+            $specsByHash[$hash] = $this->spec(self::OPERATION_HASH_MATCH, [
                 'generation' => $generation,
                 'hash' => $hash,
             ]);
+        }
+
+        if (count($specsByHash) > 1) {
+            $this->sourceCache->peekMany($specsByHash);
+        }
+
+        foreach ($specsByHash as $hash => $spec) {
             $entry = $authoritative
                 ? $this->sourceCache->swrRequired($spec, CacheProfile::HashMatch)
                 : $this->sourceCache->swr($spec, CacheProfile::HashMatch);

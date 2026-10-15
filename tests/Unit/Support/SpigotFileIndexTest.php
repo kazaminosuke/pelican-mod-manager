@@ -56,4 +56,22 @@ class SpigotFileIndexTest extends TestCase
         $index->remember('short', '1', '2', '1.0.0');
         self::assertNull($index->findBySha256('short'));
     }
+
+    public function test_finds_multiple_hashes_in_one_batch_and_skips_unchanged_rewrites(): void
+    {
+        $index = new SpigotFileIndex();
+        $hashA = str_repeat('11', 32);
+        $hashB = str_repeat('22', 32);
+        $hashMissing = str_repeat('33', 32);
+
+        $index->remember($hashA, '28140', '648014', '5.5.71', 'LuckPerms');
+        $index->remember($hashB, '34315', '344916', '1.7.3', 'Vault');
+
+        $freshIndex = new SpigotFileIndex();
+        $found = $freshIndex->findManyBySha256([$hashA, $hashB, $hashMissing, 'invalid']);
+
+        self::assertCount(2, $found);
+        self::assertSame('28140', $found[$hashA]['resource_id']);
+        self::assertSame('34315', $found[$hashB]['resource_id']);
+    }
 }

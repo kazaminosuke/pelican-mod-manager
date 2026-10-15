@@ -5,9 +5,11 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use JsonException;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
+use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\ServerProperties;
 use Throwable;
 
@@ -37,7 +39,7 @@ final class ResourcePackService
             // Match InstalledMetadataRepository: a Wings transport failure is
             // not evidence that no pack is installed, and must not turn the
             // Resource Pack page into a Livewire 500 on mount.
-            if (function_exists('report') && app()->bound(\Illuminate\Contracts\Debug\ExceptionHandler::class)) {
+            if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
                 report($exception);
             }
 
@@ -102,6 +104,8 @@ final class ResourcePackService
             throw $exception;
         }
 
+        $this->bumpHydration($server);
+
         return $metadata;
     }
 
@@ -130,6 +134,8 @@ final class ResourcePackService
 
             throw $exception;
         }
+
+        $this->bumpHydration($server);
     }
 
     /**
@@ -292,6 +298,21 @@ final class ResourcePackService
     {
         if (!is_object($response) || !method_exists($response, 'failed') || $response->failed()) {
             throw new Exception("Failed to write resource pack file: {$path}");
+        }
+    }
+
+    private function bumpHydration(Server $server): void
+    {
+        if (!function_exists('app') || !app()->bound('cache')) {
+            return;
+        }
+
+        try {
+            CacheVersion::bumpHydration($server);
+        } catch (Throwable $exception) {
+            if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
+                report($exception);
+            }
         }
     }
 }

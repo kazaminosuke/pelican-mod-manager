@@ -100,6 +100,29 @@ final class InstalledMetadataIndexTest extends TestCase
         self::assertSame('viaversion', $entries['modrinth:viaversion']['project_id']);
     }
 
+    public function test_prime_skips_redundant_writes_when_generation_is_already_ready(): void
+    {
+        $store = new class extends ArrayStore
+        {
+            public int $putManyCalls = 0;
+
+            /** @param array<string, mixed> $values */
+            public function putMany(array $values, $seconds): bool
+            {
+                $this->putManyCalls++;
+
+                return parent::putMany($values, $seconds);
+            }
+        };
+        $index = new InstalledMetadataIndex(new Repository($store));
+        $server = $this->server();
+
+        $index->prime($server, ProjectType::Plugin, 9, [$this->entry('viaversion')]);
+        $index->prime($server, ProjectType::Plugin, 9, [$this->entry('viaversion')]);
+
+        self::assertSame(1, $store->putManyCalls);
+    }
+
     private function server(): Server
     {
         $server = new Server();

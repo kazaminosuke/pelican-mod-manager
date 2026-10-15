@@ -411,9 +411,9 @@ final class InstalledOperationManager
     }
 
     /**
-     * Scan result plus scan/bulk operation state in one cache round trip.
+     * Scan result plus scan/bulk/modpack operation state in one cache round trip.
      *
-     * @return array{scan_result: mixed, scan: InstalledOperationState|null, bulk: InstalledOperationState|null}
+     * @return array{scan_result: mixed, scan: InstalledOperationState|null, bulk: InstalledOperationState|null, modpack: InstalledOperationState|null}
      */
     public function installedTabCacheSnapshot(
         Server|int $server,
@@ -423,7 +423,8 @@ final class InstalledOperationManager
         $serverId = $this->serverId($server);
         $scanKey = $this->cacheKey($serverId, $projectType, self::OPERATION_SCAN);
         $bulkKey = $this->cacheKey($serverId, $projectType, self::OPERATION_BULK_UPDATE);
-        $payloads = $this->cache->many([$scanResultCacheKey, $scanKey, $bulkKey]);
+        $modpackKey = $this->cacheKey($serverId, $projectType, self::OPERATION_MODPACK);
+        $payloads = $this->cache->many([$scanResultCacheKey, $scanKey, $bulkKey, $modpackKey]);
 
         $scanState = isset($this->progressBuffer[$scanKey])
             ? $this->progressBuffer[$scanKey]['state']
@@ -431,17 +432,22 @@ final class InstalledOperationManager
         $bulkState = isset($this->progressBuffer[$bulkKey])
             ? $this->progressBuffer[$bulkKey]['state']
             : InstalledOperationState::fromCachePayload($payloads[$bulkKey] ?? null);
+        $modpackState = isset($this->progressBuffer[$modpackKey])
+            ? $this->progressBuffer[$modpackKey]['state']
+            : InstalledOperationState::fromCachePayload($payloads[$modpackKey] ?? null);
 
-        if ($scanState?->isActive() || $bulkState?->isActive()) {
+        if ($scanState?->isActive() || $bulkState?->isActive() || $modpackState?->isActive()) {
             $leaseOperation = $this->leases->currentOperation($serverId, $projectType);
             $scanState = $this->stateMatchingLease($scanState, $leaseOperation);
             $bulkState = $this->stateMatchingLease($bulkState, $leaseOperation);
+            $modpackState = $this->stateMatchingLease($modpackState, $leaseOperation);
         }
 
         return [
             'scan_result' => $payloads[$scanResultCacheKey] ?? null,
             'scan' => $scanState,
             'bulk' => $bulkState,
+            'modpack' => $modpackState,
         ];
     }
 

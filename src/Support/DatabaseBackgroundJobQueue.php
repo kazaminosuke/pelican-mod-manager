@@ -15,7 +15,7 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
 
     public function push(string $type, array $payload): bool
     {
-        if ($type === '' || !$this->tableReady()) {
+        if ($type === '') {
             return false;
         }
 
@@ -36,10 +36,6 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
 
     public function claim(): ?array
     {
-        if (!$this->tableReady()) {
-            return null;
-        }
-
         try {
             return ModManagerBackgroundJob::query()->getConnection()->transaction(function (): ?array {
                 $job = ModManagerBackgroundJob::query()
@@ -76,10 +72,6 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
 
     public function ack(int|string $id): void
     {
-        if (!$this->tableReady()) {
-            return;
-        }
-
         try {
             ModManagerBackgroundJob::query()->whereKey($id)->delete();
         } catch (Throwable) {
@@ -89,10 +81,6 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
 
     public function retry(int|string $id, int $delaySeconds = 30): void
     {
-        if (!$this->tableReady()) {
-            return;
-        }
-
         try {
             ModManagerBackgroundJob::query()->whereKey($id)->update([
                 'reserved_at' => null,
@@ -105,10 +93,6 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
 
     public function release(int|string $id, int $delaySeconds): void
     {
-        if (!$this->tableReady()) {
-            return;
-        }
-
         try {
             ModManagerBackgroundJob::query()
                 ->whereKey($id)
@@ -130,16 +114,5 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
         $uniqueKey = $payload['_unique_key'] ?? null;
 
         return is_string($uniqueKey) && $uniqueKey !== '' ? $uniqueKey : null;
-    }
-
-    private function tableReady(): bool
-    {
-        try {
-            ModManagerBackgroundJob::query()->limit(1)->get(['id']);
-        } catch (Throwable) {
-            return false;
-        }
-
-        return true;
     }
 }

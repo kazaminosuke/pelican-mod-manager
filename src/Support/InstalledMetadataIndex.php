@@ -68,8 +68,13 @@ final class InstalledMetadataIndex
         int $generation,
         array $installedMods,
     ): void {
+        $prefix = $this->prefix($server, $type, $generation);
+        if ($this->cache->get($prefix.':ready') === true) {
+            return;
+        }
+
         $this->publish(
-            $this->prefix($server, $type, $generation),
+            $prefix,
             $this->entriesByIdentity($installedMods),
         );
     }

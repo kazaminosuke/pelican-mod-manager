@@ -272,6 +272,8 @@ class ModManagerPage extends Page implements HasTable
      */
     protected ?InstalledScanResult $loadedInstalledScanResult = null;
 
+    protected ?InstalledOperationState $preloadedModpackOperationState = null;
+
     /** Per-request timing state used only by temporary initial-load diagnostics. */
     protected bool $modManagerTimingEnabled = false;
 
@@ -1488,19 +1490,40 @@ class ModManagerPage extends Page implements HasTable
             $type = static::detectProjectType($server);
 
             if ($type === ProjectType::ResourcePack) {
-                try {
-                    $installed = app(ResourcePackService::class)->getInstalled($server, $fileRepository);
-                    $this->installedModsMetadata = $installed === null ? [] : [$installed];
-                    $this->installedFilesCount = $installed === null ? 0 : 1;
+                $generation = CacheVersion::hydration($server);
+                $cacheKey = "installed_metadata_display:v2:{$server->id}:resourcepack:{$generation}";
+                $cached = Cache::get($cacheKey);
+
+                if (is_array($cached)) {
+                    $this->installedModsMetadata = $cached;
+                    $this->installedFilesCount = count($cached);
                     $this->installedScanDataReady = true;
-                } catch (Exception $exception) {
-                    if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
-                        report($exception);
+                } else {
+                    try {
+                        $installed = app(ResourcePackService::class)->getInstalled($server, $fileRepository);
+                        $this->installedModsMetadata = $installed === null ? [] : [$installed];
+                        $this->installedFilesCount = $installed === null ? 0 : 1;
+                        $this->installedScanDataReady = true;
+                        Cache::put($cacheKey, $this->installedModsMetadata, now()->addHour());
+                    } catch (Exception $exception) {
+                        if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
+                            report($exception);
+                        }
+                        $this->installedModsMetadata = [];
+                        $this->installedFilesCount = -1;
+                        $this->installedScanDataReady = false;
                     }
-                    $this->installedModsMetadata = [];
-                    $this->installedFilesCount = -1;
-                    $this->installedScanDataReady = false;
                 }
+
+                if ($this->installedScanDataReady) {
+                    app(InstalledMetadataIndex::class)->prime(
+                        $server,
+                        ProjectType::ResourcePack,
+                        $generation,
+                        $this->installedModsMetadata,
+                    );
+                }
+
                 unset($this->cachedTabs);
 
                 return $this->installedModsMetadata;
@@ -2623,6 +2646,7 @@ class ModManagerPage extends Page implements HasTable
                     if ($scanState !== null) {
                         $this->setInstalledOperationState($scanState);
                     } else {
+                        $this->preloadedModpackOperationState = $snapshot['modpack'] ?? null;
                         $state = $this->refreshInstalledOperationState(
                             $snapshot['scan'],
                             $snapshot['bulk'],
@@ -4806,8 +4830,9 @@ class ModManagerPage extends Page implements HasTable
         }
 
         $operations = app(InstalledOperationManager::class);
+        $modpackState = $preloaded ? $this->preloadedModpackOperationState : null;
+        $this->preloadedModpackOperationState = null;
 
-        $modpackState = null;
         if (!$preloaded) {
             $fetched = $operations->states($server, $type, [
                 InstalledOperationManager::OPERATION_SCAN,
@@ -4817,10 +4842,6 @@ class ModManagerPage extends Page implements HasTable
             $scanState = $fetched[InstalledOperationManager::OPERATION_SCAN];
             $bulkState = $fetched[InstalledOperationManager::OPERATION_BULK_UPDATE];
             $modpackState = $fetched[InstalledOperationManager::OPERATION_MODPACK];
-        } else {
-            $modpackState = $operations->states($server, $type, [
-                InstalledOperationManager::OPERATION_MODPACK,
-            ])[InstalledOperationManager::OPERATION_MODPACK] ?? null;
         }
 
         if ($modpackState?->isActive()) {
@@ -4840,6 +4861,7 @@ class ModManagerPage extends Page implements HasTable
         $states = array_values(array_filter([
             $scanState,
             $bulkState,
+            $modpackState,
         ]));
 
         usort($states, function (InstalledOperationState $left, InstalledOperationState $right): int {

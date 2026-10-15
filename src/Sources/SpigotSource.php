@@ -352,17 +352,17 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      */
     public function findVersionsByHash(array $hashesByFilename): array
     {
+        $hashes = array_values(array_filter(
+            $hashesByFilename,
+            static fn (mixed $hash): bool => is_string($hash) && $hash !== '',
+        ));
+        if ($hashes === []) {
+            return [];
+        }
+
         $matched = [];
-
-        foreach ($hashesByFilename as $hash) {
-            if (!is_string($hash) || $hash === '') {
-                continue;
-            }
-
-            $indexed = $this->fileIndex->findBySha256($hash);
-            if ($indexed !== null) {
-                $matched[$hash] = $this->identityVersion($indexed['resource_id'], $indexed['version_id'], $indexed['version_number']);
-            }
+        foreach ($this->fileIndex->findManyBySha256($hashes) as $hash => $indexed) {
+            $matched[$hash] = $this->identityVersion($indexed['resource_id'], $indexed['version_id'], $indexed['version_number']);
         }
 
         return $matched;
