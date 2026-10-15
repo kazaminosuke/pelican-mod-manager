@@ -287,9 +287,7 @@ final class ModpackInstaller
 
     private function assertHttps(string $url): void
     {
-        $scheme = parse_url($url, PHP_URL_SCHEME);
-        $host = parse_url($url, PHP_URL_HOST);
-        if ($scheme !== 'https' || !is_string($host) || $host === '') {
+        if (!ModpackPaths::isSafeHttpsDownloadUrl($url)) {
             throw new ModpackException('Modpack downloads must use an HTTPS URL.');
         }
     }

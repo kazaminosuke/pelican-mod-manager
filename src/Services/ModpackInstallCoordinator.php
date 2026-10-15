@@ -63,6 +63,7 @@ final class ModpackInstallCoordinator
         ?string $versionId,
         int|string|null $explicitEggId,
         bool $confirmed,
+        bool $canChangeEgg = true,
     ): array {
         $preview = $this->preview($server, $selection, $versionId, $explicitEggId);
         $descriptor = $preview['descriptor'];
@@ -83,6 +84,10 @@ final class ModpackInstallCoordinator
         $changedEgg = $result->disposition === CompatibilityDisposition::EggChange
             || $result->disposition === CompatibilityDisposition::Variables;
         if ($changedEgg) {
+            if (!$canChangeEgg) {
+                throw new ModpackException('You do not have permission to change the server egg or startup configuration.');
+            }
+
             if ($result->selected === null) {
                 throw new ModpackException('No target egg was selected.');
             }

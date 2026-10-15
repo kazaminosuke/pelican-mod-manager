@@ -288,13 +288,9 @@ final class ModpackArchive
         }
 
         foreach ($downloads as $url) {
-            if (!is_string($url) || !str_starts_with($url, 'https://')) {
-                continue;
+            if (ModpackPaths::isSafeHttpsDownloadUrl($url)) {
+                return $url;
             }
-
-            $host = parse_url($url, PHP_URL_HOST);
-
-            return is_string($host) && $host !== '' ? $url : null;
         }
 
         return null;

@@ -175,6 +175,54 @@ class ProjectOperationAuthorizerTest extends TestCase
         self::assertTrue($this->allows($user, ProjectOperation::Install));
     }
 
+    public function test_egg_profile_edit_requires_root_admin_role_ability_or_enabled_startup_permission(): void
+    {
+        $rootAdmin = $this->user(rootAdmin: true);
+        self::assertTrue($this->allowsEggEdit($rootAdmin));
+
+        $roleAdmin = $this->user(permissions: [
+            'update minecraftModManager' => true,
+        ]);
+        self::assertTrue($this->allowsEggEdit($roleAdmin));
+
+        $startupUser = $this->user(permissions: [
+            SubuserPermission::StartupUpdate->value => true,
+        ]);
+        self::assertFalse($this->allowsEggEdit($startupUser));
+        self::assertTrue($this->allowsEggEdit($startupUser, [
+            'allow_user_egg_profile_edit' => true,
+        ]));
+
+        $fileOnlyUser = $this->user(permissions: [
+            SubuserPermission::FileCreate->value => true,
+        ]);
+        self::assertFalse($this->allowsEggEdit($fileOnlyUser, [
+            'allow_user_egg_profile_edit' => true,
+        ]));
+    }
+
+    /**
+     * @param array<string, bool> $config
+     */
+    private function allowsEggEdit(User $user, array $config = []): bool
+    {
+        $previousContainer = Container::getInstance();
+        $container = new Container();
+        $container->instance('config', new LaravelConfigRepository([
+            'pelican-mod-manager' => $config,
+        ]));
+        Container::setInstance($container);
+
+        try {
+            $server = new Server();
+            $server->id = 1;
+
+            return (new ProjectOperationAuthorizer())->allowsEggProfileEdit($user, $server);
+        } finally {
+            Container::setInstance($previousContainer);
+        }
+    }
+
     /**
      * @param array<string, bool> $config
      */
@@ -200,7 +248,8 @@ class ProjectOperationAuthorizerTest extends TestCase
     /** @param array<string, bool> $permissions */
     private function user(bool $rootAdmin = false, array $permissions = []): User
     {
-        return new class($rootAdmin, $permissions) extends User {
+        return new class($rootAdmin, $permissions) extends User
+        {
             /** @param array<string, bool> $permissions */
             public function __construct(
                 private readonly bool $rootAdmin,

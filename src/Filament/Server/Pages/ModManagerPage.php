@@ -2,7 +2,6 @@
 
 namespace Kazaminosuke\ModManager\Filament\Server\Pages;
 
-use App\Enums\SubuserPermission;
 use App\Filament\Admin\Resources\Plugins\PluginResource;
 use App\Filament\Server\Resources\Files\Pages\ListFiles;
 use App\Models\Server;
@@ -63,7 +62,6 @@ use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
-use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
@@ -71,6 +69,8 @@ use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
+use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
+use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
@@ -4153,6 +4153,7 @@ class ModManagerPage extends Page implements HasTable
                             isset($data['version']) ? (string) $data['version'] : null,
                             isset($data['target_egg']) && $data['target_egg'] !== '' ? $data['target_egg'] : null,
                             (bool) ($data['confirm_egg_change'] ?? false),
+                            $this->canEditEggProfile($server),
                         );
                         if ($outcome['dispatched']) {
                             $this->notifyInstalledOperationDispatched(['dispatched' => true, 'reason' => null, 'state' => null]);
@@ -4290,7 +4291,7 @@ class ModManagerPage extends Page implements HasTable
         ];
     }
 
-    private function modpackPreview(Server $server, Get $get, mixed $explicitEggId = null): ?\Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult
+    private function modpackPreview(Server $server, Get $get, mixed $explicitEggId = null): ?CompatibilityResult
     {
         $project = (string) $get('project');
         $version = $get('version');
@@ -4552,11 +4553,10 @@ class ModManagerPage extends Page implements HasTable
 
     protected function canEditEggProfile(Server $server): bool
     {
-        if (app(ServerModManagerSettings::class)->allowsEggProfileEdit($server)) {
-            return (bool) user()?->can(SubuserPermission::StartupUpdate, $server);
-        }
+        $user = user();
 
-        return (bool) user()?->isAdmin();
+        return $user !== null
+            && app(ProjectOperationAuthorizer::class)->allowsEggProfileEdit($user, $server);
     }
 
     /**

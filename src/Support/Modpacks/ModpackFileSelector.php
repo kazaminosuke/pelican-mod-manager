@@ -110,6 +110,6 @@ final class ModpackFileSelector
 
     private static function httpsUrl(mixed $url): ?string
     {
-        return is_string($url) && str_starts_with($url, 'https://') ? $url : null;
+        return ModpackPaths::isSafeHttpsDownloadUrl($url) ? $url : null;
     }
 }

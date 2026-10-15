@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Support;
 
+use App\Enums\SubuserPermission;
 use App\Models\Server;
 use App\Models\User;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
@@ -11,6 +12,28 @@ final class ProjectOperationAuthorizer
     public function __construct(
         private readonly ?ServerModManagerSettings $settings = null,
     ) {}
+
+    public function allowsEggProfileEdit(?User $user, Server $server): bool
+    {
+        if ($user === null) {
+            return false;
+        }
+
+        if ($user->isRootAdmin()) {
+            return true;
+        }
+
+        if ($user->can(ProjectOperation::Update->roleAbility())
+            || $user->can(ProjectOperation::Install->roleAbility())) {
+            return true;
+        }
+
+        if (!$this->settings()->allowsEggProfileEdit($server)) {
+            return false;
+        }
+
+        return $user->can(SubuserPermission::StartupUpdate, $server);
+    }
 
     public function allows(?User $user, Server $server, ProjectOperation $operation): bool
     {

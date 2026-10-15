@@ -88,6 +88,40 @@ final class ModpackArchiveTest extends TestCase
         ModpackArchive::read($path);
     }
 
+    public function test_loopback_private_ip_and_credential_urls_in_modrinth_index_are_rejected(): void
+    {
+        foreach ([
+            'https://127.0.0.1/server.jar',
+            'https://localhost/server.jar',
+            'https://10.0.0.1/server.jar',
+            'https://192.168.1.10/server.jar',
+            'https://169.254.169.254/latest/meta-data',
+            'https://[::1]/server.jar',
+            'https://user:secret@cdn.modrinth.com/data/server.jar',
+            'https://internal.local/server.jar',
+        ] as $unsafeUrl) {
+            $path = $this->zip([
+                'modrinth.index.json' => json_encode([
+                    'formatVersion' => 1,
+                    'game' => 'minecraft',
+                    'versionId' => '1',
+                    'name' => 'Unsafe URL Pack',
+                    'files' => [[
+                        'path' => 'mods/server.jar',
+                        'downloads' => [$unsafeUrl],
+                    ]],
+                ], JSON_THROW_ON_ERROR),
+            ]);
+
+            try {
+                ModpackArchive::read($path);
+                self::fail("Unsafe URL [$unsafeUrl] must be rejected.");
+            } catch (ModpackException $exception) {
+                self::assertStringContainsString('no HTTPS download', $exception->getMessage());
+            }
+        }
+    }
+
     public function test_curseforge_manifest_keeps_project_file_ids_and_primary_loader(): void
     {
         $path = $this->zip([
