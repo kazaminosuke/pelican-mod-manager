@@ -24,7 +24,7 @@
         const ROW_ACTION_SELECTOR = '[data-mmr-swr-row-action]';
         const ROW_ACTION_DEFINITIONS = Object.freeze({
             versions: {},
-            install_latest: {},
+            install_latest: { allowDisabled: true },
             update: {},
             installed: { disabled: true },
             uninstall: {},
@@ -404,7 +404,10 @@
             && typeof descriptor.disabled === 'boolean'
             && Object.hasOwn(ROW_ACTION_DEFINITIONS, descriptor.type)
             && ROW_ACTION_COLORS.has(descriptor.color)
-            && ((ROW_ACTION_DEFINITIONS[descriptor.type].disabled === true) === descriptor.disabled)
+            && (
+                ROW_ACTION_DEFINITIONS[descriptor.type].allowDisabled === true
+                || (ROW_ACTION_DEFINITIONS[descriptor.type].disabled === true) === descriptor.disabled
+            )
         );
 
         const getRowActionDescriptors = (row) => {

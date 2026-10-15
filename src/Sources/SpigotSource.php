@@ -78,6 +78,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
     private const OPERATION_SEARCH = 'search';
 
+    private const OPERATION_SPIGET_DETAIL = 'spiget_detail';
+
     private const OPERATION_VERSIONS = 'versions';
 
     private readonly CachedProjectMetadata $cachedProjectMetadata;
@@ -504,48 +506,156 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             $total = $pages > 0 ? $pages * self::CATALOG_PAGE_SIZE : (($page - 1) * self::CATALOG_PAGE_SIZE) + count($hits);
         }
 
-        return [
-            'hits' => $this->withSpigetDetails($hits, $compactIds, $deadline),
+        [$hits, $incompleteDetails] = $this->withSpigetDetails($hits, $compactIds, $deadline);
+        $hits = $this->withCachedOfficialProjectOverlay($hits);
+        $result = [
+            'hits' => $hits,
             'total_hits' => $total,
         ];
+
+        if ($incompleteDetails) {
+            throw new PartialSourceFetchException(
+                'Spigot catalog details were only partially resolved within the time budget.',
+                $result,
+            );
+        }
+
+        return $result;
     }
 
     /**
      * Fill compact catalog rows from Spiget's resource endpoint, which is
      * CDN-cached and serves a page of parallel requests. The official API
      * rate-limits bursts of that size, so it is kept for per-project
-     * metadata. A row whose detail request fails stays listed with unknown
-     * statistics rather than invented zeros.
+     * metadata. Resolved details are cached individually, and transient
+     * detail failures signal PartialSourceFetchException so incomplete rows
+     * are not cached as a fresh search hit.
      *
      * @param  array<int, array<string, mixed>>  $hits
      * @param  array<int, string>  $compactIds
-     * @return array<int, array<string, mixed>>
+     * @return array{0: array<int, array<string, mixed>>, 1: bool}
      */
     private function withSpigetDetails(array $hits, array $compactIds, float $deadline): array
     {
-        $remaining = $deadline - microtime(true);
-        if ($compactIds === [] || $remaining <= 0.1) {
-            return $hits;
+        if ($compactIds === []) {
+            return [$hits, false];
         }
 
-        $urls = [];
+        $compactIds = array_values(array_unique($compactIds));
+        $detailSpecs = [];
         foreach ($compactIds as $projectId) {
-            $urls[$projectId] = $this->spigetResourceUrl($projectId);
+            $detailSpecs[$projectId] = $this->spigetDetailSpec($projectId);
         }
 
-        try {
-            $responses = $this->pool($urls, $remaining);
-        } catch (Throwable $exception) {
-            report($exception);
+        $resolved = [];
+        $missingIds = [];
+        foreach ($this->sourceCache->peekMany($detailSpecs) as $projectId => $peeked) {
+            if (is_array($peeked['data'])) {
+                $resolved[(string) $projectId] = $peeked['data'];
+            } else {
+                $missingIds[] = (string) $projectId;
+            }
+        }
 
+        $hadFailure = false;
+        if ($missingIds !== []) {
+            $remaining = $deadline - microtime(true);
+            if ($remaining <= 0.1) {
+                $hadFailure = true;
+            } else {
+                $urls = [];
+                foreach ($missingIds as $projectId) {
+                    $urls[$projectId] = $this->spigetResourceUrl($projectId);
+                }
+
+                try {
+                    $responses = $this->pool($urls, $remaining);
+                } catch (Throwable $exception) {
+                    report($exception);
+                    $responses = [];
+                    $hadFailure = true;
+                }
+
+                $toPrime = [];
+                foreach ($missingIds as $projectId) {
+                    $response = $responses[$projectId] ?? null;
+                    if ($response instanceof Response && $response->successful()) {
+                        $resource = $response->json();
+                        $normalized = is_array($resource) ? $this->normalizeSpigetProject($resource) : null;
+                        if ($normalized !== null) {
+                            $resolved[$projectId] = $normalized;
+                            $toPrime[] = [
+                                'spec' => $detailSpecs[$projectId],
+                                'data' => $normalized,
+                            ];
+
+                            continue;
+                        }
+                    }
+
+                    if ($response instanceof Response && $response->status() === 404) {
+                        continue;
+                    }
+
+                    $hadFailure = true;
+                }
+
+                if ($toPrime !== []) {
+                    $this->sourceCache->primeMany($toPrime, CacheProfile::Search);
+                }
+            }
+        }
+
+        $detailedHits = array_map(static function (array $hit) use ($resolved): array {
+            $projectId = (string) ($hit['project_id'] ?? '');
+
+            return $resolved[$projectId] ?? $hit;
+        }, $hits);
+
+        return [$detailedHits, $hadFailure];
+    }
+
+    /**
+     * Overlay any already-cached official project metadata (such as author
+     * username) without making upstream HTTP requests during catalog search.
+     *
+     * @param  array<int, array<string, mixed>>  $hits
+     * @return array<int, array<string, mixed>>
+     */
+    private function withCachedOfficialProjectOverlay(array $hits): array
+    {
+        if ($hits === []) {
+            return [];
+        }
+
+        $projectIds = array_values(array_unique(array_filter(array_map(
+            static fn (array $hit): string => (string) ($hit['project_id'] ?? ''),
+            $hits,
+        ))));
+        if ($projectIds === []) {
             return $hits;
         }
 
-        return array_map(function (array $hit) use ($responses): array {
-            $response = $responses[$hit['project_id']] ?? null;
-            $resource = $response instanceof Response && $response->successful() ? $response->json() : null;
+        $peeked = $this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...));
 
-            return is_array($resource) ? ($this->normalizeSpigetProject($resource) ?? $hit) : $hit;
+        return array_map(static function (array $hit) use ($peeked): array {
+            $projectId = (string) ($hit['project_id'] ?? '');
+            $official = $peeked[$projectId]['data'] ?? null;
+            if (!is_array($official)) {
+                return $hit;
+            }
+
+            if (($hit['author'] ?? null) === null && is_string($official['author'] ?? null) && $official['author'] !== '') {
+                $hit['author'] = $official['author'];
+            }
+            if (($hit['downloads'] ?? null) === null && is_int($official['downloads'] ?? null)) {
+                $hit['downloads'] = $official['downloads'];
+            }
+            if (($hit['date_modified'] ?? null) === null && is_string($official['date_modified'] ?? null)) {
+                $hit['date_modified'] = $official['date_modified'];
+            }
+
+            return $hit;
         }, $hits);
     }
 
@@ -696,9 +806,21 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $versions = [];
 
         for ($page = 1; $page <= self::VERSION_MAX_PAGES; $page++) {
-            $payload = $page === 1
-                ? $firstPage
-                : $this->getJson($versionsUrl($page), [], $this->remainingTimeout($deadline));
+            if ($page === 1) {
+                $payload = $firstPage;
+            } else {
+                try {
+                    $payload = $this->getJson($versionsUrl($page), [], $this->remainingTimeout($deadline));
+                } catch (Throwable $exception) {
+                    if ($versions !== []) {
+                        report($exception);
+
+                        break;
+                    }
+
+                    throw $exception;
+                }
+            }
 
             if ($payload === []) {
                 break;
@@ -1134,11 +1256,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $resourceId = $this->normalizeResourceId((string) ($resource['id'] ?? ''));
         $file = $resource['file'] ?? null;
         $type = strtolower(trim((string) (is_array($file) ? ($file['type'] ?? '') : '')));
-        if ($resourceId === null || preg_match('/^\.[a-z0-9]{1,8}$/', $type) !== 1) {
+        if ($resourceId === null || ltrim($type, '.') !== 'jar') {
             return null;
         }
 
-        return 'https://cdn.spiget.org/file/spiget-resources/'.$resourceId.$type;
+        return 'https://cdn.spiget.org/file/spiget-resources/'.$resourceId.'.jar';
     }
 
     /**
@@ -1242,14 +1364,16 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         $downloads = $resource['downloads'] ?? null;
+        $author = is_array($resource['author'] ?? null)
+            ? ($resource['author']['name'] ?? $resource['author']['username'] ?? null)
+            : null;
         $project = [
             'project_id' => $projectId,
             'slug' => $projectId,
             'title' => (string) ($resource['name'] ?? $projectId),
             'description' => CatalogFields::description($resource['tag'] ?? ''),
             'icon_url' => $this->stringOrNull($icon),
-            // Spiget exposes only the author id; the official overlay names it.
-            'author' => null,
+            'author' => $this->stringOrNull($author),
             'downloads' => is_numeric($downloads) ? (int) $downloads : null,
             'date_modified' => $this->timestampToIso($resource['updateDate'] ?? $resource['releaseDate'] ?? null),
             'project_type' => ProjectType::Plugin->value,
@@ -1364,23 +1488,32 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      */
     private function isExternal(array $resource): bool
     {
-        if (($resource['external'] ?? false) === true) {
-            return true;
-        }
-
         $file = $resource['file'] ?? null;
-        if (!is_array($file)) {
-            return false;
+        if (is_array($file)) {
+            if (($file['external'] ?? false) === true) {
+                return true;
+            }
+
+            $externalUrl = $file['externalUrl'] ?? null;
+            if (is_string($externalUrl) && trim($externalUrl) !== '') {
+                return true;
+            }
+
+            $type = strtolower(trim((string) ($file['type'] ?? '')));
+            if ($type === 'external') {
+                return true;
+            }
+
+            // Hosted plugin files use the ".jar" extension. Non-JAR archives or
+            // scripts (such as ".zip" bundles or ".sk" files) cannot be
+            // installed as a single plugin JAR, while a confirmed ".jar" is
+            // hosted on Spigot/SpiGet even if the top-level external flag lags.
+            if ($type !== '') {
+                return ltrim($type, '.') !== 'jar';
+            }
         }
 
-        if (($file['external'] ?? false) === true) {
-            return true;
-        }
-
-        // Hosted files use extensions such as ".jar". Only the literal
-        // external type is an off-site file. A relative file.url is not a
-        // CDN object and must not be treated as missing.
-        return strtolower((string) ($file['type'] ?? '')) === 'external';
+        return ($resource['external'] ?? false) === true;
     }
 
     /**
@@ -1634,6 +1767,13 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     private function currentSpec(string $projectId): SourceFetchSpec
     {
         return $this->spec(self::OPERATION_CURRENT, [
+            'project_id' => $projectId,
+        ]);
+    }
+
+    private function spigetDetailSpec(string $projectId): SourceFetchSpec
+    {
+        return $this->spec(self::OPERATION_SPIGET_DETAIL, [
             'project_id' => $projectId,
         ]);
     }

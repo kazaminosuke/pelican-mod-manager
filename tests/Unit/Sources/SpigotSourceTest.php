@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Sources\SpigotSource;
@@ -907,6 +908,100 @@ class SpigotSourceTest extends TestCase
         self::assertArrayNotHasKey('spigot_download_block', $result['hits'][0]);
         self::assertSame('external', $result['hits'][1]['spigot_download_block']);
         self::assertSame('premium', $result['hits'][2]['spigot_download_block']);
+    }
+
+    public function test_version_filtered_catalog_signals_partial_fetch_on_transient_detail_failure_and_caches_resolved_details(): void
+    {
+        $source = $this->sourceWithExecutor();
+        $source->primeProjects([
+            '28140' => [
+                'project_id' => '28140',
+                'slug' => '28140',
+                'title' => 'LuckPerms',
+                'description' => 'Permissions',
+                'icon_url' => null,
+                'author' => 'Luck',
+                'downloads' => 8_932_095,
+                'date_modified' => '2026-08-06T19:38:34+00:00',
+                'project_type' => 'plugin',
+                'source' => 'spigot',
+            ],
+        ]);
+        Http::fake([
+            'api.spiget.org/v2/resources/for/*' => Http::response([
+                'check' => ['1.21.4', '1.21'],
+                'method' => 'any',
+                'match' => [
+                    ['testedVersions' => ['1.21'], 'name' => 'LuckPerms', 'id' => 28140],
+                    ['testedVersions' => ['1.21'], 'name' => 'Vault', 'id' => 34315],
+                ],
+            ], 200, ['X-Total' => '2']),
+            'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.21'])),
+            'api.spiget.org/v2/resources/34315?*' => Http::response('rate limited', 429),
+        ]);
+
+        try {
+            $source->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
+                'page' => 1,
+                'query' => '',
+                'sort' => 'downloads',
+                'version' => '1.21.4',
+                'schema' => 4,
+            ]), 1.5);
+            self::fail('Transient detail failure must throw PartialSourceFetchException so incomplete rows are not cached as fresh.');
+        } catch (PartialSourceFetchException $exception) {
+            $fallback = $exception->fallback();
+            self::assertSame(2, $fallback['total_hits']);
+            self::assertSame('Luck', $fallback['hits'][0]['author']);
+            self::assertSame(8_932_095, $fallback['hits'][0]['downloads']);
+            self::assertSame('Vault', $fallback['hits'][1]['title']);
+        }
+    }
+
+    public function test_non_jar_hosted_files_are_blocked_and_confirmed_hosted_jars_remain_downloadable(): void
+    {
+        Http::fake([
+            'api.spiget.org/v2/resources?*' => Http::response([
+                [
+                    'id' => 31689,
+                    'name' => 'CombatLogX',
+                    'tag' => 'Bundle zip',
+                    'premium' => false,
+                    'external' => false,
+                    'downloads' => 100,
+                    'file' => ['type' => '.zip', 'url' => 'resources/combatlogx.31689/download?version=1'],
+                ],
+                [
+                    'id' => 118219,
+                    'name' => 'ExampleSkript',
+                    'tag' => 'Skript file',
+                    'premium' => false,
+                    'external' => false,
+                    'downloads' => 50,
+                    'file' => ['type' => '.sk', 'url' => 'resources/skript.118219/download?version=1'],
+                ],
+                [
+                    'id' => 777,
+                    'name' => 'HostedJarWithStaleExternalFlag',
+                    'tag' => 'Hosted JAR',
+                    'premium' => false,
+                    'external' => true,
+                    'downloads' => 200,
+                    'file' => ['type' => '.jar', 'url' => 'resources/hosted.777/download?version=2'],
+                ],
+            ], 200, ['X-Total' => '3']),
+        ]);
+
+        $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
+            'page' => 1,
+            'query' => '',
+            'sort' => 'downloads',
+            'version' => null,
+        ]), 2.0);
+
+        self::assertSame('external', $result['hits'][0]['spigot_download_block']);
+        self::assertSame('external', $result['hits'][1]['spigot_download_block']);
+        self::assertArrayNotHasKey('spigot_download_block', $result['hits'][2]);
     }
 
     public function test_authoritative_install_ignores_a_spiget_download_redirect(): void
