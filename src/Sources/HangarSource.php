@@ -17,6 +17,7 @@ use Kazaminosuke\ModManager\Contracts\SourceFetchHandlerInterface;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
@@ -27,6 +28,7 @@ use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
+use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Throwable;
@@ -208,16 +210,10 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             // per UI page and exposed empty pages before the displayed total.
             'limit' => self::CATALOG_PAGE_SIZE,
             'offset' => ($page - 1) * self::CATALOG_PAGE_SIZE,
-            // Hangar's ProjectSortingStrategy enum (confirmed against its
-            // official OpenAPI spec): each value already bakes in a fixed
-            // direction (e.g. "downloads" is always most-downloaded-first),
-            // same as Modrinth's index and CurseForge's sortField - no
-            // separate ascending/descending option. "stars" is Hangar's own
-            // community-rating signal, the closest match to the catalog
-            // dropdown's "popularity" preset.
-            'sort' => in_array(($filters['sort'] ?? null), ['stars', 'recent_downloads', 'downloads', 'updated', 'newest'], true)
-                ? $filters['sort']
-                : 'downloads',
+            // Hangar's pagination resolver treats a bare strategy name as
+            // ascending (0 downloads / oldest first) and requires a leading
+            // "-" for descending order.
+            'sort' => $this->hangarSort($filters['sort'] ?? null),
         ];
 
         if ($search) {
@@ -1042,8 +1038,18 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             return null;
         }
 
-        $fileInfo = $download['fileInfo'] ?? [];
-        $url = $download['downloadUrl'] ?? $download['externalUrl'] ?? null;
+        $fileInfo = is_array($download['fileInfo'] ?? null) ? $download['fileInfo'] : [];
+        $downloadUrl = is_string($download['downloadUrl'] ?? null) && trim($download['downloadUrl']) !== ''
+            ? trim($download['downloadUrl'])
+            : null;
+        $externalUrl = is_string($download['externalUrl'] ?? null) && trim($download['externalUrl']) !== ''
+            ? trim($download['externalUrl'])
+            : null;
+        $url = $downloadUrl ?? $externalUrl;
+        $filename = is_string($fileInfo['name'] ?? null) ? trim($fileInfo['name']) : '';
+        if ($filename === '' && $url !== null) {
+            $filename = $this->jarFilenameFromUrl($url, $downloadUrl !== null, (string) ($version['name'] ?? '')) ?? '';
+        }
 
         // Channels are free-text and admin-configurable per project (e.g. "Release",
         // "Beta", "Snapshot", "Dev Build"), so this is a best-effort heuristic rather
@@ -1060,7 +1066,8 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             $hashes['sha256'] = $fileInfo['sha256Hash'];
         }
 
-        return [
+        $hasDownloadableFile = $url !== null && $filename !== '';
+        $normalized = [
             'id' => (string) ($version['id'] ?? ''),
             'version_number' => $version['name'] ?? '',
             'version_type' => $versionType,
@@ -1068,15 +1075,52 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             'date_published' => $version['createdAt'] ?? null,
             'changelog' => $version['description'] ?? null,
             'featured' => false,
-            'files' => [
+            'files' => $hasDownloadableFile ? [
                 [
                     'primary' => true,
-                    'filename' => $fileInfo['name'] ?? '',
+                    'filename' => $filename,
                     'url' => $url,
                     'hashes' => $hashes,
                 ],
-            ],
+            ] : [],
         ];
+
+        if (!$hasDownloadableFile && $externalUrl !== null) {
+            $normalized['download_unavailable'] = DownloadUnavailableException::EXTERNAL;
+        }
+
+        return $normalized;
+    }
+
+    private function hangarSort(mixed $sort): string
+    {
+        $normalized = is_string($sort) ? ltrim(trim($sort), '-') : '';
+
+        return in_array($normalized, ['stars', 'recent_downloads', 'downloads', 'updated', 'newest'], true)
+            ? '-'.$normalized
+            : '-downloads';
+    }
+
+    private function jarFilenameFromUrl(string $url, bool $isHostedDownload, string $versionName): ?string
+    {
+        $path = parse_url($url, PHP_URL_PATH);
+        if (is_string($path) && $path !== '') {
+            $basename = basename(rawurldecode($path));
+            $basename = preg_replace('/[^A-Za-z0-9._+-]+/', '-', $basename) ?? '';
+            $basename = trim($basename, '-._');
+            if ($basename !== '' && str_ends_with(strtolower($basename), '.jar')) {
+                return $basename;
+            }
+        }
+
+        if (!$isHostedDownload) {
+            return null;
+        }
+
+        $safeVersion = preg_replace('/[^A-Za-z0-9._+-]+/', '-', $versionName) ?? 'plugin';
+        $safeVersion = trim($safeVersion, '-._') ?: 'plugin';
+
+        return str_ends_with(strtolower($safeVersion), '.jar') ? $safeVersion : $safeVersion.'.jar';
     }
 
     /**
@@ -1158,7 +1202,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             }
 
             $normalized = $this->normalizeVersion($version, $platform);
-            if ($normalized !== null) {
+            if ($normalized !== null && ProjectPrimaryFile::fromVersion($normalized) !== null) {
                 return $normalized;
             }
         }

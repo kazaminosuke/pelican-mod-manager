@@ -96,7 +96,7 @@ class HangarSourceSearchCacheTest extends TestCase
                     'version' => '1.21.1',
                     'limit' => 20,
                     'offset' => 20,
-                    'sort' => 'recent_downloads',
+                    'sort' => '-recent_downloads',
                     'category' => 'admin_tools',
                     'tag' => 'SUPPORTS_FOLIA',
                 ], $spec->arguments['params']);
@@ -134,7 +134,7 @@ class HangarSourceSearchCacheTest extends TestCase
                     'platform' => 'VELOCITY',
                     'limit' => 20,
                     'offset' => 0,
-                    'sort' => 'downloads',
+                    'sort' => '-downloads',
                     'tag' => 'LIBRARY',
                 ], $spec->arguments['params']);
 
@@ -291,5 +291,110 @@ class HangarSourceSearchCacheTest extends TestCase
             'hash' => $hash,
         ]);
         self::assertIsArray($cache->get($spec->cacheKey().':failure:v1'));
+    }
+
+    public function test_all_hangar_catalog_sort_presets_use_descending_prefix(): void
+    {
+        $server = Mockery::mock(Server::class);
+        CatalogCompatibilityOverride::set($server, '1.21.4', 'paper');
+
+        foreach (['stars', 'recent_downloads', 'downloads', 'updated', 'newest'] as $sort) {
+            $executor = Mockery::mock(SourceFetchExecutorInterface::class);
+            $executor->shouldReceive('fetch')
+                ->once()
+                ->withArgs(function ($spec) use ($sort): bool {
+                    self::assertSame('-'.$sort, $spec->arguments['params']['sort']);
+
+                    return true;
+                })
+                ->andReturn(['hits' => [], 'total_hits' => 0]);
+
+            $cache = new LaravelCacheRepository(new ArrayStore());
+            $operations = new InstalledOperationManager($cache, app('config'));
+            $source = new HangarSource(new SourceCache($cache, $operations, $executor));
+
+            $source->search($server, ProjectType::Plugin, 1, filters: ['sort' => $sort]);
+        }
+    }
+
+    public function test_versions_derive_jar_filename_from_direct_external_jar_url_and_mark_webpage_urls_external(): void
+    {
+        Http::swap($factory = new Factory());
+        $factory->fake([
+            'hangar.papermc.io/api/v1/projects/ProtocolLib/versions*' => $factory->response([
+                'result' => [
+                    [
+                        'id' => 101,
+                        'name' => '2.22.0',
+                        'channel' => ['name' => 'Release'],
+                        'stats' => ['totalDownloads' => 10],
+                        'createdAt' => '2026-10-01T00:00:00Z',
+                        'description' => 'Webpage release link',
+                        'downloads' => [
+                            'PAPER' => [
+                                'fileInfo' => null,
+                                'downloadUrl' => null,
+                                'externalUrl' => 'https://github.com/EssentialsX/Essentials/releases/tag/2.22.0',
+                            ],
+                        ],
+                    ],
+                    [
+                        'id' => 100,
+                        'name' => '5.4.0',
+                        'channel' => ['name' => 'Release'],
+                        'stats' => ['totalDownloads' => 50],
+                        'createdAt' => '2026-09-01T00:00:00Z',
+                        'description' => 'Direct JAR link',
+                        'downloads' => [
+                            'PAPER' => [
+                                'fileInfo' => null,
+                                'downloadUrl' => null,
+                                'externalUrl' => 'https://github.com/dmulloy2/ProtocolLib/releases/download/5.4.0/ProtocolLib.jar',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $operations = new InstalledOperationManager($cache, app('config'));
+        $executor = new class implements SourceFetchExecutorInterface
+        {
+            public ?HangarSource $source = null;
+
+            public function fetch(SourceFetchSpec $spec, float $timeoutSeconds): mixed
+            {
+                return $this->source->fetchSourceData($spec, $timeoutSeconds);
+            }
+
+            public function emptyResult(SourceFetchSpec $spec): mixed
+            {
+                return $this->source->emptySourceData($spec);
+            }
+        };
+        $source = new HangarSource(new SourceCache($cache, $operations, $executor));
+        $executor->source = $source;
+
+        $server = Mockery::mock(Server::class);
+        CatalogCompatibilityOverride::set($server, '1.21.4', 'paper');
+
+        $versions = $source->getVersions('ProtocolLib', $server, ProjectType::Plugin);
+        self::assertCount(2, $versions);
+        self::assertSame([], $versions[0]['files']);
+        self::assertSame('external', $versions[0]['download_unavailable']);
+        self::assertSame('ProtocolLib.jar', $versions[1]['files'][0]['filename']);
+        self::assertSame(
+            'https://github.com/dmulloy2/ProtocolLib/releases/download/5.4.0/ProtocolLib.jar',
+            $versions[1]['files'][0]['url'],
+        );
+
+        $latest = $source->fetchSourceData(new SourceFetchSpec('hangar', 'latest', [
+            'project_ids' => ['ProtocolLib'],
+            'platform' => 'PAPER',
+            'params' => ['platform' => 'PAPER', 'limit' => 25],
+        ]), 5.0);
+        self::assertSame('100', $latest['versions']['ProtocolLib']['id']);
+        self::assertSame('ProtocolLib.jar', $latest['versions']['ProtocolLib']['files'][0]['filename']);
     }
 }
