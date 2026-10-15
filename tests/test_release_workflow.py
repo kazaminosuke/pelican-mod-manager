@@ -248,7 +248,9 @@ def main():
             else:
                 assert state['latest']==tag and metadata['version']==version
                 assert metadata['download_url'].endswith('/'+tag+'/pelican-mod-manager.zip')
-            # Retry: same release and tag must not be created twice.
+            # Retry from the original release commit checkout (detached HEAD):
+            # same release, tag, and update.json commit must not be created twice.
+            cmd('git','checkout','--detach',sb.sha,cwd=sb.repo)
             sb.execute()
             assert sb.state_json()['creates']==1 and sb.state_json()['tags']==1
             tests+=2
@@ -299,12 +301,13 @@ def main():
             finally:sb.cleanup()
 
         # A plugin.json edit without version bump must not release.
-        sb=Sandbox('0.1.6')
-        try:
-            sb.run('Read and validate version');sb.run('Confirm that the version changed')
-            assert sb.outputs['version_change']['changed']=='false'
-            tests+=1
-        finally:sb.cleanup()
+        for unchanged in ['0.1.6', 'v0.1.6']:
+            sb=Sandbox(unchanged)
+            try:
+                sb.run('Read and validate version');sb.run('Confirm that the version changed')
+                assert sb.outputs['version_change']['changed']=='false'
+                tests+=1
+            finally:sb.cleanup()
 
         # Existing release with an incompatible channel must be rejected.
         sb=Sandbox('0.2.0-pre.3')
@@ -355,6 +358,25 @@ def main():
             try:sb.run('Create or verify release tag')
             except RuntimeError:tests+=1
             else:raise AssertionError('Old tag was created despite a newer version')
+        finally:sb.cleanup()
+
+        # Stable metadata commit recovers cleanly if a non-version commit landed on main.
+        sb=Sandbox('0.2.0')
+        try:
+            sb.run('Read and validate version');sb.run('Confirm that the version changed');sb.run('Refuse superseded version bumps')
+            sb.run('Check existing tag and release');sb.run('Extract release notes section from CHANGELOG.md')
+            sb.run('Build and verify plugin artifact');sb.run('Create or verify release tag');sb.run('Create GitHub Release')
+            sb.run('Verify and repair release artifact')
+            (sb.repo/'LICENSE').write_text('Test license updated\n')
+            cmd('git','add','LICENSE',cwd=sb.repo)
+            cmd('git','commit','-m','unrelated commit on main',cwd=sb.repo)
+            cmd('git','push','origin','main',cwd=sb.repo)
+            cmd('git','checkout','--detach',sb.sha,cwd=sb.repo)
+            sb.run('Update update.json for stable release')
+            sb.run('Commit updated stable release metadata')
+            remote_meta=json.loads(cmd('git','--git-dir',str(sb.remote),'show','main:update.json',cwd=sb.root).stdout)['*']
+            assert remote_meta['version']=='0.2.0'
+            tests+=1
         finally:sb.cleanup()
 
     print(f'PASS: {tests} offline release test checks')
