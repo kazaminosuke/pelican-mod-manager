@@ -152,6 +152,63 @@ final class ModpackInstallerTest extends TestCase
         }
     }
 
+    public function test_curseforge_modpack_resolves_dependencies_in_bulk_and_caches_override_directory_listings(): void
+    {
+        $wings = new MemoryModpackWings();
+        $wings->files['config/existing.toml'] = 'keep';
+        $curseForge = Mockery::mock(CurseForgeSource::class);
+        $curseForge->shouldReceive('modpackDependencyDownloads')
+            ->once()
+            ->with([
+                ['project_id' => 10, 'file_id' => 20],
+                ['project_id' => 11, 'file_id' => 21],
+            ])
+            ->andReturn([
+                '10/20' => [
+                    'path' => 'mods/first.jar',
+                    'url' => 'https://edge.forgecdn.net/files/10/20/first.jar',
+                    'size' => strlen($wings->body),
+                ],
+                '11/21' => [
+                    'path' => 'mods/second.jar',
+                    'url' => 'https://edge.forgecdn.net/files/11/21/second.jar',
+                    'size' => strlen($wings->body),
+                ],
+            ]);
+        $curseForge->shouldNotReceive('modpackDependencyDownload');
+
+        $installer = new ModpackInstaller($wings, $curseForge);
+        $zip = $this->pack([
+            'manifest.json' => json_encode([
+                'manifestType' => 'minecraftModpack',
+                'manifestVersion' => 1,
+                'name' => 'CF Bulk Pack',
+                'version' => '1.0',
+                'minecraft' => [
+                    'version' => '1.20.1',
+                    'modLoaders' => [['id' => 'forge-47.2.0', 'primary' => true]],
+                ],
+                'files' => [
+                    ['projectID' => 10, 'fileID' => 20, 'required' => true],
+                    ['projectID' => 11, 'fileID' => 21, 'required' => true],
+                ],
+                'overrides' => 'overrides',
+            ], JSON_THROW_ON_ERROR),
+            'overrides/config/existing.toml' => 'replace',
+            'overrides/config/one.toml' => '1',
+            'overrides/config/two.toml' => '2',
+        ]);
+
+        $result = $installer->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'forge', '1.20.1');
+
+        self::assertSame(4, $result->installed);
+        self::assertSame(1, $result->skipped);
+        self::assertSame(1, $wings->listDirectoryCalls['config'] ?? 0);
+        self::assertSame('keep', $wings->files['config/existing.toml']);
+        self::assertSame('1', $wings->files['config/one.toml']);
+        self::assertSame('2', $wings->files['config/two.toml']);
+    }
+
     /** @param array<string, string> $entries */
     private function pack(array $entries): string
     {
@@ -185,6 +242,9 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
     /** @var array<string, string> */
     public array $files = [];
 
+    /** @var array<string, int> */
+    public array $listDirectoryCalls = [];
+
     /** @var list<string> */
     public array $failUrls = [];
 
@@ -215,6 +275,34 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
         int $bytes = 4,
     ): string {
         return substr($this->files[$this->path($directory, $filename)] ?? '', 0, $bytes);
+    }
+
+    public function listDirectory(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $directory,
+    ): array {
+        $directory = trim($directory, '/');
+        $this->listDirectoryCalls[$directory] = ($this->listDirectoryCalls[$directory] ?? 0) + 1;
+        $prefix = $directory === '' ? '' : $directory.'/';
+        $items = [];
+
+        foreach ($this->files as $path => $contents) {
+            if ($prefix !== '' && !str_starts_with($path, $prefix)) {
+                continue;
+            }
+            $relative = $prefix === '' ? $path : substr($path, strlen($prefix));
+            if ($relative === '' || str_contains($relative, '/')) {
+                continue;
+            }
+            $items[] = [
+                'name' => $relative,
+                'size' => strlen($contents),
+                'directory' => false,
+            ];
+        }
+
+        return $items;
     }
 
     public function findListedFile(

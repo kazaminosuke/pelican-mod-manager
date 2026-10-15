@@ -23,26 +23,38 @@ final class InstalledEggCatalog
      */
     public function all(): array
     {
+        $manualByEggId = [];
+        try {
+            foreach (ModManagerEggProfile::query()->get() as $profile) {
+                if ($profile instanceof ModManagerEggProfile) {
+                    $manualByEggId[(string) $profile->egg_id] = $profile;
+                }
+            }
+        } catch (\Throwable) {
+            $manualByEggId = [];
+        }
+
         $classified = [];
         foreach (Egg::query()->with('variables')->get() as $egg) {
-            $classified[] = $this->one($egg);
+            $classified[] = $this->one($egg, $manualByEggId[(string) $egg->getKey()] ?? null, true);
         }
 
         return $classified;
     }
 
-    public function one(Egg $egg): ClassifiedEgg
+    public function one(Egg $egg, ?ModManagerEggProfile $manual = null, bool $manualPreloaded = false): ClassifiedEgg
     {
         $names = [];
         foreach ($egg->variables ?? [] as $variable) {
             $names[] = (string) ($variable->env_variable ?? '');
         }
 
-        $manual = null;
-        try {
-            $manual = ModManagerEggProfile::query()->where('egg_id', $egg->getKey())->first();
-        } catch (\Throwable) {
-            $manual = null;
+        if (!$manualPreloaded) {
+            try {
+                $manual = ModManagerEggProfile::query()->where('egg_id', $egg->getKey())->first();
+            } catch (\Throwable) {
+                $manual = null;
+            }
         }
 
         return $this->engine->classify(

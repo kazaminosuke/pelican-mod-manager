@@ -28,6 +28,9 @@ final class ModpackInstaller
     /** @var list<array{directory: string, filename: string, backup: ?string}> */
     private array $placed = [];
 
+    /** @var array<string, array<string, true>> */
+    private array $overrideDirectoryListings = [];
+
     public function __construct(
         private readonly WingsRemoteFilesystem $wings,
         private readonly CurseForgeSource $curseForge,
@@ -45,6 +48,7 @@ final class ModpackInstaller
         ?callable $progress = null,
     ): ModpackInstallResult {
         $this->placed = [];
+        $this->overrideDirectoryListings = [];
         $manifest = ModpackArchive::read($zipPath);
         $this->assertLoaderCompatible($manifest, $serverLoader);
         $warnings = $manifest->skipped;
@@ -120,6 +124,23 @@ final class ModpackInstaller
             throw new ModpackException('This modpack lists more files than can be installed safely.');
         }
 
+        $curseForgePairs = [];
+        foreach ($manifest->remoteFiles as $file) {
+            if (!is_string($file->url) || !is_string($file->path)) {
+                if ($file->projectId === null || $file->fileId === null) {
+                    throw new ModpackException('A modpack file is missing its download.');
+                }
+                $curseForgePairs[] = [
+                    'project_id' => $file->projectId,
+                    'file_id' => $file->fileId,
+                ];
+            }
+        }
+
+        $batchDownloads = count($curseForgePairs) > 1
+            ? $this->curseForge->modpackDependencyDownloads($curseForgePairs)
+            : [];
+
         $resolved = [];
         foreach ($manifest->remoteFiles as $file) {
             if (is_string($file->url) && is_string($file->path)) {
@@ -129,11 +150,12 @@ final class ModpackInstaller
                 continue;
             }
 
-            if ($file->projectId === null || $file->fileId === null) {
-                throw new ModpackException('A modpack file is missing its download.');
-            }
-
-            $download = $this->curseForge->modpackDependencyDownload($file->projectId, $file->fileId);
+            $key = "{$file->projectId}/{$file->fileId}";
+            $download = $batchDownloads[$key] ?? (
+                count($curseForgePairs) === 1
+                    ? $this->curseForge->modpackDependencyDownload((int) $file->projectId, (int) $file->fileId)
+                    : null
+            );
             if ($download === null) {
                 if ($file->required) {
                     throw new ModpackException("CurseForge file [{$file->projectId}/{$file->fileId}] cannot be downloaded.");
@@ -232,19 +254,47 @@ final class ModpackInstaller
         }
 
         [$directory, $filename] = ModpackPaths::split($override->path);
-        try {
-            $exists = $this->wings->findListedFile($fileRepository, $server, $directory, $filename) !== null;
-        } catch (Throwable) {
-            $exists = false;
-        }
-        if ($exists) {
+        if ($this->overrideExists($server, $fileRepository, $directory, $filename)) {
             return false;
         }
 
         $this->wings->put($fileRepository, $server, $override->path, $override->contents);
+        $this->overrideDirectoryListings[$directory][strtolower($filename)] = true;
         $this->placed[] = ['directory' => $directory, 'filename' => $filename, 'backup' => null];
 
         return true;
+    }
+
+    private function overrideExists(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        string $directory,
+        string $filename,
+    ): bool {
+        $target = strtolower($filename);
+        if (array_key_exists($directory, $this->overrideDirectoryListings)) {
+            return isset($this->overrideDirectoryListings[$directory][$target]);
+        }
+
+        try {
+            $listing = $this->wings->listDirectory($fileRepository, $server, $directory);
+            $names = [];
+            foreach ($listing as $item) {
+                if (is_array($item) && is_string($item['name'] ?? null) && ($item['directory'] ?? false) !== true) {
+                    $names[strtolower($item['name'])] = true;
+                }
+            }
+            $this->overrideDirectoryListings[$directory] = $names;
+
+            return isset($names[$target]);
+        } catch (Throwable) {
+            // Fall back to findListedFile when listDirectory is overridden by a test double.
+            try {
+                return $this->wings->findListedFile($fileRepository, $server, $directory, $filename) !== null;
+            } catch (Throwable) {
+                return false;
+            }
+        }
     }
 
     private function discardBackups(Server $server, DaemonFileRepository $fileRepository): void

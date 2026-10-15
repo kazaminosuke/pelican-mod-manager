@@ -166,6 +166,7 @@ final class ServerEggMigration
             foreach ($snapshot['variables'] as $variable) {
                 ServerVariable::query()->create($variable);
             }
+            app(DaemonServerRepository::class)->setServer($server->refresh())->sync();
         } catch (Throwable $exception) {
             report($exception);
         }

@@ -108,10 +108,17 @@ final class InstallModpack
                 throw new ModpackException('No installable modpack file was found for this server.');
             }
 
-            $response = Http::timeout(180)
-                ->withOptions(['sink' => $temp])
-                ->get($file['url']);
-            $response->throw();
+            try {
+                $response = Http::timeout(180)
+                    ->withOptions(['sink' => $temp])
+                    ->get($file['url']);
+                $response->throw();
+            } finally {
+                if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
+                    $leases->refresh($this->serverId, $type, $this->leaseToken);
+                    $leaseRefreshedAt = microtime(true);
+                }
+            }
 
             $result = $installer->installFromZip(
                 $server,
