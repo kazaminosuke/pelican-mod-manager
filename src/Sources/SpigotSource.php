@@ -18,6 +18,7 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Exceptions\SourceFetchNotFoundException;
+use Kazaminosuke\ModManager\Support\ArchiveSignature;
 use Kazaminosuke\ModManager\Support\BukkitPluginDescriptor;
 use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
 use Kazaminosuke\ModManager\Support\CachedSearchOperations;
@@ -299,12 +300,99 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return [];
         }
 
-        $versions = $this->sourceCache->swrForAction(
+        return $this->fetchCurrentInstallable(
             $this->currentSpec($resourceId),
-            CacheProfile::InstalledLatest,
+            CacheProfile::InstalledLatest->backgroundTimeoutSeconds(),
         );
+    }
 
-        return is_array($versions) ? $versions : [];
+    /**
+     * Resolve and verify a specific version selected in the Versions modal at
+     * click time. If the selected version matches the current latest release on
+     * SpiGet, it is verified against the SpiGet CDN (and triggers requestUpdate
+     * on a CDN miss). Older versions are verified directly against their
+     * version-specific Spigot URL and never silently fall back to the latest
+     * CDN JAR.
+     *
+     * @param  array<string, mixed>  $versionData
+     * @return array<string, mixed>
+     */
+    public function resolveInstallableVersion(
+        string $projectId,
+        array $versionData,
+        Server $server,
+        ProjectType $type = ProjectType::Plugin,
+    ): array {
+        $resourceId = $this->normalizeResourceId($projectId);
+        if ($type !== ProjectType::Plugin || $resourceId === null) {
+            return $this->withoutDownloadUrl($versionData, DownloadUnavailableException::INVALID);
+        }
+
+        $selectedVersionId = trim((string) ($versionData['id'] ?? ''));
+        if (preg_match('/^[1-9]\d*$/', $selectedVersionId) !== 1) {
+            return $this->withoutDownloadUrl($versionData, DownloadUnavailableException::INVALID);
+        }
+
+        $timeoutSeconds = CacheProfile::InstalledLatest->backgroundTimeoutSeconds();
+        $deadline = microtime(true) + max(0.1, $timeoutSeconds);
+
+        try {
+            $responses = $this->pool([
+                'resource' => $this->spigetResourceUrl($resourceId),
+                'latest' => $this->spigetResourceUrl($resourceId, '/versions/latest'),
+            ], $this->remainingTimeout($deadline));
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return $this->withoutDownloadUrl($versionData, DownloadUnavailableException::FETCH_FAILED);
+        }
+
+        if ($this->isRateLimitedResponse($responses['resource'] ?? null)
+            || $this->isRateLimitedResponse($responses['latest'] ?? null)) {
+            return $this->withoutDownloadUrl($versionData, DownloadUnavailableException::RATE_LIMITED);
+        }
+
+        [$resource, $resourceFailed] = $this->decodeOptionalPoolJson($responses['resource'] ?? null);
+        if (is_array($resource)) {
+            $block = $this->downloadBlock($resource);
+            if ($block !== null) {
+                return $this->withoutDownloadUrl($versionData, $block);
+            }
+        }
+
+        [$latest, $latestFailed] = $this->decodeOptionalPoolJson($responses['latest'] ?? null);
+        if ($resourceFailed || $latestFailed) {
+            return $this->withoutDownloadUrl($versionData, DownloadUnavailableException::FETCH_FAILED);
+        }
+
+        $latestVersionId = is_array($latest) ? trim((string) ($latest['id'] ?? '')) : '';
+        if ($latestVersionId === '' && is_array($resource) && is_array($resource['version'] ?? null)) {
+            $latestVersionId = trim((string) ($resource['version']['id'] ?? ''));
+        }
+
+        $versionNumber = trim((string) ($versionData['version_number'] ?? ''));
+        if ($versionNumber === '' && is_array($latest) && $latestVersionId === $selectedVersionId) {
+            $versionNumber = trim((string) ($latest['name'] ?? ''));
+        }
+        if ($versionNumber === '') {
+            $versionNumber = $selectedVersionId;
+        }
+
+        $normalized = $this->normalizeSpigetVersion($resourceId, [
+            'id' => $selectedVersionId,
+            'name' => $versionNumber,
+            'downloads' => $versionData['downloads'] ?? 0,
+            'releaseDate' => $versionData['date_published'] ?? null,
+        ], $resource);
+        if ($normalized === null) {
+            return $this->withoutDownloadUrl($versionData, DownloadUnavailableException::INVALID);
+        }
+
+        if ($latestVersionId !== '' && $selectedVersionId === $latestVersionId) {
+            return $this->verifyAndAttachSpigetCdnDownload($normalized, $resourceId, $deadline);
+        }
+
+        return $this->verifyAndAttachHistoricalVersionDownload($normalized, $resourceId, $selectedVersionId, $deadline);
     }
 
     /**
@@ -780,14 +868,56 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             'latest' => $this->spigetResourceUrl($projectId, '/versions/latest'),
         ], $this->remainingTimeout($deadline));
 
-        $resource = $this->poolJson($responses['resource'] ?? null, $projectId);
-        $latest = $this->poolJson($responses['latest'] ?? null, $projectId);
+        if ($this->isRateLimitedResponse($responses['resource'] ?? null)
+            || $this->isRateLimitedResponse($responses['latest'] ?? null)) {
+            return [$this->unavailableVersion($projectId, DownloadUnavailableException::RATE_LIMITED)];
+        }
+
+        [$resource, $resourceFailed] = $this->decodeOptionalPoolJson($responses['resource'] ?? null);
+        [$latest, $latestFailed] = $this->decodeOptionalPoolJson($responses['latest'] ?? null);
+
+        if (is_array($resource)) {
+            $block = $this->downloadBlock($resource);
+            if ($block !== null) {
+                $version = is_array($latest) ? $this->normalizeSpigetVersion($projectId, $latest, $resource) : null;
+
+                return [$version !== null
+                    ? $this->withoutDownloadUrl($version, $block)
+                    : $this->unavailableVersion($projectId, $block, $resource)];
+            }
+        }
+
+        if ($resourceFailed || $latestFailed) {
+            return [$this->unavailableVersion($projectId, DownloadUnavailableException::FETCH_FAILED, $resource)];
+        }
+
+        if (!is_array($latest) && is_array($resource) && is_array($resource['version'] ?? null)) {
+            $fallbackId = trim((string) ($resource['version']['id'] ?? ''));
+            if ($fallbackId !== '') {
+                $latest = [
+                    'id' => $fallbackId,
+                    'name' => trim((string) ($resource['version']['name'] ?? '')) !== ''
+                        ? (string) $resource['version']['name']
+                        : $fallbackId,
+                    'releaseDate' => $resource['updateDate'] ?? $resource['releaseDate'] ?? null,
+                ];
+            }
+        }
+
+        if (!is_array($latest)) {
+            return [];
+        }
+
         $version = $this->normalizeSpigetVersion($projectId, $latest, $resource);
         if ($version === null) {
             return [];
         }
 
-        return [$this->withDownloadUrl($version, $resource, true)];
+        if ($this->officialDownloadUrl($projectId, (string) ($version['id'] ?? '')) === null) {
+            return [$this->withoutDownloadUrl($version, DownloadUnavailableException::INVALID)];
+        }
+
+        return [$this->verifyAndAttachSpigetCdnDownload($version, $projectId, $deadline)];
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -815,7 +945,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
 
         try {
             $resource = $this->poolJson($responses['resource'] ?? null, $projectId);
-        } catch (SourceFetchNotFoundException) {
+        } catch (Throwable) {
             $resource = null;
         }
 
@@ -847,7 +977,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 $normalized = is_array($version) ? $this->normalizeSpigetVersion($projectId, $version, $resource) : null;
                 if ($normalized !== null) {
                     $versions[] = $resolveDownloads
-                        ? $this->withDownloadUrl($normalized, $resource, false)
+                        ? $this->withModalDownloadCandidate($normalized)
                         : $this->withoutDownloadUrl($normalized);
                 }
             }
@@ -1240,18 +1370,19 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      */
     private function withDownloadUrl(array $version, ?array $resource, bool $currentFile): array
     {
-        if (!is_array($resource) || !$this->isDirectlyDownloadable($resource)) {
-            return $this->withoutDownloadUrl($version, $this->downloadBlock(is_array($resource) ? $resource : []));
+        if (is_array($resource) && !$this->isDirectlyDownloadable($resource)) {
+            return $this->withoutDownloadUrl($version, $this->downloadBlock($resource));
         }
 
-        $url = $this->officialDownloadUrl((string) ($version['project_id'] ?? ''), (string) ($version['id'] ?? ''));
+        $projectId = (string) ($version['project_id'] ?? '');
+        $url = $this->officialDownloadUrl($projectId, (string) ($version['id'] ?? ''));
         if ($url === null) {
             return $this->withoutDownloadUrl($version, DownloadUnavailableException::INVALID);
         }
 
         $channel = 'spigot_official';
         if ($currentFile) {
-            $cdn = $this->spigetCdnUrl($resource);
+            $cdn = $this->spigetCdnUrl($projectId, $resource);
             if ($cdn !== null) {
                 $url = $cdn;
                 $channel = 'spiget_cdn';
@@ -1266,14 +1397,39 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
-     * @param  array<string, mixed>  $resource
+     * Keep a candidate file on every version in the Versions modal so the UI
+     * button is never pre-disabled by missing or incomplete resource metadata.
+     * Click-time verification validates the actual download before installing.
+     *
+     * @param  array<string, mixed>  $version
+     * @return array<string, mixed>
      */
-    private function spigetCdnUrl(array $resource): ?string
+    private function withModalDownloadCandidate(array $version): array
     {
-        $resourceId = $this->normalizeResourceId((string) ($resource['id'] ?? ''));
-        $file = $resource['file'] ?? null;
-        $type = strtolower(trim((string) (is_array($file) ? ($file['type'] ?? '') : '')));
-        if ($resourceId === null || ltrim($type, '.') !== 'jar') {
+        $projectId = (string) ($version['project_id'] ?? '');
+        $url = $this->officialDownloadUrl($projectId, (string) ($version['id'] ?? ''));
+        if ($url === null) {
+            $url = 'https://www.spigotmc.org/resources/'.rawurlencode($projectId).'/download';
+        }
+
+        unset($version['download_unavailable']);
+        $version['files'][0]['url'] = $url;
+        $version['files'][0]['download_channel'] = 'spigot_official';
+
+        return $version;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $resource
+     */
+    private function spigetCdnUrl(string $projectId, ?array $resource = null): ?string
+    {
+        $resourceId = $this->normalizeResourceId($projectId);
+        if ($resourceId === null) {
+            return null;
+        }
+
+        if ($resource !== null && !$this->isDirectlyDownloadable($resource)) {
             return null;
         }
 
@@ -1284,14 +1440,236 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      * @param  array<string, mixed>  $version
      * @return array<string, mixed>
      */
+    private function verifyAndAttachSpigetCdnDownload(array $version, string $resourceId, float $deadline): array
+    {
+        $cdnUrl = $this->spigetCdnUrl($resourceId);
+        if ($cdnUrl === null) {
+            return $this->withoutDownloadUrl($version, DownloadUnavailableException::INVALID);
+        }
+
+        $probe = $this->probeDownloadArchive($cdnUrl, $deadline);
+        if ($probe === 'ok') {
+            unset($version['download_unavailable']);
+            $version['files'][0]['url'] = $cdnUrl;
+            $version['files'][0]['download_channel'] = 'spiget_cdn';
+
+            return $version;
+        }
+
+        if ($probe === 'not_found') {
+            $updateResult = $this->requestSpigetUpdate($resourceId, $deadline);
+            if ($updateResult === 'updated') {
+                if ($this->probeDownloadArchive($cdnUrl, $deadline) === 'ok') {
+                    unset($version['download_unavailable']);
+                    $version['files'][0]['url'] = $cdnUrl;
+                    $version['files'][0]['download_channel'] = 'spiget_cdn';
+
+                    return $version;
+                }
+
+                return $this->withoutDownloadUrl($version, DownloadUnavailableException::UPDATE_REQUESTED);
+            }
+
+            if ($updateResult === 'queued') {
+                return $this->withoutDownloadUrl($version, DownloadUnavailableException::UPDATE_REQUESTED);
+            }
+
+            if ($updateResult === 'rate_limited') {
+                return $this->withoutDownloadUrl($version, DownloadUnavailableException::RATE_LIMITED);
+            }
+
+            return $this->withoutDownloadUrl($version, DownloadUnavailableException::FETCH_FAILED);
+        }
+
+        if ($probe === 'rate_limited') {
+            return $this->withoutDownloadUrl($version, DownloadUnavailableException::RATE_LIMITED);
+        }
+
+        return $this->withoutDownloadUrl($version, DownloadUnavailableException::FETCH_FAILED);
+    }
+
+    /**
+     * Verify a historical (non-latest) version's direct download without ever
+     * substituting the unversioned SpiGet CDN latest JAR.
+     *
+     * @param  array<string, mixed>  $version
+     * @return array<string, mixed>
+     */
+    private function verifyAndAttachHistoricalVersionDownload(
+        array $version,
+        string $resourceId,
+        string $versionId,
+        float $deadline,
+    ): array {
+        $officialUrl = $this->officialDownloadUrl($resourceId, $versionId);
+        if ($officialUrl === null) {
+            return $this->withoutDownloadUrl($version, DownloadUnavailableException::INVALID);
+        }
+
+        $probe = $this->probeDownloadArchive($officialUrl, $deadline, allowRedirects: false);
+        if ($probe === 'ok') {
+            unset($version['download_unavailable']);
+            $version['files'][0]['url'] = $officialUrl;
+            $version['files'][0]['download_channel'] = 'spigot_official';
+
+            return $version;
+        }
+
+        if ($probe === 'rate_limited') {
+            return $this->withoutDownloadUrl($version, DownloadUnavailableException::RATE_LIMITED);
+        }
+
+        return $this->withoutDownloadUrl($version, DownloadUnavailableException::VERSION_UNAVAILABLE);
+    }
+
+    /**
+     * Probe the first 4 bytes of a download URL to confirm a ZIP/JAR signature
+     * and reject HTML error pages, Cloudflare challenges, or missing objects.
+     *
+     * @return 'ok'|'not_found'|'rate_limited'|'failed'
+     */
+    private function probeDownloadArchive(string $url, float $deadline, bool $allowRedirects = true): string
+    {
+        try {
+            $timeoutSeconds = $this->remainingTimeout($deadline);
+            $pending = Http::withHeaders([
+                'User-Agent' => self::USER_AGENT,
+                'Accept' => '*/*',
+                'Range' => 'bytes=0-3',
+            ])
+                ->timeout($timeoutSeconds)
+                ->connectTimeout(min(1.0, $timeoutSeconds));
+
+            if (!$allowRedirects) {
+                $pending = $pending->withOptions(['allow_redirects' => false]);
+            }
+
+            $response = $pending->get($url);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return 'failed';
+        }
+
+        if ($response->status() === 404) {
+            return 'not_found';
+        }
+
+        if ($response->status() === 429) {
+            return 'rate_limited';
+        }
+
+        if (!$response->successful()) {
+            return 'failed';
+        }
+
+        return ArchiveSignature::isZip((string) $response->body()) ? 'ok' : 'failed';
+    }
+
+    /**
+     * Ask SpiGet to crawl/cache the resource file when the CDN object is 404.
+     *
+     * @return 'updated'|'queued'|'rate_limited'|'failed'
+     */
+    private function requestSpigetUpdate(string $resourceId, float $deadline): string
+    {
+        try {
+            $timeoutSeconds = $this->remainingTimeout($deadline);
+            $response = Http::withHeaders($this->headers())
+                ->timeout($timeoutSeconds)
+                ->connectTimeout(min(1.0, $timeoutSeconds))
+                ->post(self::SPIGET_API."/resources/{$resourceId}/requestUpdate", [
+                    'versions' => false,
+                    'updates' => false,
+                    'reviews' => false,
+                    'delete' => false,
+                ]);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return 'failed';
+        }
+
+        if ($response->successful()) {
+            return 'updated';
+        }
+
+        if ($response->status() === 400 && str_contains(strtolower((string) $response->body()), 'duplicate update request')) {
+            return 'queued';
+        }
+
+        if ($response->status() === 429) {
+            return 'rate_limited';
+        }
+
+        return 'failed';
+    }
+
+    private function isRateLimitedResponse(mixed $response): bool
+    {
+        return $response instanceof Response && $response->status() === 429;
+    }
+
+    /**
+     * @return array{0: array<string, mixed>|null, 1: bool}
+     */
+    private function decodeOptionalPoolJson(mixed $response): array
+    {
+        if ($response instanceof Throwable) {
+            report($response);
+
+            return [null, true];
+        }
+
+        if (!$response instanceof Response) {
+            return [null, true];
+        }
+
+        if ($response->status() === 404) {
+            return [null, false];
+        }
+
+        if (!$response->successful()) {
+            return [null, true];
+        }
+
+        $payload = $response->json();
+
+        return is_array($payload) ? [$payload, false] : [null, true];
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $resource
+     * @return array<string, mixed>
+     */
+    private function unavailableVersion(string $projectId, string $reason, ?array $resource = null): array
+    {
+        $versionId = is_array($resource) && is_array($resource['version'] ?? null)
+            ? trim((string) ($resource['version']['id'] ?? '0'))
+            : '0';
+
+        return $this->withoutDownloadUrl([
+            'id' => $versionId !== '' ? $versionId : '0',
+            'project_id' => $projectId,
+            'version_number' => 'latest',
+            'version_type' => 'release',
+            'downloads' => 0,
+            'date_published' => null,
+            'changelog' => null,
+            'featured' => false,
+            'files' => [],
+        ], $reason);
+    }
+
+    /**
+     * @param  array<string, mixed>  $version
+     * @return array<string, mixed>
+     */
     private function withoutDownloadUrl(array $version, ?string $reason = null): array
     {
         $version['files'] = [];
 
-        if ($reason === DownloadUnavailableException::PREMIUM
-            || $reason === DownloadUnavailableException::EXTERNAL
-            || $reason === DownloadUnavailableException::INVALID
-            || $reason === DownloadUnavailableException::DISTRIBUTION) {
+        if (DownloadUnavailableException::isSupportedReason($reason)) {
             $version['download_unavailable'] = $reason;
         } else {
             unset($version['download_unavailable']);
@@ -1412,19 +1790,16 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      */
     private function downloadBlock(array $resource): ?string
     {
-        $known = array_key_exists('premium', $resource)
-            || array_key_exists('external', $resource)
-            || array_key_exists('file', $resource);
-        if (!$known) {
-            return null;
-        }
-
         if ($this->isPremium($resource)) {
             return DownloadUnavailableException::PREMIUM;
         }
 
-        if ($this->isExternal($resource)) {
+        if ($this->isConfirmedExternal($resource)) {
             return DownloadUnavailableException::EXTERNAL;
+        }
+
+        if ($this->isConfirmedNonJar($resource)) {
+            return DownloadUnavailableException::UNSUPPORTED_FILE;
         }
 
         return null;

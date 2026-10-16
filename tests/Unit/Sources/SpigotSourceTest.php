@@ -299,9 +299,21 @@ class SpigotSourceTest extends TestCase
         }
     }
 
-    public function test_premium_and_external_version_files_are_not_downloadable(): void
+    public function test_versions_modal_keeps_download_candidates_enabled_and_rejects_premium_or_external_on_click(): void
     {
         Http::fake([
+            'api.spiget.org/v2/resources/99/versions/latest*' => Http::response([
+                'id' => 7,
+                'name' => '1.0.0',
+                'releaseDate' => 1_700_000_000,
+                'downloads' => 1,
+            ]),
+            'api.spiget.org/v2/resources/98/versions/latest*' => Http::response([
+                'id' => 8,
+                'name' => '2.0.0',
+                'releaseDate' => 1_700_000_000,
+                'downloads' => 1,
+            ]),
             'api.spiget.org/v2/resources/99/versions*' => Http::response([
                 ['id' => 7, 'name' => '1.0.0', 'releaseDate' => 1_700_000_000, 'downloads' => 1],
             ]),
@@ -326,15 +338,21 @@ class SpigotSourceTest extends TestCase
                 'version' => ['id' => 8],
             ]),
         ]);
+        $server = Mockery::mock(Server::class);
+        $source = $this->source();
 
         foreach (['99', '98'] as $projectId) {
-            $versions = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'versions', [
+            $versions = $source->fetchSourceData(new SourceFetchSpec('spigot', 'versions', [
                 'project_id' => $projectId,
                 'resolve_downloads' => true,
             ]), 2.0);
 
-            self::assertSame([], $versions[0]['files']);
-            self::assertSame($projectId === '99' ? 'premium' : 'external', $versions[0]['download_unavailable']);
+            self::assertNotNull(ProjectPrimaryFile::fromVersion($versions[0]));
+            self::assertArrayNotHasKey('download_unavailable', $versions[0]);
+
+            $resolved = $source->resolveInstallableVersion($projectId, $versions[0], $server, ProjectType::Plugin);
+            self::assertSame([], $resolved['files']);
+            self::assertSame($projectId === '99' ? 'premium' : 'external', $resolved['download_unavailable']);
         }
 
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download'));
@@ -609,7 +627,7 @@ class SpigotSourceTest extends TestCase
                 'X-Spiget-File-Source' => 'cdn',
                 'Location' => 'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ]),
-            'cdn.spiget.org/*' => Http::response('jar', 200),
+            'cdn.spiget.org/*' => Http::response("PK\x03\x04", 206),
             'api.spiget.org/v2/resources/28140/versions/latest*' => Http::response([
                 'name' => '5.5.71',
                 'releaseDate' => 1_786_045_114,
@@ -630,8 +648,9 @@ class SpigotSourceTest extends TestCase
         );
         self::assertSame('LuckPerms-5.5.71.jar', ProjectPrimaryFile::fromVersion($versions[0])['filename'] ?? null);
         Http::assertNotSent(fn ($request): bool => preg_match('~/versions(?:\?|$)~', $request->url()) === 1
-            || str_contains($request->url(), '/download')
-            || str_contains($request->url(), 'cdn.spiget.org'));
+            || str_contains($request->url(), '/download'));
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://cdn.spiget.org/file/spiget-resources/28140.jar'
+            && $request->hasHeader('Range', 'bytes=0-3'));
     }
 
     public function test_authoritative_install_does_not_reuse_a_cached_cdn_url(): void
@@ -660,7 +679,7 @@ class SpigotSourceTest extends TestCase
                 'X-Spiget-File-Source' => 'cdn',
                 'Location' => 'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ]),
-            'cdn.spiget.org/*' => Http::response('jar', 200),
+            'cdn.spiget.org/*' => Http::response("PK\x03\x04", 206),
             'api.spiget.org/v2/resources/28140/versions/latest*' => Http::response([
                 'name' => '5.5.71',
                 'releaseDate' => 1_786_045_114,
@@ -675,8 +694,7 @@ class SpigotSourceTest extends TestCase
             'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
         );
-        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download')
-            || str_contains($request->url(), 'cdn.spiget.org'));
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download'));
     }
 
     public function test_authoritative_install_leaves_premium_and_external_resources_without_a_file(): void
@@ -1063,7 +1081,7 @@ class SpigotSourceTest extends TestCase
                 'X-Spiget-File-Source' => 'external',
                 'Location' => 'https://github.com/example/releases/download/plugin.jar',
             ]),
-            'cdn.spiget.org/*' => Http::response('jar', 200),
+            'cdn.spiget.org/*' => Http::response("PK\x03\x04", 206),
             'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
                 'name' => '1.2.0',
                 'releaseDate' => 1_700_000_000,
@@ -1080,8 +1098,7 @@ class SpigotSourceTest extends TestCase
             'https://cdn.spiget.org/file/spiget-resources/50.jar',
             ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
         );
-        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download')
-            || str_contains($request->url(), 'cdn.spiget.org'));
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download'));
     }
 
     public function test_authoritative_install_does_not_depend_on_the_spiget_download_endpoint(): void
@@ -1089,7 +1106,7 @@ class SpigotSourceTest extends TestCase
         $source = $this->sourceWithExecutor();
         Http::fake([
             'api.spiget.org/v2/resources/28140/download' => Http::response('', 503),
-            'cdn.spiget.org/*' => Http::response('', 503),
+            'cdn.spiget.org/*' => Http::response("PK\x03\x04", 206),
             'api.spiget.org/v2/resources/28140/versions/latest*' => Http::response([
                 'name' => '5.5.71',
                 'releaseDate' => 1_786_045_114,
@@ -1105,8 +1122,193 @@ class SpigotSourceTest extends TestCase
             'https://cdn.spiget.org/file/spiget-resources/28140.jar',
             ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
         );
-        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download')
-            || str_contains($request->url(), 'cdn.spiget.org'));
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/download'));
+    }
+
+    public function test_authoritative_install_succeeds_when_file_metadata_is_incomplete_but_cdn_has_jar(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'cdn.spiget.org/file/spiget-resources/50.jar' => Http::response("PK\x03\x04", 206),
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
+                'name' => '1.2.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 3,
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response([
+                'id' => 50,
+                'name' => 'IncompleteMetadataPlugin',
+                'file' => ['type' => ''],
+            ]),
+        ]);
+        $server = Mockery::mock(Server::class);
+
+        $versions = $source->getVersionsAuthoritatively('50', $server, ProjectType::Plugin);
+
+        self::assertSame('3', $versions[0]['id']);
+        self::assertSame(
+            'https://cdn.spiget.org/file/spiget-resources/50.jar',
+            ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
+        );
+        self::assertArrayNotHasKey('download_unavailable', $versions[0]);
+    }
+
+    public function test_authoritative_install_requests_spiget_update_when_cdn_returns_404(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'cdn.spiget.org/file/spiget-resources/50.jar' => Http::response('', 404),
+            'api.spiget.org/v2/resources/50/requestUpdate' => Http::response(['status' => 'queued'], 200),
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
+                'name' => '1.2.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 3,
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+        $server = Mockery::mock(Server::class);
+
+        $versions = $source->getVersionsAuthoritatively('50', $server, ProjectType::Plugin);
+
+        self::assertSame('3', $versions[0]['id']);
+        self::assertSame([], $versions[0]['files']);
+        self::assertSame('update_requested', $versions[0]['download_unavailable']);
+        Http::assertSent(fn ($request): bool => $request->method() === 'POST'
+            && $request->url() === 'https://api.spiget.org/v2/resources/50/requestUpdate'
+            && $request['versions'] === false
+            && $request['updates'] === false
+            && $request['reviews'] === false
+            && $request['delete'] === false);
+    }
+
+    public function test_authoritative_install_treats_duplicate_update_request_as_queued(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'cdn.spiget.org/file/spiget-resources/50.jar' => Http::response('', 404),
+            'api.spiget.org/v2/resources/50/requestUpdate' => Http::response(['error' => 'Duplicate Update Request'], 400),
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
+                'name' => '1.2.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 3,
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+        $server = Mockery::mock(Server::class);
+
+        $versions = $source->getVersionsAuthoritatively('50', $server, ProjectType::Plugin);
+
+        self::assertSame([], $versions[0]['files']);
+        self::assertSame('update_requested', $versions[0]['download_unavailable']);
+    }
+
+    public function test_authoritative_install_succeeds_when_request_update_populates_cdn(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'cdn.spiget.org/file/spiget-resources/50.jar' => Http::sequence()
+                ->push('', 404)
+                ->push("PK\x03\x04", 206),
+            'api.spiget.org/v2/resources/50/requestUpdate' => Http::response(['status' => 'updated'], 200),
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
+                'name' => '1.2.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 3,
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+        $server = Mockery::mock(Server::class);
+
+        $versions = $source->getVersionsAuthoritatively('50', $server, ProjectType::Plugin);
+
+        self::assertSame(
+            'https://cdn.spiget.org/file/spiget-resources/50.jar',
+            ProjectPrimaryFile::fromVersion($versions[0])['url'] ?? null,
+        );
+        self::assertArrayNotHasKey('download_unavailable', $versions[0]);
+    }
+
+    public function test_authoritative_install_rejects_html_error_page_and_reports_specific_reasons(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'cdn.spiget.org/file/spiget-resources/50.jar' => Http::response('<!DOCTYPE html><html>Error</html>', 200),
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
+                'name' => '1.2.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 3,
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+            'api.spiget.org/v2/resources/31689/versions/latest*' => Http::response([
+                'name' => '1.0.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 1,
+            ]),
+            'api.spiget.org/v2/resources/31689?*' => Http::response([
+                'id' => 31689,
+                'name' => 'CombatLogX',
+                'premium' => false,
+                'external' => false,
+                'file' => ['type' => '.zip'],
+            ]),
+            'api.spiget.org/v2/resources/429/versions/latest*' => Http::response('rate limited', 429),
+            'api.spiget.org/v2/resources/429?*' => Http::response('rate limited', 429),
+        ]);
+        $server = Mockery::mock(Server::class);
+
+        $htmlRejected = $source->getVersionsAuthoritatively('50', $server, ProjectType::Plugin);
+        self::assertSame([], $htmlRejected[0]['files']);
+        self::assertSame('fetch_failed', $htmlRejected[0]['download_unavailable']);
+
+        $nonJar = $source->getVersionsAuthoritatively('31689', $server, ProjectType::Plugin);
+        self::assertSame([], $nonJar[0]['files']);
+        self::assertSame('unsupported_file', $nonJar[0]['download_unavailable']);
+
+        $rateLimited = $source->getVersionsAuthoritatively('429', $server, ProjectType::Plugin);
+        self::assertSame([], $rateLimited[0]['files']);
+        self::assertSame('rate_limited', $rateLimited[0]['download_unavailable']);
+    }
+
+    public function test_resolve_installable_version_for_older_version_never_substitutes_latest_cdn_jar(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'cdn.spiget.org/file/spiget-resources/50.jar' => Http::response("PK\x03\x04", 206),
+            'www.spigotmc.org/resources/50/download?version=2' => Http::response('<!DOCTYPE html>Cloudflare', 403),
+            'www.spigotmc.org/resources/50/download?version=1' => Http::response("PK\x03\x04", 206),
+            'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
+                'name' => '1.2.0',
+                'releaseDate' => 1_700_000_000,
+                'id' => 3,
+            ]),
+            'api.spiget.org/v2/resources/50?*' => Http::response($this->freeSpigetResource(50, 3)),
+        ]);
+        $server = Mockery::mock(Server::class);
+
+        $olderBlocked = $source->resolveInstallableVersion('50', [
+            'id' => '2',
+            'version_number' => '1.1.0',
+        ], $server, ProjectType::Plugin);
+        self::assertSame([], $olderBlocked['files']);
+        self::assertSame('version_unavailable', $olderBlocked['download_unavailable']);
+
+        $olderDirect = $source->resolveInstallableVersion('50', [
+            'id' => '1',
+            'version_number' => '1.0.0',
+        ], $server, ProjectType::Plugin);
+        self::assertSame(
+            'https://www.spigotmc.org/resources/50/download?version=1',
+            ProjectPrimaryFile::fromVersion($olderDirect)['url'] ?? null,
+        );
+
+        $latestSelected = $source->resolveInstallableVersion('50', [
+            'id' => '3',
+            'version_number' => '1.2.0',
+        ], $server, ProjectType::Plugin);
+        self::assertSame(
+            'https://cdn.spiget.org/file/spiget-resources/50.jar',
+            ProjectPrimaryFile::fromVersion($latestSelected)['url'] ?? null,
+        );
     }
 
     public function test_cache_entries_written_before_the_schema_change_are_ignored(): void
