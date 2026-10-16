@@ -67,6 +67,7 @@ use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\HangarSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
@@ -1942,48 +1943,65 @@ class ModManagerPage extends Page implements HasTable
             }
 
             $reason = is_array($version) ? ($version['download_unavailable'] ?? null) : null;
-            if (in_array($reason, [
-                DownloadUnavailableException::PREMIUM,
-                DownloadUnavailableException::EXTERNAL,
-                DownloadUnavailableException::INVALID,
-                DownloadUnavailableException::DISTRIBUTION,
-            ], true)) {
-                $blocked[$reason] = true;
+            if (DownloadUnavailableException::isSupportedReason($reason)) {
+                $blocked[(string) $reason] = true;
             }
         }
 
-        foreach ([
-            DownloadUnavailableException::PREMIUM,
-            DownloadUnavailableException::EXTERNAL,
-            DownloadUnavailableException::INVALID,
-            DownloadUnavailableException::DISTRIBUTION,
-        ] as $reason) {
-            if ($blocked === [$reason => true]) {
-                throw new DownloadUnavailableException($reason);
-            }
+        if (count($blocked) === 1) {
+            throw new DownloadUnavailableException((string) array_key_first($blocked));
         }
 
         throw new Exception('No downloadable file found');
     }
 
     /**
-     * Catalog rows from Spiget record when an automatic install must not be
-     * offered. Compact rows omit the field and stay installable until the
-     * action resolves the resource.
+     * Resolve and verify a version selected in the Versions modal at click
+     * time so incomplete or unverified modal entries are checked before
+     * attempting a pull.
      *
-     * @param  array<string, mixed>  $record
+     * @param  array<string, mixed>  $versionData
+     * @return array<string, mixed>
+     *
+     * @throws Exception
      */
-    protected function spigotDownloadBlock(array $record): ?string
-    {
-        if (($record['source'] ?? null) !== ProjectSourceKey::Spigot->value) {
-            return null;
+    protected function modalInstallableVersion(
+        ProjectSourceInterface $source,
+        string $projectId,
+        array $versionData,
+        Server $server,
+        ProjectType $type,
+    ): array {
+        if ($source instanceof SpigotSource) {
+            $versionData = $source->resolveInstallableVersion($projectId, $versionData, $server, $type);
+        } elseif ($this->getPrimaryFile($versionData['files'] ?? null) === null) {
+            $versions = $source instanceof SourceFetchAuthoritativeInterface
+                ? $source->getVersionsAuthoritatively($projectId, $server, $type)
+                : $source->getVersions($projectId, $server, $type);
+            $targetId = (string) ($versionData['id'] ?? '');
+            foreach ($versions as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+
+                if ($targetId === '' || (string) ($candidate['id'] ?? '') === $targetId) {
+                    $versionData = $candidate;
+
+                    break;
+                }
+            }
         }
 
-        $block = $record['spigot_download_block'] ?? null;
+        if (ProjectPrimaryFile::fromVersion($versionData) !== null) {
+            return $versionData;
+        }
 
-        return $block === DownloadUnavailableException::PREMIUM || $block === DownloadUnavailableException::EXTERNAL
-            ? $block
-            : null;
+        $reason = $versionData['download_unavailable'] ?? null;
+        if (DownloadUnavailableException::isSupportedReason($reason)) {
+            throw new DownloadUnavailableException((string) $reason);
+        }
+
+        throw new Exception('No downloadable file found');
     }
 
     /**
@@ -3090,8 +3108,6 @@ class ModManagerPage extends Page implements HasTable
 
                         $sections = [];
                         foreach ($versions as $versionIndex => $versionData) {
-                            $primaryFile = $this->getPrimaryFile($versionData['files'] ?? []);
-
                             $sectionComponents = [
                                 TextEntry::make('type_' . $versionIndex)
                                     ->label(trans('pelican-mod-manager::strings.version.type'))
@@ -3133,11 +3149,29 @@ class ModManagerPage extends Page implements HasTable
                                     ->label(trans('pelican-mod-manager::strings.actions.install'))
                                     ->icon('tabler-download')
                                     ->authorize(fn (): bool => $this->canManageCurrentInstallOrUpdate())
-                                    ->disabled($primaryFile === null)
                                     ->action(function (DaemonFileRepository $fileRepository) use ($record, $versionData, $sourceKey) {
                                         try {
                                             /** @var Server $server */
                                             $server = Filament::getTenant();
+
+                                            $type = static::detectProjectType($server);
+                                            if (!$type) {
+                                                throw new Exception('Server does not support managed projects');
+                                            }
+
+                                            $sourceEnum = ProjectSourceKey::tryFrom($sourceKey) ?? ProjectSourceKey::Modrinth;
+                                            $source = app(ProjectSourceRegistry::class)->get($sourceEnum);
+                                            if (!$source) {
+                                                throw new Exception('Source unavailable');
+                                            }
+
+                                            $versionData = $this->modalInstallableVersion(
+                                                $source,
+                                                (string) ($record['project_id'] ?? ''),
+                                                $versionData,
+                                                $server,
+                                                $type,
+                                            );
 
                                             if (!isset($versionData['id'], $versionData['version_number'])) {
                                                 throw new Exception('Invalid version data structure');
@@ -3149,17 +3183,12 @@ class ModManagerPage extends Page implements HasTable
                                                 throw new Exception('No downloadable file found');
                                             }
 
-                                            $type = static::detectProjectType($server);
-                                            if (!$type) {
-                                                throw new Exception('Server does not support managed projects');
-                                            }
-
                                             $installedMod = $this->getCurrentInstalledModForOperation(
                                                 $server,
                                                 $fileRepository,
                                                 $type,
                                                 $record['project_id'],
-                                                ProjectSourceKey::tryFrom($sourceKey) ?? ProjectSourceKey::Modrinth,
+                                                $sourceEnum,
                                             );
 
                                             $this->performInstallOrUpdate($server, $fileRepository, $record, $versionData, $primaryFile, $installedMod);
@@ -3204,14 +3233,7 @@ class ModManagerPage extends Page implements HasTable
                         return $sections;
                     }),
                 CatalogRowAction::compact('install_latest', 'success')
-                    ->tooltip(function (array $record): string {
-                        return match ($this->spigotDownloadBlock($record)) {
-                            DownloadUnavailableException::PREMIUM => trans('pelican-mod-manager::strings.actions.install_premium_unavailable'),
-                            DownloadUnavailableException::EXTERNAL => trans('pelican-mod-manager::strings.actions.install_external_unavailable'),
-                            default => trans('pelican-mod-manager::strings.actions.install_latest'),
-                        };
-                    })
-                    ->disabled(fn (array $record): bool => $this->spigotDownloadBlock($record) !== null)
+                    ->tooltip(trans('pelican-mod-manager::strings.actions.install_latest'))
                     ->authorize(fn (): bool => $this->canManageCurrentInstallOrUpdate())
                     ->hidden(fn (array $record): bool => $record['untracked'] ?? false)
                     ->visible(function (array $record) {
@@ -5137,6 +5159,11 @@ class ModManagerPage extends Page implements HasTable
         if ($exception instanceof DownloadUnavailableException) {
             $bodyKey = match ($exception->reason()) {
                 DownloadUnavailableException::PREMIUM => 'download_unavailable_premium',
+                DownloadUnavailableException::UNSUPPORTED_FILE => 'download_unavailable_unsupported_file',
+                DownloadUnavailableException::UPDATE_REQUESTED => 'download_unavailable_update_requested',
+                DownloadUnavailableException::RATE_LIMITED => 'download_unavailable_rate_limited',
+                DownloadUnavailableException::VERSION_UNAVAILABLE => 'download_unavailable_version_unavailable',
+                DownloadUnavailableException::FETCH_FAILED => 'download_unavailable_fetch_failed',
                 DownloadUnavailableException::INVALID => 'download_unavailable_invalid',
                 DownloadUnavailableException::DISTRIBUTION => 'download_unavailable_distribution',
                 default => 'download_unavailable_external',

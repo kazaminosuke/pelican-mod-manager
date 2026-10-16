@@ -20,6 +20,18 @@ final class LatestInstallableVersionPage extends ModManagerPage
     {
         return $this->latestInstallableVersion($source, $projectId, new Server(), ProjectType::Plugin);
     }
+
+    /**
+     * @param  array<string, mixed>  $versionData
+     * @return array<string, mixed>
+     */
+    public function modalInstallableVersionForTest(
+        ProjectSourceInterface $source,
+        string $projectId,
+        array $versionData,
+    ): array {
+        return $this->modalInstallableVersion($source, $projectId, $versionData, new Server(), ProjectType::Plugin);
+    }
 }
 
 final class LatestInstallableVersionTest extends TestCase
@@ -162,5 +174,58 @@ final class LatestInstallableVersionTest extends TestCase
         $this->expectExceptionMessage('No compatible versions found');
 
         (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '50');
+    }
+
+    public function test_new_spigot_download_unavailable_reasons_are_propagated_for_latest_and_modal_install(): void
+    {
+        $reasons = [
+            DownloadUnavailableException::UNSUPPORTED_FILE,
+            DownloadUnavailableException::UPDATE_REQUESTED,
+            DownloadUnavailableException::RATE_LIMITED,
+            DownloadUnavailableException::VERSION_UNAVAILABLE,
+            DownloadUnavailableException::FETCH_FAILED,
+        ];
+
+        foreach ($reasons as $reason) {
+            $source = Mockery::mock(ProjectSourceInterface::class.', '.SourceFetchAuthoritativeInterface::class);
+            $source->shouldReceive('getVersionsAuthoritatively')->once()->andReturn([
+                [
+                    'id' => '3',
+                    'project_id' => '50',
+                    'version_number' => '1.2.0',
+                    'files' => [],
+                    'download_unavailable' => $reason,
+                ],
+            ]);
+
+            try {
+                (new LatestInstallableVersionPage())->latestInstallableVersionForTest($source, '50');
+                self::fail("Reason [{$reason}] must throw DownloadUnavailableException.");
+            } catch (DownloadUnavailableException $exception) {
+                self::assertSame($reason, $exception->reason());
+            }
+
+            $modalSource = Mockery::mock(ProjectSourceInterface::class.', '.SourceFetchAuthoritativeInterface::class);
+            $modalSource->shouldReceive('getVersionsAuthoritatively')->once()->andReturn([
+                [
+                    'id' => '2',
+                    'project_id' => '50',
+                    'version_number' => '1.1.0',
+                    'files' => [],
+                    'download_unavailable' => $reason,
+                ],
+            ]);
+
+            try {
+                (new LatestInstallableVersionPage())->modalInstallableVersionForTest($modalSource, '50', [
+                    'id' => '2',
+                    'version_number' => '1.1.0',
+                    'files' => [],
+                ]);
+                self::fail("Modal install with reason [{$reason}] must throw DownloadUnavailableException.");
+            } catch (DownloadUnavailableException $exception) {
+                self::assertSame($reason, $exception->reason());
+            }
+        }
     }
 }
