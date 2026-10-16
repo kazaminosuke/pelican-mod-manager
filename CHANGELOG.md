@@ -7,12 +7,24 @@ the complete matching version section and adds the comparison information to the
 
 ### 日本語
 
+### English
+
+## [0.2.0-pre.3] - 2026-10-17
+
+### 日本語
+
 #### 変更
 
+- Spigot カタログおよび Versions モーダルでのダウンロードボタンの事前無効化を撤廃し、クリック時に最新メタデータと SpiGet CDN 上の JAR（ZIP シグネチャ）を検証するように変更
+- SpiGet CDN に JAR が未キャッシュ（404）の場合は SpiGet の `requestUpdate` API で取得要求を送信し、外部サイト配布・有料・非 JAR・API レート制限・旧バージョン直接取得不可・取得失敗などの理由をクリック後に明確に通知するように改善
+- Spigot カタログで外部サイト配布または JAR 以外の配布物（.zip、.sk など）と確定したリソースを一覧から除外し、GitHub にソースコードリンクがあるだけのリソース・有料リソース・メタデータが不完全なだけのリソースは除外しないように改善
+- Minecraft バージョン絞り込み時の Spigot 詳細補完がタイムアウトで途中終了した際に、不完全なカタログページをキャッシュしないように修正
+- Hangar の降順ソート指定および外部直リンク JAR のファイル名解決を修正
 - Mod サーバーに Modrinth（.mrpack）と CurseForge の Modpack を検索してインストールできるようにした。クライアント専用ファイルは入れず、ワールド、server.properties、BAN リスト、サーバー JAR は変更しない。既存の設定ファイルは残し、同じパスの Mod は置き換える。失敗したときは、その操作で追加したファイルを戻す
 - サーバー作成時に Modpack を選べるようにした。対応する Egg が一つに定まるときだけ自動選択し、曖昧なときは候補だけを表示する。既存サーバーでは、必要な場合に確認のうえで Egg を切り替え、ワールドなどのファイルは削除しない
 - FTB は FTB Server Egg の起動変数で導入する。Technic は、サーバー配布物の URL が既存のパック専用 Egg と一致するときだけ導入する。ATLauncher は公開 API にローダーもサーバー配布物もないため、導入しない
-- Spigot の最新の無料ホスト版は SpiGet CDN から取得する。選んだ過去バージョンは公式の Spigot URL のままにする
+- Egg 切り替え時のサーバー更新権限チェックと、Modpack 配布物の安全な HTTPS URL 検証を強化
+- CurseForge Modpack の依存関係一括取得、オーバーライド一覧キャッシュ、Resource Pack メタデータキャッシュ、ハッシュ照会のバッチ化によりパフォーマンスを改善
 - 管理者向けの診断コマンド `mod-manager:diagnose` を追加した
 - ダウンロードした JAR / ZIP が正しいアーカイブでない場合は、既存ファイルを置き換える前に失敗するようにした
 - 更新時に、すでに消えている古いファイルの削除が失敗しても、新しいファイルを消さないようにした。古いファイルがまだ残っているときは、両方読み込まれないよう新しいファイルを戻す
@@ -29,15 +41,22 @@ the complete matching version section and adds the comparison information to the
 - Spiget のダウンロード先確認が一時的に失敗しただけで、Spigot のバージョン一覧が「ダウンロード可能なファイルなし」として最大 30 分キャッシュされる問題を修正
 - Spigot / Hangar の最新バージョン確認の失敗が別のプロジェクトとして扱われる問題を修正
 - Mod Manager の外で置き換えられた Spigot プラグイン JAR を、以前のバージョンのまま表示し続ける問題を修正
+- このプレリリースは GitHub Releases の Prerelease としてのみ公開し、パネルのアップデート一覧（update.json）には出さない
 
 ### English
 
 #### Changed
 
+- Removed pre-disabling of download buttons in the Spigot catalog and Versions modal; clicking install or update now verifies current metadata and probes the SpiGet CDN JAR (ZIP signature) at action time
+- Added SpiGet `requestUpdate` API fallback when a JAR is not yet cached on the SpiGet CDN (404), and surfaced specific notifications for external hosting, premium resources, non-JAR files, API rate limits, unavailable older versions, and upstream fetch failures
+- Excluded confirmed externally hosted and confirmed non-JAR (`.zip`, `.sk`, etc.) Spigot resources from the catalog while keeping resources that only link to GitHub source code, premium resources (without special badges), and resources with incomplete metadata
+- Stopped caching incomplete Spigot catalog pages when version-filtered detail lookups hit the time budget
+- Fixed Hangar descending sort keys and filename resolution for direct external JAR URLs
 - Mod servers can search and install Modrinth (.mrpack) and CurseForge modpacks. Client-only files are skipped. Worlds, server.properties, ban lists, and the server JAR are left untouched. Existing config files are kept, while pack mods replace a file at the same path. A failed install removes the files added by that attempt
 - Server creation can select a modpack. An egg is chosen automatically only when one high-confidence match exists; otherwise the compatible eggs are listed. An existing server can change eggs after confirmation when a pack requires it, without deleting worlds or other server files
 - FTB packs are provisioned by the FTB Server egg variables. Technic packs are provisioned only when the server archive URL matches a pack-specific egg. ATLauncher packs are not installed because the public API has no loader or server archive and there is no ATLauncher egg
-- The current hosted-free Spigot file is downloaded from the SpiGet CDN. An explicitly selected older version keeps the official Spigot URL
+- Enforced server egg-change authorization and safe HTTPS URL validation for modpack downloads
+- Improved performance by batching CurseForge modpack dependency lookups and hash lookups, caching override directory listings, and caching resource pack metadata
 - Added the administrator command `mod-manager:diagnose` for non-destructive provider and egg checks
 - A downloaded JAR or ZIP that is not a valid archive now fails before it replaces an existing file
 - An update no longer deletes the new file when removal of an already-missing previous filename fails. If that previous file is still present, the new file is rolled back so both copies are not loaded
@@ -54,6 +73,7 @@ the complete matching version section and adds the comparison information to the
 - Fixed a transient Spiget download-lookup failure caching a Spigot version list without any downloadable file for up to 30 minutes
 - Fixed Spigot and Hangar latest-version failures being attributed to the wrong project
 - Fixed a Spigot plugin JAR replaced outside Mod Manager keeping its previous version in the Installed list
+- Published this build only as a GitHub Prerelease. It is not offered in the panel update list (update.json)
 
 ## [0.2.0-pre.2] - 2026-09-26
 
