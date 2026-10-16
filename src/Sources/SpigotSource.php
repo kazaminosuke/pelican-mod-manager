@@ -68,7 +68,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      * changes shape or meaning so entries written by an older release are
      * refetched instead of served for their remaining TTL.
      */
-    private const CACHE_SCHEMA = 4;
+    private const CACHE_SCHEMA = 5;
 
     private const OPERATION_CURRENT = 'current';
 
@@ -500,14 +500,15 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             $hits[] = $normalized;
         }
 
+        [$hits, $incompleteDetails] = $this->withSpigetDetails($hits, $compactIds, $deadline);
+        $hits = $this->withCachedOfficialProjectOverlay($hits);
+
         $total = (int) $response->header('X-Total');
         if ($total < 1) {
             $pages = (int) $response->header('X-Page-Count');
             $total = $pages > 0 ? $pages * self::CATALOG_PAGE_SIZE : (($page - 1) * self::CATALOG_PAGE_SIZE) + count($hits);
         }
 
-        [$hits, $incompleteDetails] = $this->withSpigetDetails($hits, $compactIds, $deadline);
-        $hits = $this->withCachedOfficialProjectOverlay($hits);
         $result = [
             'hits' => $hits,
             'total_hits' => $total,
@@ -581,6 +582,17 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                     $response = $responses[$projectId] ?? null;
                     if ($response instanceof Response && $response->successful()) {
                         $resource = $response->json();
+                        if (is_array($resource) && $this->shouldExcludeFromCatalog($resource)) {
+                            $excluded = ['excluded' => true];
+                            $resolved[$projectId] = $excluded;
+                            $toPrime[] = [
+                                'spec' => $detailSpecs[$projectId],
+                                'data' => $excluded,
+                            ];
+
+                            continue;
+                        }
+
                         $normalized = is_array($resource) ? $this->normalizeSpigetProject($resource) : null;
                         if ($normalized !== null) {
                             $resolved[$projectId] = $normalized;
@@ -606,11 +618,16 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             }
         }
 
-        $detailedHits = array_map(static function (array $hit) use ($resolved): array {
+        $detailedHits = [];
+        foreach ($hits as $hit) {
             $projectId = (string) ($hit['project_id'] ?? '');
+            $detail = $resolved[$projectId] ?? null;
+            if (is_array($detail) && ($detail['excluded'] ?? false) === true) {
+                continue;
+            }
 
-            return $resolved[$projectId] ?? $hit;
-        }, $hits);
+            $detailedHits[] = $detail ?? $hit;
+        }
 
         return [$detailedHits, $hadFailure];
     }
@@ -1344,7 +1361,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     private function normalizeSpigetProject(array $resource): ?array
     {
         $projectId = $this->normalizeResourceId((string) ($resource['id'] ?? ''));
-        if ($projectId === null) {
+        if ($projectId === null || $this->shouldExcludeFromCatalog($resource)) {
             return null;
         }
 
@@ -1357,7 +1374,8 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         $author = is_array($resource['author'] ?? null)
             ? ($resource['author']['name'] ?? $resource['author']['username'] ?? null)
             : null;
-        $project = [
+
+        return [
             'project_id' => $projectId,
             'slug' => $projectId,
             'title' => (string) ($resource['name'] ?? $projectId),
@@ -1369,12 +1387,18 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             'project_type' => ProjectType::Plugin->value,
             'source' => ProjectSourceKey::Spigot->value,
         ];
-        $block = $this->downloadBlock($resource);
-        if ($block !== null) {
-            $project['spigot_download_block'] = $block;
-        }
+    }
 
-        return $project;
+    /**
+     * Confirmed external distributions and confirmed non-JAR deliverables are
+     * omitted from catalog results. Incomplete metadata and premium resources
+     * remain visible without pre-disabling download buttons.
+     *
+     * @param  array<string, mixed>  $resource
+     */
+    private function shouldExcludeFromCatalog(array $resource): bool
+    {
+        return $this->isConfirmedExternal($resource) || $this->isConfirmedNonJar($resource);
     }
 
     /**
@@ -1478,6 +1502,14 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      */
     private function isExternal(array $resource): bool
     {
+        return $this->isConfirmedExternal($resource) || $this->isConfirmedNonJar($resource);
+    }
+
+    /**
+     * @param  array<string, mixed>  $resource
+     */
+    private function isConfirmedExternal(array $resource): bool
+    {
         $file = $resource['file'] ?? null;
         if (is_array($file)) {
             if (($file['external'] ?? false) === true) {
@@ -1494,16 +1526,32 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 return true;
             }
 
-            // Hosted plugin files use the ".jar" extension. Non-JAR archives or
-            // scripts (such as ".zip" bundles or ".sk" files) cannot be
-            // installed as a single plugin JAR, while a confirmed ".jar" is
-            // hosted on Spigot/SpiGet even if the top-level external flag lags.
-            if ($type !== '') {
-                return ltrim($type, '.') !== 'jar';
+            // A confirmed ".jar" without externalUrl/file.external is hosted on
+            // Spigot/SpiGet even if the top-level external flag lags.
+            if ($type !== '' && ltrim($type, '.') === 'jar') {
+                return false;
             }
         }
 
         return ($resource['external'] ?? false) === true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $resource
+     */
+    private function isConfirmedNonJar(array $resource): bool
+    {
+        $file = $resource['file'] ?? null;
+        if (!is_array($file)) {
+            return false;
+        }
+
+        $type = strtolower(trim((string) ($file['type'] ?? '')));
+        if ($type === '' || $type === 'external') {
+            return false;
+        }
+
+        return ltrim($type, '.') !== 'jar';
     }
 
     /**

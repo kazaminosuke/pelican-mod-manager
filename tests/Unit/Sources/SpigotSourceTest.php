@@ -868,11 +868,13 @@ class SpigotSourceTest extends TestCase
         self::assertNull(ProjectPrimaryFile::fromVersion($versions[0]));
     }
 
-    public function test_catalog_rows_record_external_resources_and_leave_hosted_ones_installable(): void
+    public function test_catalog_excludes_confirmed_external_resources_and_keeps_hosted_premium_and_incomplete_rows(): void
     {
         Http::fake([
             'api.spiget.org/v2/resources?*' => Http::response([
-                $this->spigetResource(28140, 'LuckPerms', ['1.21']),
+                $this->spigetResource(28140, 'LuckPerms', ['1.21']) + [
+                    'sourceCodeLink' => 'https://github.com/LuckPerms/LuckPerms',
+                ],
                 [
                     'id' => 2124,
                     'name' => 'SkinsRestorer',
@@ -895,7 +897,15 @@ class SpigotSourceTest extends TestCase
                     'downloads' => 1,
                     'file' => ['type' => '.jar'],
                 ],
-            ], 200, ['X-Total' => '3']),
+                [
+                    'id' => 888,
+                    'name' => 'IncompleteMetadataPlugin',
+                    'tag' => 'Incomplete file metadata with GitHub source link',
+                    'downloads' => 42,
+                    'sourceCodeLink' => 'https://github.com/example/incomplete-plugin',
+                    'file' => ['type' => ''],
+                ],
+            ], 200, ['X-Total' => '4']),
         ]);
 
         $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
@@ -905,9 +915,51 @@ class SpigotSourceTest extends TestCase
             'version' => null,
         ]), 2.0);
 
-        self::assertArrayNotHasKey('spigot_download_block', $result['hits'][0]);
-        self::assertSame('external', $result['hits'][1]['spigot_download_block']);
-        self::assertSame('premium', $result['hits'][2]['spigot_download_block']);
+        self::assertSame(['28140', '99', '888'], array_column($result['hits'], 'project_id'));
+        foreach ($result['hits'] as $hit) {
+            self::assertArrayNotHasKey('spigot_download_block', $hit);
+        }
+    }
+
+    public function test_version_filtered_catalog_excludes_confirmed_external_and_non_jar_details(): void
+    {
+        $source = $this->sourceWithExecutor();
+        Http::fake([
+            'api.spiget.org/v2/resources/for/*' => Http::response([
+                'check' => ['1.21.4', '1.21'],
+                'method' => 'any',
+                'match' => [
+                    ['testedVersions' => ['1.21'], 'name' => 'LuckPerms', 'id' => 28140],
+                    ['testedVersions' => ['1.21'], 'name' => 'SkinsRestorer', 'id' => 2124],
+                    ['testedVersions' => ['1.21'], 'name' => 'CombatLogX', 'id' => 31689],
+                    ['testedVersions' => ['1.21'], 'name' => 'Vault', 'id' => 34315],
+                ],
+            ], 200, ['X-Total' => '4']),
+            'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.21'])),
+            'api.spiget.org/v2/resources/2124?*' => Http::response([
+                'id' => 2124,
+                'name' => 'SkinsRestorer',
+                'external' => true,
+                'file' => ['type' => 'external', 'externalUrl' => 'https://github.com/SkinsRestorer/SkinsRestorer/releases/latest'],
+            ]),
+            'api.spiget.org/v2/resources/31689?*' => Http::response([
+                'id' => 31689,
+                'name' => 'CombatLogX',
+                'external' => false,
+                'file' => ['type' => '.zip', 'url' => 'resources/combatlogx.31689/download?version=1'],
+            ]),
+            'api.spiget.org/v2/resources/34315?*' => Http::response(['error' => 'resource not found'], 404),
+        ]);
+
+        $result = $source->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
+            'page' => 1,
+            'query' => '',
+            'sort' => 'downloads',
+            'version' => '1.21.4',
+            'schema' => 5,
+        ]), 1.5);
+
+        self::assertSame(['28140', '34315'], array_column($result['hits'], 'project_id'));
     }
 
     public function test_version_filtered_catalog_signals_partial_fetch_on_transient_detail_failure_and_caches_resolved_details(): void
@@ -946,7 +998,7 @@ class SpigotSourceTest extends TestCase
                 'query' => '',
                 'sort' => 'downloads',
                 'version' => '1.21.4',
-                'schema' => 4,
+                'schema' => 5,
             ]), 1.5);
             self::fail('Transient detail failure must throw PartialSourceFetchException so incomplete rows are not cached as fresh.');
         } catch (PartialSourceFetchException $exception) {
@@ -958,7 +1010,7 @@ class SpigotSourceTest extends TestCase
         }
     }
 
-    public function test_non_jar_hosted_files_are_blocked_and_confirmed_hosted_jars_remain_downloadable(): void
+    public function test_non_jar_hosted_files_are_excluded_and_confirmed_hosted_jars_remain_in_catalog(): void
     {
         Http::fake([
             'api.spiget.org/v2/resources?*' => Http::response([
@@ -999,9 +1051,8 @@ class SpigotSourceTest extends TestCase
             'version' => null,
         ]), 2.0);
 
-        self::assertSame('external', $result['hits'][0]['spigot_download_block']);
-        self::assertSame('external', $result['hits'][1]['spigot_download_block']);
-        self::assertArrayNotHasKey('spigot_download_block', $result['hits'][2]);
+        self::assertSame(['777'], array_column($result['hits'], 'project_id'));
+        self::assertArrayNotHasKey('spigot_download_block', $result['hits'][0]);
     }
 
     public function test_authoritative_install_ignores_a_spiget_download_redirect(): void
