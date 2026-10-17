@@ -116,7 +116,7 @@ final class ModManagerDiagnostics
 
         return new DiagnosticCheck(
             'cache_schema',
-            $schema === 5 ? 'pass' : 'warning',
+            $schema === 6 ? 'pass' : 'warning',
             'Source cache schema is '.var_export($schema, true).'.',
             ['schema' => $schema],
         );

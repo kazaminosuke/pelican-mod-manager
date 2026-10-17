@@ -139,7 +139,7 @@ class ProjectSourceMetadataCacheContractTest extends TestCase
             SpigotSource::class,
             '12345',
             'spigot',
-            ['project_id' => '12345', 'schema' => 5],
+            ['project_id' => '12345', 'schema' => 6],
         ];
         yield 'GitHub Releases' => [
             GitHubReleasesSource::class,

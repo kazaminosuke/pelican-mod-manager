@@ -886,7 +886,7 @@ class SpigotSourceTest extends TestCase
         self::assertNull(ProjectPrimaryFile::fromVersion($versions[0]));
     }
 
-    public function test_catalog_excludes_confirmed_external_resources_and_keeps_hosted_premium_and_incomplete_rows(): void
+    public function test_catalog_excludes_confirmed_premium_and_external_resources_and_keeps_free_and_incomplete_rows(): void
     {
         Http::fake([
             'api.spiget.org/v2/resources?*' => Http::response([
@@ -909,21 +909,50 @@ class SpigotSourceTest extends TestCase
                 [
                     'id' => 99,
                     'name' => 'PremiumPlugin',
-                    'tag' => 'Paid',
+                    'tag' => 'Paid boolean flag',
                     'premium' => true,
                     'external' => false,
                     'downloads' => 1,
                     'file' => ['type' => '.jar'],
                 ],
                 [
+                    'id' => 100,
+                    'name' => 'PositivePricePlugin',
+                    'tag' => 'Paid top-level price',
+                    'premium' => false,
+                    'price' => 9.99,
+                    'external' => false,
+                    'downloads' => 5,
+                    'file' => ['type' => '.jar'],
+                ],
+                [
+                    'id' => 101,
+                    'name' => 'NestedPricePlugin',
+                    'tag' => 'Paid nested price',
+                    'premium' => ['price' => '12.50', 'currency' => 'USD'],
+                    'external' => false,
+                    'downloads' => 8,
+                    'file' => ['type' => '.jar'],
+                ],
+                [
+                    'id' => 777,
+                    'name' => 'ZeroPriceFreePlugin',
+                    'tag' => 'Explicit zero price must not be mistaken for premium',
+                    'premium' => ['price' => '0.00', 'currency' => 'USD'],
+                    'price' => 0,
+                    'external' => false,
+                    'downloads' => 50,
+                    'file' => ['type' => '.jar'],
+                ],
+                [
                     'id' => 888,
                     'name' => 'IncompleteMetadataPlugin',
-                    'tag' => 'Incomplete file metadata with GitHub source link',
+                    'tag' => 'Incomplete file and premium metadata with GitHub source link',
                     'downloads' => 42,
                     'sourceCodeLink' => 'https://github.com/example/incomplete-plugin',
                     'file' => ['type' => ''],
                 ],
-            ], 200, ['X-Total' => '4']),
+            ], 200, ['X-Total' => '7']),
         ]);
 
         $result = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'search', [
@@ -933,13 +962,13 @@ class SpigotSourceTest extends TestCase
             'version' => null,
         ]), 2.0);
 
-        self::assertSame(['28140', '99', '888'], array_column($result['hits'], 'project_id'));
+        self::assertSame(['28140', '777', '888'], array_column($result['hits'], 'project_id'));
         foreach ($result['hits'] as $hit) {
             self::assertArrayNotHasKey('spigot_download_block', $hit);
         }
     }
 
-    public function test_version_filtered_catalog_excludes_confirmed_external_and_non_jar_details(): void
+    public function test_version_filtered_catalog_excludes_confirmed_premium_external_and_non_jar_details(): void
     {
         $source = $this->sourceWithExecutor();
         Http::fake([
@@ -948,12 +977,29 @@ class SpigotSourceTest extends TestCase
                 'method' => 'any',
                 'match' => [
                     ['testedVersions' => ['1.21'], 'name' => 'LuckPerms', 'id' => 28140],
+                    ['testedVersions' => ['1.21'], 'name' => 'PremiumFlagged', 'id' => 99],
+                    ['testedVersions' => ['1.21'], 'name' => 'PremiumPriced', 'id' => 100],
                     ['testedVersions' => ['1.21'], 'name' => 'SkinsRestorer', 'id' => 2124],
                     ['testedVersions' => ['1.21'], 'name' => 'CombatLogX', 'id' => 31689],
                     ['testedVersions' => ['1.21'], 'name' => 'Vault', 'id' => 34315],
                 ],
-            ], 200, ['X-Total' => '4']),
+            ], 200, ['X-Total' => '6']),
             'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.21'])),
+            'api.spiget.org/v2/resources/99?*' => Http::response([
+                'id' => 99,
+                'name' => 'PremiumFlagged',
+                'premium' => true,
+                'external' => false,
+                'file' => ['type' => '.jar'],
+            ]),
+            'api.spiget.org/v2/resources/100?*' => Http::response([
+                'id' => 100,
+                'name' => 'PremiumPriced',
+                'premium' => false,
+                'price' => 7.50,
+                'external' => false,
+                'file' => ['type' => '.jar'],
+            ]),
             'api.spiget.org/v2/resources/2124?*' => Http::response([
                 'id' => 2124,
                 'name' => 'SkinsRestorer',
@@ -974,10 +1020,26 @@ class SpigotSourceTest extends TestCase
             'query' => '',
             'sort' => 'downloads',
             'version' => '1.21.4',
-            'schema' => 5,
+            'schema' => 6,
         ]), 1.5);
 
         self::assertSame(['28140', '34315'], array_column($result['hits'], 'project_id'));
+    }
+
+    public function test_official_project_metadata_for_installed_items_remains_available_for_premium_resources(): void
+    {
+        $resource = $this->officialResource(99, 'InstalledPremiumPlugin');
+        $resource['premium'] = ['price' => '15.00', 'currency' => 'USD'];
+        Http::fake([
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response($resource),
+        ]);
+
+        $project = $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'project', [
+            'project_id' => '99',
+        ]), 1.5);
+
+        self::assertSame('99', $project['project_id']);
+        self::assertSame('InstalledPremiumPlugin', $project['title']);
     }
 
     public function test_version_filtered_catalog_signals_partial_fetch_on_transient_detail_failure_and_caches_resolved_details(): void
@@ -1016,7 +1078,7 @@ class SpigotSourceTest extends TestCase
                 'query' => '',
                 'sort' => 'downloads',
                 'version' => '1.21.4',
-                'schema' => 5,
+                'schema' => 6,
             ]), 1.5);
             self::fail('Transient detail failure must throw PartialSourceFetchException so incomplete rows are not cached as fresh.');
         } catch (PartialSourceFetchException $exception) {

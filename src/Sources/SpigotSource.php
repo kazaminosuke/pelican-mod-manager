@@ -69,7 +69,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      * changes shape or meaning so entries written by an older release are
      * refetched instead of served for their remaining TTL.
      */
-    private const CACHE_SCHEMA = 5;
+    private const CACHE_SCHEMA = 6;
 
     private const OPERATION_CURRENT = 'current';
 
@@ -1768,15 +1768,15 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
     }
 
     /**
-     * Confirmed external distributions and confirmed non-JAR deliverables are
-     * omitted from catalog results. Incomplete metadata and premium resources
-     * remain visible without pre-disabling download buttons.
+     * Confirmed premium resources, external distributions, and non-JAR
+     * deliverables are omitted from catalog results. Incomplete metadata
+     * remains visible without pre-disabling download buttons.
      *
      * @param  array<string, mixed>  $resource
      */
     private function shouldExcludeFromCatalog(array $resource): bool
     {
-        return $this->isConfirmedExternal($resource) || $this->isConfirmedNonJar($resource);
+        return $this->isPremium($resource) || $this->isConfirmedExternal($resource) || $this->isConfirmedNonJar($resource);
     }
 
     /**
@@ -1861,8 +1861,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return true;
         }
 
-        if (is_array($premium) && (float) ($premium['price'] ?? 0) > 0) {
-            return true;
+        if (is_array($premium)) {
+            $nestedPrice = $premium['price'] ?? 0;
+            if (is_numeric($nestedPrice) && (float) $nestedPrice > 0) {
+                return true;
+            }
         }
 
         // SpiGet also publishes a top-level price. A positive price is premium
