@@ -72,7 +72,14 @@ final class ModpackCreationWizardTest extends TestCase
         });
     }
 
-    public function test_wizard_submits_the_selected_release_and_queues_the_archive_after_creation(): void
+    /** @return array<string, array{bool}> */
+    public static function curseForgeManifestAvailability(): array
+    {
+        return ['automatic build' => [true], 'manual build' => [false]];
+    }
+
+    #[DataProvider('curseForgeManifestAvailability')]
+    public function test_wizard_submits_the_selected_release_and_queues_the_archive_after_creation(bool $manifestAvailable): void
     {
         $runner = PluginBackgroundRunner::fake();
         $this->app->instance(PluginBackgroundRunner::class, $runner);
@@ -80,6 +87,16 @@ final class ModpackCreationWizardTest extends TestCase
             'MC_VERSION' => 'latest',
             'NEOFORGE_VERSION' => 'latest',
         ]);
+        $archive = tempnam(sys_get_temp_dir(), 'curseforge-fixture');
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($archive, ZipArchive::OVERWRITE));
+        $zip->addFromString('manifest.json', json_encode([
+            'manifestType' => 'minecraftModpack',
+            'minecraft' => ['version' => '1.21.1', 'modLoaders' => [['id' => 'neoforge-21.1.266', 'primary' => true]]],
+        ], JSON_THROW_ON_ERROR));
+        $zip->close();
+        $bytes = file_get_contents($archive);
+        unlink($archive);
         Http::fake([
             'api.modrinth.com/v2/tag/game_version' => Http::response([['version' => '1.21.1', 'version_type' => 'release']]),
             'api.curseforge.com/v1/mods/search*' => Http::response([
@@ -91,8 +108,17 @@ final class ModpackCreationWizardTest extends TestCase
             ]]]),
             'api.curseforge.com/v1/mods/925200/files/9620701' => Http::response(['data' => [
                 'id' => 9620701, 'fileName' => 'ATM10-8.6.zip', 'serverPackFileId' => 9620727,
+                'downloadUrl' => $manifestAvailable ? 'https://edge.forgecdn.net/client.zip' : null,
                 'gameVersions' => ['1.21.1', 'NeoForge'],
             ]]),
+            'edge.forgecdn.net/client.zip' => static function ($request) use ($bytes) {
+                $total = strlen($bytes);
+                preg_match('/^bytes=(?:(\d+)-(\d+)|-(\d+))$/', $request->header('Range')[0], $range);
+                $first = isset($range[3]) ? max(0, $total - (int) $range[3]) : (int) $range[1];
+                $last = isset($range[3]) ? $total - 1 : (int) $range[2];
+
+                return Http::response(substr($bytes, $first, $last - $first + 1), 206, ['Content-Range' => "bytes {$first}-{$last}/{$total}"]);
+            },
             'api.curseforge.com/v1/mods/925200/files/9620727' => Http::response(['data' => [
                 'id' => 9620727, 'fileName' => 'ServerFiles-8.6.zip',
                 'parentProjectFileId' => 9620701, 'isServerPack' => true,
@@ -105,6 +131,7 @@ final class ModpackCreationWizardTest extends TestCase
             self::assertGreaterThan(0, DB::transactionLevel());
             self::assertSame(7, $data['egg_id']);
             self::assertSame('1.21.1', $data['environment']['MC_VERSION']);
+            self::assertSame('21.1.266', $data['environment']['NEOFORGE_VERSION']);
             self::assertSame('java -jar server.jar', $data['startup']);
             self::assertSame('ghcr.io/pelican-eggs/yolks:java_21', $data['image']);
             self::assertFalse($data['start_on_completion']);
@@ -126,12 +153,16 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSee('ATM10-8.6.zip')
             ->set('data.mm_version', '9620701')
             ->assertSet('data.egg_id', 7)
-            ->assertSet('data.environment.MC_VERSION', '1.21.1')
-            ->assertSee('could not determine the required loader build')
-            ->call('nextModpackStep')
-            ->assertHasErrors('data.mm_confirm_compatibility')
-            ->set('data.mm_confirm_compatibility', true)
-            ->call('nextModpackStep')
+            ->assertSet('data.environment.MC_VERSION', '1.21.1');
+        if ($manifestAvailable) {
+            $wizard->assertSet('data.environment.NEOFORGE_VERSION', '21.1.266')
+                ->assertDontSee('could not determine the required loader build');
+        } else {
+            $wizard->assertSee('could not determine the required loader build')
+                ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
+                ->set('data.mm_confirm_compatibility', true);
+        }
+        $wizard->call('nextModpackStep')
             ->assertHasNoErrors()
             ->set('data.mm_modpack', false)
             ->assertDontSee('All the Mods 10')
@@ -141,9 +172,11 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSet('data.mm_minecraft', '1.21.1')
             ->assertSet('data.mm_version', '9620701');
 
-        $wizard->set('data.mm_confirm_compatibility', true)
-            ->set('data.environment.NEOFORGE_VERSION', '21.1.266')
-            ->set('data.start_on_completion', true)->call('create')->assertHasErrors('data.mm_project');
+        if (!$manifestAvailable) {
+            $wizard->set('data.mm_confirm_compatibility', true)
+                ->set('data.environment.NEOFORGE_VERSION', '21.1.266');
+        }
+        $wizard->set('data.start_on_completion', true)->call('create')->assertHasErrors('data.mm_project');
         self::assertSame([], $runner->spawned);
         $wizard->set('data.start_on_completion', false)
             ->set('data.image', 'ghcr.io/pelican-eggs/yolks:java_17')->call('create')->assertHasErrors('data.image')
