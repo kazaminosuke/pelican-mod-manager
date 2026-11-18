@@ -3,6 +3,8 @@
 namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
@@ -11,6 +13,8 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\FtbModpackSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Sources\TechnicModpackSource;
+use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Throwable;
 
@@ -285,7 +289,11 @@ final class ModpackCatalog
         }
 
         $resolvedVersion = (string) $download['version_id'];
-        $usableGeneric = preg_match('/^[A-Za-z0-9]{1,8}$/', $projectId) === 1
+        $metadata = $this->inspectModrinthArchive($download['url']);
+        $minecraft = $metadata['minecraft'] ?? $download['minecraft'] ?? null;
+        $java = JavaRuntimeImage::preferredLabel($minecraft);
+        $usableGeneric = ($metadata['generic_egg'] ?? false) && in_array($java, ['Java 8', 'Java 16', 'Java 17'], true)
+            && preg_match('/^[A-Za-z0-9]{1,8}$/', $projectId) === 1
             && preg_match('/^[A-Za-z0-9]{1,8}$/', $resolvedVersion) === 1;
 
         return new ModpackDescriptor(
@@ -294,9 +302,9 @@ final class ModpackCatalog
             title: $projectId,
             versionId: $resolvedVersion,
             versionName: (string) ($download['version_number'] ?? $resolvedVersion),
-            minecraftVersion: $download['minecraft'] ?? null,
-            loader: $download['loader'] ?? null,
-            loaderVersion: null,
+            minecraftVersion: $minecraft,
+            loader: $metadata['loader'] ?? $download['loader'] ?? null,
+            loaderVersion: $metadata['loader_version'] ?? null,
             iconUrl: null,
             provisioningProfileId: $usableGeneric ? 'modrinth-generic' : null,
             variables: $usableGeneric ? ['PROJECT_ID' => $projectId, 'VERSION_ID' => $resolvedVersion] : [],
@@ -305,6 +313,52 @@ final class ModpackCatalog
             downloadUrl: (string) $download['url'],
             filename: (string) ($download['filename'] ?? ''),
         );
+    }
+
+    /** @return array{minecraft: ?string, loader: ?string, loader_version: ?string, generic_egg: bool}|null */
+    private function inspectModrinthArchive(string $url): ?array
+    {
+        if (parse_url($url, PHP_URL_SCHEME) !== 'https' || parse_url($url, PHP_URL_HOST) !== 'cdn.modrinth.com') {
+            return null;
+        }
+
+        $key = 'mod-manager:mrpack-install-metadata:'.hash('sha256', $url);
+
+        return Cache::remember($key, 600, static function () use ($url): ?array {
+            $temp = tempnam(sys_get_temp_dir(), 'mrpack-index');
+            if ($temp === false) {
+                return null;
+            }
+
+            try {
+                $body = Http::timeout(5)->connectTimeout(2)
+                    ->withOptions(['stream' => true, 'allow_redirects' => false])
+                    ->get($url)->toPsrResponse()->getBody();
+                $limit = 8 * 1024 * 1024;
+                $remaining = $limit;
+                try {
+                    while (!$body->eof() && $remaining > 0) {
+                        $chunk = $body->read(min($remaining, 65536));
+                        if ($chunk === '' || file_put_contents($temp, $chunk, FILE_APPEND) !== strlen($chunk)) {
+                            return null;
+                        }
+                        $remaining -= strlen($chunk);
+                    }
+                    if (!$body->eof()) {
+                        return null;
+                    }
+                } finally {
+                    $body->close();
+                }
+
+                return ModpackArchive::modrinthInstallMetadata($temp);
+            } catch (Throwable) {
+                // The archive installer can still validate the pack later.
+                return null;
+            } finally {
+                unlink($temp);
+            }
+        });
     }
 
     private function describeCurseForge(Server $server, string $projectId, ?string $versionId): ?ModpackDescriptor

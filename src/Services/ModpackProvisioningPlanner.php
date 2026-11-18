@@ -70,7 +70,8 @@ final class ModpackProvisioningPlanner
             $archiveVariables = ['MC_VERSION' => $pack->minecraftVersion, 'MINECRAFT_VERSION' => $pack->minecraftVersion];
         }
         if ($pack->loader !== null && $pack->loaderVersion !== null) {
-            $archiveVariables[strtoupper($pack->loader).'_VERSION'] = $pack->loaderVersion;
+            $variable = $pack->loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($pack->loader).'_VERSION';
+            $archiveVariables[$variable] = $pack->loaderVersion;
         }
 
         $curseForge = $pack->provider === ModpackProvider::CurseForge->value;

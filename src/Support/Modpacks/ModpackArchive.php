@@ -114,12 +114,63 @@ final class ModpackArchive
         return $files;
     }
 
-    private static function fromModrinth(ZipArchive $zip, string $json): ModpackManifest
+    /** @return array{minecraft: ?string, loader: ?string, loader_version: ?string, generic_egg: bool} */
+    public static function modrinthInstallMetadata(string $zipPath): array
     {
-        $index = self::decodeObject($json, 'modrinth.index.json');
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath) !== true) {
+            throw new ModpackException('The Modrinth archive could not be opened.');
+        }
+
+        try {
+            $json = $zip->getFromName('modrinth.index.json', self::MAX_OVERRIDE_BYTES);
+            if (!is_string($json)) {
+                throw new ModpackException('The archive has no Modrinth index.');
+            }
+            $index = self::decodeObject($json, 'modrinth.index.json');
+            self::assertModrinthIndex($index);
+            $dependencies = (array) ($index['dependencies'] ?? []);
+            [$loader, $loaderVersion] = self::modrinthLoader($dependencies);
+            $compatible = $loader !== null;
+            foreach ((array) ($index['files'] ?? []) as $file) {
+                $server = $file['env']['server'] ?? null;
+                if (in_array($server, ['optional', 'unsupported'], true)) {
+                    continue;
+                }
+
+                // The official generic Egg selects explicitly required
+                // files and saves them by download basename under mods/.
+                $url = self::firstHttpsUrl($file['downloads'] ?? null);
+                $path = $url === null ? '' : rawurldecode((string) parse_url($url, PHP_URL_PATH));
+                if ($server !== 'required' || $path === '' || ($file['path'] ?? '') !== 'mods/'.basename($path)) {
+                    $compatible = false;
+                    break;
+                }
+            }
+
+            return [
+                'minecraft' => self::nullableString($dependencies['minecraft'] ?? null),
+                'loader' => $loader,
+                'loader_version' => $loaderVersion,
+                'generic_egg' => $compatible,
+            ];
+        } finally {
+            $zip->close();
+        }
+    }
+
+    /** @param array<string, mixed> $index */
+    private static function assertModrinthIndex(array $index): void
+    {
         if ((int) ($index['formatVersion'] ?? 0) !== 1 || ($index['game'] ?? null) !== 'minecraft') {
             throw new ModpackException('Unsupported Modrinth modpack index.');
         }
+    }
+
+    private static function fromModrinth(ZipArchive $zip, string $json): ModpackManifest
+    {
+        $index = self::decodeObject($json, 'modrinth.index.json');
+        self::assertModrinthIndex($index);
 
         $dependencies = is_array($index['dependencies'] ?? null) ? $index['dependencies'] : [];
         [$loader, $loaderVersion] = self::modrinthLoader($dependencies);
