@@ -235,6 +235,7 @@ final class ModpackInstallerTest extends TestCase
         $wings->files['config/keep.toml'] = 'local';
         $zip = $this->pack([
             'ServerFiles/mods/example.jar' => "PK\x03\x04jar",
+            'ServerFiles/local/kubejs/dev.json' => '{}',
             'ServerFiles/mods/README.txt' => 'notes',
             'ServerFiles/config/keep.toml' => 'pack',
             'ServerFiles/defaultconfigs/new.toml' => 'new',
@@ -249,11 +250,12 @@ final class ModpackInstallerTest extends TestCase
             'neoforge', '1.21.1', 'neoforge', '1.21.1', static function (): void {},
         );
 
-        self::assertSame(2, $result->installed);
+        self::assertSame(3, $result->installed);
         self::assertSame(1, $result->skipped);
         self::assertSame([
             'config/keep.toml' => 'local',
             'mods/example.jar' => "PK\x03\x04jar",
+            'local/kubejs/dev.json' => '{}',
             'defaultconfigs/new.toml' => 'new',
         ], $wings->files);
     }

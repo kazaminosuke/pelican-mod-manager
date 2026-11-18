@@ -81,8 +81,9 @@ final class ModpackArchive
 
             $parts = explode('/', $path, 3);
             $root = '';
-            if (!in_array($parts[0], $roots, true)) {
-                if (!isset($parts[2]) || !in_array($parts[1], $roots, true)) {
+            if (!in_array($parts[0], $roots, true) && !str_starts_with($path, 'local/kubejs/')) {
+                if (!isset($parts[2]) || (!in_array($parts[1], $roots, true)
+                    && !($parts[1] === 'local' && str_starts_with($parts[2], 'kubejs/')))) {
                     continue;
                 }
 

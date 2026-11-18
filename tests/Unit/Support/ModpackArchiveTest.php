@@ -92,6 +92,28 @@ final class ModpackArchiveTest extends TestCase
         self::assertFalse(ModpackArchive::modrinthInstallMetadata($otherPath)['generic_egg']);
     }
 
+    public function test_server_zip_with_a_root_local_kubejs_directory_has_a_single_pack_root(): void
+    {
+        $path = $this->zip([
+            'config/example.toml' => 'config',
+            'mods/example.jar' => 'jar',
+            'local/kubejs/dev.json' => '{}',
+            'local/other.txt' => 'unrelated',
+            'neoforge-21.1.266-installer.jar' => 'launcher',
+            'startserver.sh' => 'script',
+        ]);
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($path));
+        try {
+            self::assertSame(
+                ['config/example.toml', 'mods/example.jar', 'local/kubejs/dev.json'],
+                array_column(ModpackArchive::serverFiles($zip), 'path'),
+            );
+        } finally {
+            $zip->close();
+        }
+    }
+
     public function test_unsafe_modrinth_path_is_rejected(): void
     {
         $path = $this->zip([
