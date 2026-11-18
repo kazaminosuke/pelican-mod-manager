@@ -47,10 +47,10 @@ final class SourceCache
                 return $entry['data'];
             }
 
-            if ($this->hasFailureMarker($spec)) {
+            if (($marker = $this->activeFailureMarker($spec)) !== null) {
                 $status = $entry !== null ? 'STALE' : 'MISS';
 
-                return $entry !== null ? $entry['data'] : $this->emptyResult($spec);
+                return $entry !== null ? $entry['data'] : ($marker['search_preview'] ?? $this->emptyResult($spec));
             }
 
             if ($entry !== null && $this->supportsAsyncDispatch()) {
@@ -619,6 +619,12 @@ final class SourceCache
 
     private function hasFailureMarker(SourceFetchSpec $spec): bool
     {
+        return $this->activeFailureMarker($spec) !== null;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function activeFailureMarker(SourceFetchSpec $spec): ?array
+    {
         $key = $this->failureMarkerKey($spec);
         $memos = $this->memos();
         $failures = $memos['failures'];
@@ -642,10 +648,10 @@ final class SourceCache
                 $memos['failures'] = $failures;
             }
 
-            return false;
+            return null;
         }
 
-        return true;
+        return $marker;
     }
 
     private function hasActiveFailureMarker(mixed $marker, int $now): bool
@@ -663,6 +669,11 @@ final class SourceCache
             'v' => self::FAILURE_MARKER_VERSION,
             'failed_until' => time() + $ttl,
         ];
+        if ($spec->operation === 'search' && $exception instanceof PartialSourceFetchException) {
+            // Reuse the partial listing for render requests during backoff.
+            // Only a complete fetch enters the authoritative cache key.
+            $marker['search_preview'] = $exception->fallback();
+        }
         $this->cache->put($this->failureMarkerKey($spec), $marker, $ttl);
         $this->rememberFailurePayload($this->failureMarkerKey($spec), $marker);
 
