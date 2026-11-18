@@ -26,6 +26,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\ArrayRecord;
 use Filament\Support\Enums\TextSize;
 use Filament\Support\Enums\Width;
 use Filament\Tables\Columns\ImageColumn;
@@ -102,6 +103,7 @@ class ModManagerPage extends Page implements HasTable
         InteractsWithTable::loadTable as protected baseLoadTable;
         InteractsWithTable::resetTableColumnManager as protected baseResetTableColumnManager;
         InteractsWithTable::removeTableFilter as protected baseRemoveTableFilter;
+        InteractsWithTable::resolveTableRecord as protected baseResolveTableRecord;
         InteractsWithTable::updatedTableFilters as protected baseUpdatedTableFilters;
         InteractsWithTable::updatedTableSearch as protected baseUpdatedTableSearch;
     }
@@ -263,6 +265,16 @@ class ModManagerPage extends Page implements HasTable
      */
     #[Locked]
     public array $catalogEnrichmentPeekKeys = [];
+
+    /**
+     * The Spigot records the current Livewire snapshot actually rendered.
+     * Filament must resolve actions against these stable IDs even if SWR
+     * refreshes, reorders, or temporarily loses the server-side search page.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    #[Locked]
+    public array $renderedSpigotRecords = [];
 
     /** Whether a still-valid scan result already exists, independent of background-operation state. */
     public bool $installedScanDataReady = false;
@@ -433,6 +445,41 @@ class ModManagerPage extends Page implements HasTable
     public function rendered($view, $html): void
     {
         RequestPerformanceProfiler::markRenderEnd();
+
+        $previous = $this->renderedSpigotRecords;
+        $this->renderedSpigotRecords = [];
+        if (!$this->isSpigotCatalog()) {
+            return;
+        }
+
+        $keyName = ArrayRecord::getKeyName();
+        foreach ($this->cachedTableRecords ?? [] as $record) {
+            if (is_array($record) && ($record['source'] ?? null) === ProjectSourceKey::Spigot->value && isset($record[$keyName])) {
+                $this->renderedSpigotRecords[$record[$keyName]] = array_intersect_key($record, array_flip([
+                    $keyName, 'source', 'project_id', 'title', 'slug', 'project_type',
+                ]));
+            }
+        }
+
+        // A modal can remain open while polling renders a refreshed page.
+        $mountedKey = $this->mountedActions[0]['context']['recordKey'] ?? null;
+        if (is_string($mountedKey) && isset($previous[$mountedKey])) {
+            $this->renderedSpigotRecords[$mountedKey] ??= $previous[$mountedKey];
+        }
+    }
+
+    private function isSpigotCatalog(): bool
+    {
+        return $this->activeTab !== 'installed' && $this->getCurrentSource() instanceof SpigotSource;
+    }
+
+    protected function resolveTableRecord(?string $key): \Illuminate\Database\Eloquent\Model|array|null
+    {
+        if ($this->isSpigotCatalog()) {
+            return $key === null ? null : ($this->renderedSpigotRecords[$key] ?? null);
+        }
+
+        return $this->baseResolveTableRecord($key);
     }
 
     public function dehydrate(): void
@@ -2797,6 +2844,9 @@ class ModManagerPage extends Page implements HasTable
 
                 $hits = array_map(function (array $hit) use ($currentSource) {
                     $hit['source'] = $currentSource->getKey()->value;
+                    if ($currentSource instanceof SpigotSource) {
+                        $hit[ArrayRecord::getKeyName()] = 'spigot:'.$hit['project_id'];
+                    }
 
                     return $hit;
                 }, $response['hits']);
