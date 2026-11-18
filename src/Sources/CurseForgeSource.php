@@ -170,9 +170,16 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
      *
      * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
      */
-    public function searchModpacks(Server $server, int $page = 1, ?string $search = null, bool $constrainToServer = true): array
+    public function searchModpacks(
+        Server $server,
+        int $page = 1,
+        ?string $search = null,
+        bool $constrainToServer = true,
+        ?string $minecraft = null,
+        ?string $loader = null,
+    ): array
     {
-        $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer));
+        $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer, $minecraft, $loader));
 
         return $this->normalizeSearchResult($result);
     }
@@ -633,7 +640,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         );
     }
 
-    private function buildModpackSearchSpec(Server $server, int $page, ?string $search, bool $constrainToServer = true): ?SourceFetchSpec
+    private function buildModpackSearchSpec(Server $server, int $page, ?string $search, bool $constrainToServer, ?string $minecraft, ?string $loader): ?SourceFetchSpec
     {
         if (!$this->isConfigured()) {
             return null;
@@ -648,15 +655,19 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             'sortField' => self::SORT_FIELD_TOTAL_DOWNLOADS,
             'sortOrder' => 'desc',
         ];
-        if ($constrainToServer) {
-            $version = MinecraftVersionResolver::resolve($server);
-            if ($version !== null) {
-                $params['gameVersion'] = $version;
-            }
-            $loader = $this->modLoaderTypeFor($server);
-            if ($loader !== null) {
-                $params['modLoaderType'] = $loader;
-            }
+        $minecraft ??= $constrainToServer ? MinecraftVersionResolver::resolve($server) : null;
+        if ($minecraft !== null) {
+            $params['gameVersion'] = $minecraft;
+        }
+        $loaderType = match ($loader) {
+            'forge' => 1,
+            'fabric' => 4,
+            'quilt' => 5,
+            'neoforge' => 6,
+            default => $constrainToServer ? $this->modLoaderTypeFor($server) : null,
+        };
+        if ($loaderType !== null) {
+            $params['modLoaderType'] = $loaderType;
         }
         $search = trim((string) $search);
         if ($search !== '') {

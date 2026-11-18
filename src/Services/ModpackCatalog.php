@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
+use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Sources\AtlauncherModpackSource;
@@ -25,6 +26,100 @@ final class ModpackCatalog
         private readonly TechnicModpackSource $technic,
         private readonly AtlauncherModpackSource $atlauncher,
     ) {}
+
+    public const PAGE_SIZE = 20;
+
+    /** @return array<string, string> */
+    public function providers(): array
+    {
+        $options = [];
+        foreach (ModpackProvider::cases() as $provider) {
+            if ($provider !== ModpackProvider::CurseForge || $this->curseForge->isConfigured()) {
+                $options[$provider->value] = $provider->getLabel();
+            }
+        }
+
+        return $options;
+    }
+
+    /** @return array<string, string> */
+    public function minecraftVersions(): array
+    {
+        return $this->modrinth->catalogVersionOptions();
+    }
+
+    /** @return array<string, string> */
+    public function loaders(): array
+    {
+        $options = [];
+        foreach ([MinecraftLoader::Forge, MinecraftLoader::NeoForge, MinecraftLoader::Fabric, MinecraftLoader::Quilt] as $loader) {
+            $options[$loader->value] = $loader->getLabel();
+        }
+
+        return $options;
+    }
+
+    /**
+     * @return array{hits: list<array<string, mixed>>, total_hits: int, error: bool}
+     */
+    public function searchPage(
+        Server $server,
+        ModpackProvider $provider,
+        string $query,
+        int $page,
+        ?string $minecraft = null,
+        ?string $loader = null,
+    ): array {
+        $query = mb_substr(trim($query), 0, 100);
+        $page = min(500, max(1, $page));
+        $minecraft = is_string($minecraft) && preg_match('/^\d+(?:\.\d+){1,2}$/D', $minecraft) === 1 ? $minecraft : null;
+        $loader = in_array($loader, ['forge', 'neoforge', 'fabric', 'quilt'], true) ? $loader : null;
+
+        try {
+            $result = match ($provider) {
+                ModpackProvider::Modrinth => $this->modrinth->searchModpacks($server, $page, $query, false, $minecraft, $loader),
+                ModpackProvider::CurseForge => $this->curseForge->searchModpacks($server, $page, $query, false, $minecraft, $loader),
+                ModpackProvider::Ftb => $this->providerHits($this->ftb->search($query)),
+                ModpackProvider::Technic => $this->providerHits($this->technic->search($query)),
+                ModpackProvider::Atlauncher => $this->providerHits($this->atlauncher->search($query)),
+            };
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return ['hits' => [], 'total_hits' => 0, 'error' => true];
+        }
+
+        $hits = [];
+        foreach ($result['hits'] as $hit) {
+            if (!is_array($hit) || blank($hit['project_id'] ?? null)) {
+                continue;
+            }
+
+            $hit['key'] = $provider->value.':'.$hit['project_id'];
+            $hit['title'] = (string) ($hit['title'] ?? '');
+            $hit['source'] = $provider->getLabel();
+            $hits[] = $hit;
+        }
+
+        return ['hits' => $hits, 'total_hits' => min((int) $result['total_hits'], 10000), 'error' => false];
+    }
+
+    /**
+     * @param  list<ModpackDescriptor>  $packs
+     * @return array{hits: list<array<string, mixed>>, total_hits: int}
+     */
+    private function providerHits(array $packs): array
+    {
+        return [
+            'hits' => array_map(static fn (ModpackDescriptor $pack): array => [
+                'project_id' => $pack->id,
+                'title' => $pack->title,
+                'icon_url' => $pack->iconUrl,
+                'description' => $pack->minecraftVersion !== null ? 'Minecraft '.$pack->minecraftVersion : '',
+            ], $packs),
+            'total_hits' => count($packs),
+        ];
+    }
 
     /**
      * Options for a searchable install field. Keys are `source:projectId`.

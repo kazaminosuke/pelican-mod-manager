@@ -12,11 +12,16 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
+use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Sources\AtlauncherModpackSource;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
+use Kazaminosuke\ModManager\Sources\FtbModpackSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
+use Kazaminosuke\ModManager\Sources\TechnicModpackSource;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\SourceCache;
@@ -94,6 +99,36 @@ final class ModpackSearchTest extends TestCase
         self::assertSame('atm', $executor->spec->arguments['params']['searchFilter']);
         self::assertSame('1.21.1', $executor->spec->arguments['params']['gameVersion']);
         self::assertSame(4, $executor->spec->arguments['params']['modLoaderType']);
+    }
+
+    public function test_wizard_catalog_passes_filters_and_page_to_the_selected_provider(): void
+    {
+        $executor = new CapturingExecutor(['hits' => [['project_id' => '10', 'title' => 'Pack']], 'total_hits' => 40]);
+        $cache = $this->cache($executor);
+        $catalog = new ModpackCatalog(
+            new ModrinthSource($cache),
+            new CurseForgeSource($cache),
+            new FtbModpackSource(),
+            new TechnicModpackSource(),
+            new AtlauncherModpackSource(),
+        );
+
+        $result = $catalog->searchPage(new Server(), ModpackProvider::CurseForge, '', 2, '1.21.1', 'neoforge');
+        self::assertSame('curseforge:10', $result['hits'][0]['key']);
+        self::assertSame('CurseForge', $result['hits'][0]['source']);
+        self::assertSame(40, $result['total_hits']);
+        self::assertSame('1.21.1', $executor->spec->arguments['params']['gameVersion']);
+        self::assertSame(6, $executor->spec->arguments['params']['modLoaderType']);
+        self::assertSame(20, $executor->spec->arguments['params']['index']);
+
+        $catalog->searchPage(new Server(), ModpackProvider::Modrinth, 'sky', 2, '1.20.1', 'fabric');
+        $query = $executor->spec->arguments['query'];
+        self::assertSame('sky', $query['query']);
+        self::assertSame(20, $query['offset']);
+        self::assertSame(
+            [['project_type:modpack'], ['versions:1.20.1'], ['categories:fabric']],
+            json_decode($query['facets'], true, 512, JSON_THROW_ON_ERROR),
+        );
     }
 
     public function test_curseforge_server_pack_is_downloaded_instead_of_the_client_zip(): void
@@ -245,11 +280,13 @@ final class CapturingExecutor implements SourceFetchExecutorInterface
 {
     public ?SourceFetchSpec $spec = null;
 
+    public function __construct(private readonly array $result = ['hits' => [], 'total_hits' => 0]) {}
+
     public function fetch(SourceFetchSpec $spec, float $timeoutSeconds): mixed
     {
         $this->spec = $spec;
 
-        return ['hits' => [], 'total_hits' => 0];
+        return $this->result;
     }
 
     public function emptyResult(SourceFetchSpec $spec): mixed
