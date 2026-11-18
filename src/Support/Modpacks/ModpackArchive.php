@@ -47,6 +47,73 @@ final class ModpackArchive
         }
     }
 
+    /**
+     * Return the installable payload from a provider-identified server ZIP.
+     * The egg supplies the launcher and loader. Pack scripts, bundled
+     * runtimes, server configuration and worlds are left out.
+     *
+     * @return list<array{path: string, index: int, size: int}>
+     */
+    public static function serverFiles(ZipArchive $zip): array
+    {
+        $roots = ['mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'global_packs', 'openloader', 'resourcepacks'];
+        $byRoot = [];
+
+        for ($index = 0; $index < $zip->numFiles; $index++) {
+            $name = $zip->getNameIndex($index);
+            if (!is_string($name)) {
+                throw new ModpackException('A server pack entry could not be read.');
+            }
+
+            $name = str_replace('\\', '/', $name);
+            $path = ModpackPaths::safeRelative(rtrim($name, '/'));
+            if ($path === null || str_starts_with($name, '/') || str_contains($path, ':')) {
+                throw new ModpackException('The server pack contains an unsafe file path.');
+            }
+            if ($zip->getExternalAttributesIndex($index, $os, $attributes)
+                && $os === ZipArchive::OPSYS_UNIX
+                && (($attributes >> 16) & 0170000) === 0120000) {
+                throw new ModpackException('The server pack contains a symbolic link.');
+            }
+            if (str_ends_with($name, '/')) {
+                continue;
+            }
+
+            $parts = explode('/', $path, 3);
+            $root = '';
+            if (!in_array($parts[0], $roots, true)) {
+                if (!isset($parts[2]) || !in_array($parts[1], $roots, true)) {
+                    continue;
+                }
+
+                $root = $parts[0];
+                $path = substr($path, strlen($root) + 1);
+            }
+            if (!str_contains($path, '/') || ModpackPaths::isProtected($path)
+                || (str_starts_with($path, 'mods/') && !str_ends_with(strtolower($path), '.jar'))) {
+                continue;
+            }
+
+            $stat = $zip->statIndex($index);
+            $key = strtolower($path);
+            if ($stat === false || isset($byRoot[$root][$key]) || !empty($stat['encryption_method'])) {
+                throw new ModpackException("Server pack entry [{$path}] is unreadable or duplicated.");
+            }
+            $byRoot[$root][$key] = ['path' => $path, 'index' => $index, 'size' => $stat['size']];
+        }
+
+        if (count($byRoot) !== 1) {
+            throw new ModpackException('The server pack must contain one directory with modpack files.');
+        }
+
+        $files = array_values(reset($byRoot));
+        if (count($files) > 10000 || array_sum(array_column($files, 'size')) > 8 * 1024 ** 3) {
+            throw new ModpackException('The server pack contains too many files or exceeds the unpacked size limit.');
+        }
+
+        return $files;
+    }
+
     private static function fromModrinth(ZipArchive $zip, string $json): ModpackManifest
     {
         $index = self::decodeObject($json, 'modrinth.index.json');

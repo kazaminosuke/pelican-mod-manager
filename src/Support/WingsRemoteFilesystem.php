@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Support;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use Psr\Http\Message\StreamInterface;
 
 /**
  * Thin Wings file operations used by install/update transactions.
@@ -175,6 +176,21 @@ class WingsRemoteFilesystem
         if ($response->failed()) {
             throw new Exception("Failed to write [{$path}].");
         }
+    }
+
+    public function putStream(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $path,
+        StreamInterface $contents,
+    ): void {
+        $fileRepository->setServer($server)
+            ->getHttpClient()
+            ->timeout(self::FOREGROUND_PULL_TIMEOUT_SECONDS)
+            ->withQueryParameters(['file' => $path])
+            ->withBody($contents, 'application/octet-stream')
+            ->post("/api/servers/{$server->uuid}/files/write")
+            ->throw();
     }
 
     public function listedFileSize(array $item): ?int

@@ -4,6 +4,7 @@ namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use GuzzleHttp\Psr7\Utils;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Support\ArchiveSignature;
@@ -15,6 +16,7 @@ use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackRemoteFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Throwable;
+use ZipArchive;
 
 /**
  * Installs a modpack onto an existing server without deleting worlds or
@@ -50,7 +52,7 @@ final class ModpackInstaller
         $this->placed = [];
         $this->overrideDirectoryListings = [];
         $manifest = ModpackArchive::read($zipPath);
-        $this->assertLoaderCompatible($manifest, $serverLoader);
+        $this->assertLoaderCompatible($manifest->loader, $serverLoader);
         $warnings = $manifest->skipped;
         if ($manifest->minecraftVersion !== null
             && $serverMinecraftVersion !== null
@@ -105,13 +107,109 @@ final class ModpackInstaller
         );
     }
 
-    private function assertLoaderCompatible(ModpackManifest $manifest, ?string $serverLoader): void
+    /**
+     * @param  callable(int, int): void  $progress
+     */
+    public function installServerPack(
+        Server $server,
+        DaemonFileRepository $fileRepository,
+        string $zipPath,
+        string $name,
+        string $version,
+        ?string $loader,
+        ?string $minecraftVersion,
+        ?string $serverLoader,
+        ?string $serverMinecraftVersion,
+        callable $progress,
+    ): ModpackInstallResult {
+        $this->placed = [];
+        $this->overrideDirectoryListings = [];
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath) !== true) {
+            throw new ModpackException('The CurseForge server pack could not be opened.');
+        }
+
+        $installed = 0;
+        $warnings = [];
+        try {
+            $this->assertLoaderCompatible($loader, $serverLoader);
+            if ($minecraftVersion !== null && $serverMinecraftVersion !== null && $minecraftVersion !== $serverMinecraftVersion) {
+                $warnings[] = 'minecraft-version:'.$minecraftVersion;
+            }
+
+            $files = ModpackArchive::serverFiles($zip);
+            foreach ($files as $i => $file) {
+                $path = $file['path'];
+                [$directory, $filename] = ModpackPaths::split($path);
+                if (!$this->overrideExists($server, $fileRepository, $directory, $filename)) {
+                    $this->placeServerPackFile($server, $fileRepository, $zip, $file);
+                    $this->overrideDirectoryListings[$directory][strtolower($filename)] = true;
+                    $this->placed[] = ['directory' => $directory, 'filename' => $filename, 'backup' => null];
+                    $installed++;
+                }
+                $progress($i + 1, count($files));
+            }
+        } catch (Throwable $exception) {
+            $this->rollback($server, $fileRepository);
+
+            throw $exception;
+        } finally {
+            $zip->close();
+        }
+
+        return new ModpackInstallResult($name, $version, $installed, count($files) - $installed, $warnings);
+    }
+
+    /** @param array{path: string, index: int, size: int} $file */
+    private function placeServerPackFile(Server $server, DaemonFileRepository $fileRepository, ZipArchive $zip, array $file): void
     {
-        if ($serverLoader === null || $manifest->loader === null || $serverLoader === $manifest->loader) {
+        [$directory, $filename] = ModpackPaths::split($file['path']);
+        $resource = $zip->getStreamIndex($file['index']);
+        if ($resource === false) {
+            throw new ModpackException("Server pack entry [{$file['path']}] could not be opened.");
+        }
+
+        $temp = '.mod-manager-'.bin2hex(random_bytes(8)).'.tmp';
+        try {
+            if (str_starts_with($file['path'], 'mods/')) {
+                // The stream is forward-only. Reopen it after checking the
+                // signature so the upload includes the complete JAR.
+                $signature = fread($resource, 4);
+                if (!is_string($signature) || !ArchiveSignature::isZip($signature)) {
+                    throw new ModpackException("Server pack mod [{$file['path']}] is not a valid JAR.");
+                }
+                fclose($resource);
+                $resource = $zip->getStreamIndex($file['index']);
+                if ($resource === false) {
+                    throw new ModpackException("Server pack entry [{$file['path']}] could not be reopened.");
+                }
+            }
+
+            $stream = Utils::streamFor($resource, ['size' => $file['size']]);
+            try {
+                $this->wings->putStream($fileRepository, $server, $directory.'/'.$temp, $stream);
+                $this->wings->move($fileRepository, $server, $directory, $temp, $filename);
+            } finally {
+                $stream->close();
+            }
+        } catch (Throwable $exception) {
+            $this->wings->deleteQuietly($fileRepository, $server, $directory, $temp);
+
+            throw $exception;
+        } finally {
+            if (is_resource($resource)) {
+                fclose($resource);
+            }
+        }
+    }
+
+    private function assertLoaderCompatible(?string $packLoader, ?string $serverLoader): void
+    {
+        if ($serverLoader === null || $packLoader === null || $serverLoader === $packLoader) {
             return;
         }
 
-        throw new ModpackException("This modpack requires [{$manifest->loader}] but the server uses [{$serverLoader}].");
+        throw new ModpackException("This modpack requires [{$packLoader}] but the server uses [{$serverLoader}].");
     }
 
     /**

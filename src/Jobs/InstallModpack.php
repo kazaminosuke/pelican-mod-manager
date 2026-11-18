@@ -110,7 +110,7 @@ final class InstallModpack
 
             try {
                 $response = Http::timeout(180)
-                    ->withOptions(['sink' => $temp])
+                    ->withOptions(['sink' => $temp, 'allow_redirects' => ['protocols' => ['https']]])
                     ->get($file['url']);
                 $response->throw();
             } finally {
@@ -120,27 +120,36 @@ final class InstallModpack
                 }
             }
 
-            $result = $installer->installFromZip(
-                $server,
-                $fileRepository,
-                $temp,
-                MinecraftLoader::fromServer($server)?->value,
-                MinecraftVersionResolver::resolve($server),
-                function (int $progress, int $total) use ($operations, $leases, $server, $type, &$leaseRefreshedAt): void {
-                    if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
-                        $leases->refresh($this->serverId, $type, $this->leaseToken);
-                        $leaseRefreshedAt = microtime(true);
-                    }
+            $progress = function (int $progress, int $total) use ($operations, $leases, $server, $type, &$leaseRefreshedAt): void {
+                if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
+                    $leases->refresh($this->serverId, $type, $this->leaseToken);
+                    $leaseRefreshedAt = microtime(true);
+                }
 
-                    $operations->progress(
-                        $server,
-                        $type,
-                        InstalledOperationManager::OPERATION_MODPACK,
-                        $progress,
-                        $total,
-                    );
-                },
-            );
+                $operations->progress(
+                    $server,
+                    $type,
+                    InstalledOperationManager::OPERATION_MODPACK,
+                    $progress,
+                    $total,
+                );
+            };
+            $loader = MinecraftLoader::fromServer($server)?->value;
+            $minecraft = MinecraftVersionResolver::resolve($server);
+            $result = ($file['server_pack'] ?? false)
+                ? $installer->installServerPack(
+                    $server,
+                    $fileRepository,
+                    $temp,
+                    $this->projectId,
+                    $file['version_number'],
+                    $file['loader'] ?? null,
+                    $file['minecraft'] ?? null,
+                    $loader,
+                    $minecraft,
+                    $progress,
+                )
+                : $installer->installFromZip($server, $fileRepository, $temp, $loader, $minecraft, $progress);
 
             // The Installed list is a cached directory scan. Drop it so the
             // next view queues a scan instead of showing the pre-install files.

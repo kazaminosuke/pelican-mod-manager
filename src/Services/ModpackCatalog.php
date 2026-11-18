@@ -85,7 +85,7 @@ final class ModpackCatalog
     }
 
     /**
-     * @return array{source: string, project_id: string, version_id: string, version_number: string, filename: string, url: string}|null
+     * @return array{source: string, project_id: string, version_id: string, version_number: string, filename: string, url: string, minecraft?: ?string, loader?: ?string, server_pack?: bool}|null
      */
     public function latestFile(Server $server, string $source, string $projectId): ?array
     {
@@ -163,7 +163,7 @@ final class ModpackCatalog
     }
 
     /**
-     * @return array{source: string, project_id: string, version_id: string, version_number: string, filename: string, url: string}|null
+     * @return array{source: string, project_id: string, version_id: string, version_number: string, filename: string, url: string, minecraft?: ?string, loader?: ?string, server_pack?: bool}|null
      */
     public function file(Server $server, string $source, string $projectId, ?string $versionId = null): ?array
     {

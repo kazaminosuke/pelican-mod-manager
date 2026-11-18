@@ -11,6 +11,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Mockery;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\StreamInterface;
 use ZipArchive;
 
 final class ModpackInstallerTest extends TestCase
@@ -228,6 +229,75 @@ final class ModpackInstallerTest extends TestCase
         return $path;
     }
 
+    public function test_bundled_server_pack_streams_mods_and_keeps_server_files(): void
+    {
+        $wings = new MemoryModpackWings();
+        $wings->files['config/keep.toml'] = 'local';
+        $zip = $this->pack([
+            'ServerFiles/mods/example.jar' => "PK\x03\x04jar",
+            'ServerFiles/mods/README.txt' => 'notes',
+            'ServerFiles/config/keep.toml' => 'pack',
+            'ServerFiles/defaultconfigs/new.toml' => 'new',
+            'ServerFiles/server.properties' => 'protected',
+            'ServerFiles/world/level.dat' => 'world',
+            'ServerFiles/start.sh' => '#!/bin/sh',
+            'ServerFiles/server.jar' => 'bundled launcher',
+        ]);
+        $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
+        $result = $installer->installServerPack(
+            $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'ATM10', '8.6',
+            'neoforge', '1.21.1', 'neoforge', '1.21.1', static function (): void {},
+        );
+
+        self::assertSame(2, $result->installed);
+        self::assertSame(1, $result->skipped);
+        self::assertSame([
+            'config/keep.toml' => 'local',
+            'mods/example.jar' => "PK\x03\x04jar",
+            'defaultconfigs/new.toml' => 'new',
+        ], $wings->files);
+    }
+
+    public function test_bundled_server_pack_rolls_back_when_a_later_jar_is_invalid(): void
+    {
+        $wings = new MemoryModpackWings();
+        $wings->files['mods/local.jar'] = 'existing';
+        $zip = $this->pack([
+            'mods/example.jar' => "PK\x03\x04jar",
+            'mods/bad.jar' => '<html>not a JAR</html>',
+        ]);
+        $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
+
+        $this->expectException(ModpackException::class);
+        $this->expectExceptionMessage('not a valid JAR');
+        try {
+            $installer->installServerPack(
+                $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'Bad', '1',
+                'neoforge', '1.21.1', 'neoforge', '1.21.1', static function (): void {},
+            );
+        } finally {
+            self::assertSame(['mods/local.jar' => 'existing'], $wings->files);
+        }
+    }
+
+    public function test_bundled_server_pack_rejects_unsafe_paths_before_writing(): void
+    {
+        $wings = new MemoryModpackWings();
+        $zip = $this->pack(['mods/example.jar' => "PK\x03\x04jar", 'config/../../bad.toml' => 'unsafe']);
+        $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
+
+        $this->expectException(ModpackException::class);
+        $this->expectExceptionMessage('unsafe file path');
+        try {
+            $installer->installServerPack(
+                $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'Bad', '1',
+                'forge', null, 'forge', null, static function (): void {},
+            );
+        } finally {
+            self::assertSame([], $wings->files);
+        }
+    }
+
     private function server(): Server
     {
         $server = new Server();
@@ -360,6 +430,15 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
         string $contents,
     ): void {
         $this->files[ltrim($path, '/')] = $contents;
+    }
+
+    public function putStream(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $path,
+        StreamInterface $contents,
+    ): void {
+        $this->put($fileRepository, $server, $path, $contents->getContents());
     }
 
     private function path(string $directory, string $filename): string
