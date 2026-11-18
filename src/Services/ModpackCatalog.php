@@ -427,6 +427,7 @@ final class ModpackCatalog
             filename: $download['filename'],
             hasServerPack: $download['has_server_pack'],
             usesServerPack: $download['server_pack'],
+            artifactId: $download['artifact_id'],
         );
     }
 

@@ -26,6 +26,7 @@ final class CompatibilityResult
         public readonly string $provider,
         public readonly ?string $compatibilityWarning = null,
         public readonly ?string $serverFileStatus = null,
+        public readonly ?string $artifactId = null,
     ) {}
 
     /**

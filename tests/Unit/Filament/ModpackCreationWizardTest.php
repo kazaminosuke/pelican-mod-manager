@@ -155,6 +155,7 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('925200', $runner->spawned[0]['payload']['project_id']);
         self::assertSame([
             'egg_id' => '7', 'image' => 'ghcr.io/pelican-eggs/yolks:java_21', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
+            'artifact_id' => '9620727',
             'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => '21.1.266'],
         ], $runner->spawned[0]['payload']['selection']);
         self::assertGreaterThan(time(), $runner->spawned[0]['payload']['defer_until']);

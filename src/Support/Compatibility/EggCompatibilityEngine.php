@@ -506,6 +506,7 @@ final class EggCompatibilityEngine
             compatibilityWarning: $requirement->compatibilityWarning
                 ?? ($mode === ProvisioningMode::Archive ? $requirement->archiveCompatibilityWarning : null),
             serverFileStatus: $requirement->serverFileStatus,
+            artifactId: $requirement->artifactId,
         );
     }
 }

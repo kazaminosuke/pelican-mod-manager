@@ -28,5 +28,6 @@ final class PackRequirement
         public readonly ?string $compatibilityWarning = null,
         public readonly ?string $serverFileStatus = null,
         public readonly ?string $archiveCompatibilityWarning = null,
+        public readonly ?string $artifactId = null,
     ) {}
 }

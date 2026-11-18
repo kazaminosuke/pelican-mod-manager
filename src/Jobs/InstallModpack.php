@@ -114,7 +114,8 @@ final class InstallModpack
 
             if ($this->selection !== null && (
                 $file['version_id'] !== $this->versionId
-                || (!empty($this->selection['server_pack']) && empty($file['server_pack']))
+                || (isset($this->selection['server_pack']) && (bool) $this->selection['server_pack'] !== (bool) ($file['server_pack'] ?? false))
+                || (isset($this->selection['artifact_id']) && ($file['artifact_id'] ?? null) !== $this->selection['artifact_id'])
                 || (isset($file['minecraft'], $this->selection['minecraft']) && $file['minecraft'] !== $this->selection['minecraft'])
                 || (isset($file['loader'], $this->selection['loader']) && $file['loader'] !== $this->selection['loader'])
             )) {

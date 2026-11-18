@@ -345,6 +345,7 @@ final class ModpackCreationStep
                 'minecraft' => $result->minecraftVersion,
                 'loader' => $result->loader ?? $result->selected?->loader,
                 'server_pack' => $result->serverFileStatus === 'server_pack_selected',
+                'artifact_id' => $result->artifactId,
                 'variables' => $result->mode === ProvisioningMode::Archive ? array_intersect_key(
                     $environment,
                     array_flip(['MINECRAFT_VERSION', 'MC_VERSION', 'LOADER_VERSION', 'FORGE_VERSION', 'NEOFORGE_VERSION', 'QUILT_VERSION']),

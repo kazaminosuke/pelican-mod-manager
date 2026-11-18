@@ -103,6 +103,7 @@ final class ModpackProvisioningPlanner
                 default => null,
             },
             archiveCompatibilityWarning: $pack->loaderVersion === null ? 'loader_build_unknown' : null,
+            artifactId: $pack->artifactId,
             serverFileStatus: match (true) {
                 $pack->usesServerPack => 'server_pack_selected',
                 $pack->hasServerPack === true => 'server_pack_unavailable',
