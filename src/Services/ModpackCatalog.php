@@ -14,6 +14,7 @@ use Kazaminosuke\ModManager\Sources\FtbModpackSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Sources\TechnicModpackSource;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeManifestReader;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Throwable;
@@ -386,6 +387,19 @@ final class ModpackCatalog
         }
 
         $resolvedVersion = (string) $download['version_id'];
+        $metadata = null;
+        $url = $download['manifest_url'] ?? null;
+        if (is_string($url)) {
+            $metadata = Cache::remember('mod-manager:cf-manifest:'.hash('sha256', $url), 600, static function () use ($url): array {
+                try {
+                    $json = (new CurseForgeManifestReader())->read($url);
+
+                    return $json !== null ? (ModpackArchive::curseForgeInstallMetadata($json) ?? []) : [];
+                } catch (Throwable) {
+                    return [];
+                }
+            });
+        }
 
         return new ModpackDescriptor(
             provider: ModpackProvider::CurseForge->value,
@@ -393,9 +407,9 @@ final class ModpackCatalog
             title: $projectId,
             versionId: $resolvedVersion,
             versionName: (string) ($download['version_number'] ?? $resolvedVersion),
-            minecraftVersion: $download['minecraft'] ?? null,
-            loader: $download['loader'] ?? null,
-            loaderVersion: null,
+            minecraftVersion: $metadata['minecraft'] ?? $download['minecraft'] ?? null,
+            loader: $metadata['loader'] ?? $download['loader'] ?? null,
+            loaderVersion: $metadata['build'] ?? null,
             iconUrl: null,
             // The generic script handles these loaders and follows the
             // verified server file's parent for the client manifest.

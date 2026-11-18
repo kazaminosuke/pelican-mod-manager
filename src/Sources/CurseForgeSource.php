@@ -187,7 +187,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
      * Newest installable pack zip. A server pack is preferred over the
      * client installer when CurseForge publishes one.
      *
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string}|null
      */
     public function latestModpackDownload(Server $server, string $projectId): ?array
     {
@@ -270,7 +270,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     }
 
     /**
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string}|null
      */
     public function modpackDownloadById(string $projectId, string $fileId): ?array
     {
@@ -302,7 +302,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     /**
      * @param  array<string, mixed>  $release
      * @param  list<array<string, mixed>>|null  $listedFiles
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string}|null
      */
     private function resolveModpackRelease(string $projectId, array $release, ?array $listedFiles = null): ?array
     {
@@ -363,7 +363,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     /**
      * @param array<string, mixed> $release
      * @param array<string, mixed> $file
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string}|null
      */
     private function modpackReleaseDownload(string $projectId, array $release, array $file, bool $serverPack, ?string $eggVersion): ?array
     {
@@ -383,6 +383,8 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             'server_pack' => $serverPack,
             'has_server_pack' => $serverPack,
             'egg_version_id' => $eggVersion,
+            'manifest_url' => ModpackFileSelector::isCurseForgeAdditionalFile($release)
+                ? null : ($this->modpackZipDownload($release)['url'] ?? null),
         ]);
     }
 

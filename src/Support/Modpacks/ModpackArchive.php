@@ -232,6 +232,24 @@ final class ModpackArchive
         );
     }
 
+    /** @return array{minecraft: ?string, loader: ?string, build: ?string}|null */
+    public static function curseForgeInstallMetadata(string $json): ?array
+    {
+        $manifest = self::decodeObject($json, 'manifest.json');
+        if (($manifest['manifestType'] ?? null) !== 'minecraftModpack') {
+            return null;
+        }
+
+        $minecraft = (array) ($manifest['minecraft'] ?? []);
+        [$loader, $build] = self::curseForgeLoader($minecraft['modLoaders'] ?? null);
+
+        return [
+            'minecraft' => self::nullableString($minecraft['version'] ?? null),
+            'loader' => $loader,
+            'build' => $build !== null && preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/D', $build) === 1 ? $build : null,
+        ];
+    }
+
     private static function fromCurseForge(ZipArchive $zip, string $json): ModpackManifest
     {
         $manifest = self::decodeObject($json, 'manifest.json');

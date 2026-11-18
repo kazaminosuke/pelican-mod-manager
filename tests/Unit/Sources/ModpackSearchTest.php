@@ -24,6 +24,8 @@ use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Sources\TechnicModpackSource;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeManifestReader;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Mockery;
@@ -98,6 +100,53 @@ final class ModpackSearchTest extends TestCase
 
         $source = new ModrinthSource($this->cache(new CapturingExecutor()));
         self::assertNull($source->modpackDownloadById('project', 'requested'));
+    }
+
+    public function test_curseforge_build_is_read_from_a_bounded_range_of_the_client_zip(): void
+    {
+        $metadata = '{"manifestType":"minecraftModpack","minecraft":{"version":"1.21.1","modLoaders":[{"id":"neoforge-21.1.266","primary":true}]}}';
+        $temp = tempnam(sys_get_temp_dir(), 'cf-test');
+        $zip = new \ZipArchive();
+        self::assertTrue($zip->open($temp, \ZipArchive::OVERWRITE));
+        $zip->addFromString('manifest.json', $metadata);
+        $zip->addFromString('overrides/large.bin', str_repeat('x', 2 * 1024 * 1024));
+        $zip->setCompressionName('overrides/large.bin', \ZipArchive::CM_STORE);
+        $zip->close();
+        $bytes = file_get_contents($temp);
+        unlink($temp);
+        $size = strlen($bytes);
+        $url = 'https://mediafilez.forgecdn.net/pack.zip';
+        Http::fake([$url => function ($request) use ($bytes, $size) {
+            $range = $request->header('Range')[0];
+            if ($range === 'bytes=-1048576') {
+                $start = $size - 1048576;
+                $end = $size - 1;
+            } else {
+                [$start, $end] = array_map('intval', explode('-', substr($range, 6)));
+            }
+
+            return Http::response(substr($bytes, $start, $end - $start + 1), 206, [
+                'Content-Range' => "bytes {$start}-{$end}/{$size}",
+            ]);
+        }]);
+
+        $result = (new CurseForgeManifestReader())->read($url);
+        self::assertSame($metadata, $result);
+        self::assertSame(['minecraft' => '1.21.1', 'loader' => 'neoforge', 'build' => '21.1.266'], ModpackArchive::curseForgeInstallMetadata($result));
+        Http::assertSentCount(2);
+    }
+
+    public function test_curseforge_manifest_probe_does_not_follow_redirects_or_accept_full_responses(): void
+    {
+        Http::fake([
+            'mediafilez.forgecdn.net/redirect.zip' => Http::response('', 302, ['Location' => 'https://example.com/pack.zip']),
+            'mediafilez.forgecdn.net/full.zip' => Http::response('zip', 200),
+        ]);
+        $reader = new CurseForgeManifestReader();
+        self::assertNull($reader->read('https://example.com/pack.zip'));
+        self::assertNull($reader->read('https://mediafilez.forgecdn.net/redirect.zip'));
+        self::assertNull($reader->read('https://mediafilez.forgecdn.net/full.zip'));
+        Http::assertSentCount(2);
     }
 
     public function test_curseforge_modpack_search_uses_the_modpack_class(): void
