@@ -299,6 +299,7 @@ return [
         'server_pack_selected' => '専用サーバーZIPを使用します。',
         'server_pack_unavailable' => '専用サーバーZIPを取得できないため、通常のModpack ZIPを使用します。',
         'server_pack_unlisted' => '専用サーバーZIPの掲載がないため、通常のModpack ZIPを使用します。',
+        'java_too_old' => '選択したイメージのJavaは、このMinecraftリリースが必要とする :java より古いバージョンです。',
         'loader_build_unknown' => 'アーカイブ方式で必要なローダーのビルド番号を特定できませんでした。配布元のリリース手順を確認し、起動前にEggの起動変数に指定のビルド番号を設定してください。',
         'server_compatibility_unknown' => 'このリリースのサーバー互換性を確認できませんでした。続行する前に、配布元の手順とMinecraft・ローダーのバージョンを確認してください。',
         'confirm_server_compatibility' => 'このリリースの導入を試す',

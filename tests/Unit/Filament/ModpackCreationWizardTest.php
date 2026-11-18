@@ -145,14 +145,16 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.environment.NEOFORGE_VERSION', '21.1.266')
             ->set('data.start_on_completion', true)->call('create')->assertHasErrors('data.mm_project');
         self::assertSame([], $runner->spawned);
-        $wizard->set('data.start_on_completion', false)->call('create')->assertHasNoErrors();
+        $wizard->set('data.start_on_completion', false)
+            ->set('data.image', 'ghcr.io/pelican-eggs/yolks:java_17')->call('create')->assertHasErrors('data.image')
+            ->set('data.image', 'ghcr.io/pelican-eggs/yolks:java_21')->call('create')->assertHasNoErrors();
 
         self::assertCount(1, $runner->spawned);
         self::assertSame(BackgroundJob::MODPACK, $runner->spawned[0]['type']);
         self::assertSame('9620701', $runner->spawned[0]['payload']['version_id']);
         self::assertSame('925200', $runner->spawned[0]['payload']['project_id']);
         self::assertSame([
-            'egg_id' => '7', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
+            'egg_id' => '7', 'image' => 'ghcr.io/pelican-eggs/yolks:java_21', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
             'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => '21.1.266'],
         ], $runner->spawned[0]['payload']['selection']);
         self::assertGreaterThan(time(), $runner->spawned[0]['payload']['defer_until']);

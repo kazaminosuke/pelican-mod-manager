@@ -23,7 +23,11 @@ final class JavaRuntimeImage
         $minor = (int) $matches[2];
         $patch = isset($matches[3]) ? (int) $matches[3] : 0;
 
-        if ($major >= 26 || $minor > 20 || ($minor === 20 && $patch >= 5)) {
+        if ($major >= 26) {
+            return 'Java 25';
+        }
+
+        if ($minor > 20 || ($minor === 20 && $patch >= 5)) {
             return 'Java 21';
         }
 
@@ -36,6 +40,15 @@ final class JavaRuntimeImage
         }
 
         return 'Java 8';
+    }
+
+    public static function isTooOld(?string $image, ?string $minecraftVersion): bool
+    {
+        $required = self::preferredLabel($minecraftVersion);
+
+        return $required !== null
+            && preg_match('/:(?:java[_-])(\d+)(?:$|[-_@])/', (string) $image, $match) === 1
+            && (int) $match[1] < (int) substr($required, strlen('Java '));
     }
 
     /**

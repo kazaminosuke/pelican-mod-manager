@@ -211,6 +211,10 @@ final class InstallModpack
             throw new ModpackException('The server Egg changed after the modpack was queued.');
         }
 
+        if (isset($this->selection['image']) && $server->image !== $this->selection['image']) {
+            throw new ModpackException('The server image changed after the modpack was queued.');
+        }
+
         $expected = $this->selection['variables'] ?? [];
         if ($expected !== []) {
             $actual = app(InstalledEggCatalog::class)->variableValues($server);

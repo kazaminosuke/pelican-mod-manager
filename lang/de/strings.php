@@ -299,6 +299,7 @@ return [
         'server_pack_selected' => 'Verwendet das dedizierte Server-ZIP.',
         'server_pack_unavailable' => 'Das dedizierte Server-ZIP ist nicht verfügbar. Das reguläre Modpack-ZIP wird verwendet.',
         'server_pack_unlisted' => 'Kein dediziertes Server-ZIP gelistet. Das reguläre Modpack-ZIP wird verwendet.',
+        'java_too_old' => 'Das ausgewählte Image verwendet eine Java-Version, die älter als das für diese Minecraft-Version erforderliche :java ist.',
         'loader_build_unknown' => 'Der Archivmodus konnte die erforderliche Loader-Version nicht ermitteln. Prüfe die Anleitung zur Veröffentlichung und trage die genaue Version vor dem Start in die Egg-Startvariablen ein.',
         'server_compatibility_unknown' => 'Die Serverkompatibilität dieser Version konnte nicht bestätigt werden. Prüfe die Anleitung des Packs sowie die Minecraft- und Loader-Versionen.',
         'confirm_server_compatibility' => 'Ich möchte die Installation dieser Version versuchen.',

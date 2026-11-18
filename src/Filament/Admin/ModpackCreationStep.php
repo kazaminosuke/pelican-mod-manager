@@ -293,6 +293,15 @@ final class ModpackCreationStep
             throw self::startupValidationError($component);
         }
 
+        $image = (string) $get('image');
+        if (JavaRuntimeImage::isTooOld($image, $result->minecraftVersion)) {
+            throw ValidationException::withMessages([
+                $component->resolveRelativeStatePath('image') => trans('pelican-mod-manager::strings.modpacks.java_too_old', [
+                    'java' => JavaRuntimeImage::preferredLabel($result->minecraftVersion),
+                ]),
+            ]);
+        }
+
         $environment = (array) $get('environment');
         $usesApiKey = self::usesCurseForgeApiKey($result);
         foreach ($result->variables as $name => $value) {
@@ -332,6 +341,7 @@ final class ModpackCreationStep
             'version_id' => (string) $get('mm_version'),
             'selection' => [
                 'egg_id' => (string) $result->selected?->id,
+                'image' => $image,
                 'minecraft' => $result->minecraftVersion,
                 'loader' => $result->loader ?? $result->selected?->loader,
                 'server_pack' => $result->serverFileStatus === 'server_pack_selected',

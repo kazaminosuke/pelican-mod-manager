@@ -280,8 +280,12 @@ final class EggCompatibilityEngineTest extends TestCase
             'Java 8' => 'ghcr.io/example/java_8',
             'Java 17' => 'ghcr.io/example/java_17',
             'Java 21' => 'ghcr.io/example/java_21',
+            'Java 25' => 'ghcr.io/example/java_25',
         ];
 
+        self::assertSame('ghcr.io/example/java_25', JavaRuntimeImage::fromEggImages($images, '26.1'));
+        self::assertTrue(JavaRuntimeImage::isTooOld('ghcr.io/pelican-eggs/yolks:java_21', '26.1'));
+        self::assertFalse(JavaRuntimeImage::isTooOld('ghcr.io/pelican-eggs/yolks:java_25', '26.1'));
         self::assertSame('ghcr.io/example/java_21', JavaRuntimeImage::fromEggImages($images, '1.21.1'));
         self::assertSame('ghcr.io/example/java_17', JavaRuntimeImage::fromEggImages($images, '1.20.1'));
         self::assertSame('ghcr.io/example/java_8', JavaRuntimeImage::fromEggImages($images, '1.12.2'));
