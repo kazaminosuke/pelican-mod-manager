@@ -300,6 +300,7 @@ return [
         'server_pack_unavailable' => 'The dedicated server ZIP is unavailable. Uses the standard modpack ZIP.',
         'server_pack_unlisted' => 'No dedicated server ZIP was listed. Uses the standard modpack ZIP.',
         'java_too_old' => 'The selected image uses a Java version older than :java, which this Minecraft release requires.',
+        'ftb_install_unverified' => 'The FTB Egg can report completion after an installer failure. Check the installation log and launcher files before starting the server manually.',
         'loader_build_unknown' => 'The archive route could not determine the required loader build. Check the pack release instructions and set the exact build in the Egg startup variables before starting the server.',
         'server_compatibility_unknown' => 'Server compatibility could not be verified for this release. Check the pack instructions and the selected loader and Minecraft versions before continuing.',
         'confirm_server_compatibility' => 'I want to try installing this release.',

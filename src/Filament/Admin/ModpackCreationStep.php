@@ -289,7 +289,7 @@ final class ModpackCreationStep
 
         if ((string) $get('egg_id') !== (string) $result->selected?->id
             || (bool) $get('skip_scripts')
-            || ($result->mode === ProvisioningMode::Archive && (bool) $get('start_on_completion'))) {
+            || (self::requiresManualStart($result) && (bool) $get('start_on_completion'))) {
             throw self::startupValidationError($component);
         }
 
@@ -360,6 +360,11 @@ final class ModpackCreationStep
         ]);
     }
 
+    private static function requiresManualStart(CompatibilityResult $result): bool
+    {
+        return $result->mode === ProvisioningMode::Archive || $result->provider === ModpackProvider::Ftb->value;
+    }
+
     private static function usesCurseForgeApiKey(CompatibilityResult $result): bool
     {
         return $result->provider === ModpackProvider::CurseForge->value && $result->mode === ProvisioningMode::EggInstall
@@ -413,7 +418,7 @@ final class ModpackCreationStep
         $set('image', $image);
         $set('select_image', $image);
         $set('skip_scripts', false);
-        if ($result->mode === ProvisioningMode::Archive) {
+        if (self::requiresManualStart($result)) {
             $set('start_on_completion', false);
         }
         $rows = [];

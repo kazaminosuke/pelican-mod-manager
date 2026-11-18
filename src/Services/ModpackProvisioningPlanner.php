@@ -97,9 +97,11 @@ final class ModpackProvisioningPlanner
             unsupportedReason: $unsupported,
             archiveVariables: $archiveVariables,
             allowUnknownLoader: $curseForge && $archive && $pack->loader === null,
-            compatibilityWarning: $curseForge
-                && (!$pack->usesServerPack || $pack->loader === null || $pack->minecraftVersion === null)
-                ? 'server_compatibility_unknown' : null,
+            compatibilityWarning: match (true) {
+                $pack->provider === ModpackProvider::Ftb->value => 'ftb_install_unverified',
+                $curseForge && (!$pack->usesServerPack || $pack->loader === null || $pack->minecraftVersion === null) => 'server_compatibility_unknown',
+                default => null,
+            },
             archiveCompatibilityWarning: $pack->loaderVersion === null ? 'loader_build_unknown' : null,
             serverFileStatus: match (true) {
                 $pack->usesServerPack => 'server_pack_selected',

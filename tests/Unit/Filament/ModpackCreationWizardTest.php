@@ -269,14 +269,22 @@ final class ModpackCreationWizardTest extends TestCase
         })->andReturn((new Server())->forceFill(['id' => 49]));
         $this->app->instance(ServerCreationService::class, $service);
 
-        Livewire::test(ModpackCreationWizardHarness::class)
+        $wizard = Livewire::test(ModpackCreationWizardHarness::class)
             ->set('data.mm_provider', $provider)
             ->set('data.mm_query', $provider === 'ftb' ? 'Vanilla' : 'Tekkit')
             ->set('data.mm_modpack', true)
             ->set('data.mm_project', $provider.':'.$project)
-            ->set('data.mm_version', $version)
-            ->call('create')
-            ->assertHasNoErrors();
+            ->set('data.mm_version', $version);
+        if ($provider === 'ftb') {
+            $wizard->assertSee('The FTB Egg can report completion after an installer failure.')
+                ->assertSet('data.start_on_completion', false)
+                ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
+                ->set('data.mm_confirm_compatibility', true)
+                ->set('data.start_on_completion', true)
+                ->call('create')->assertHasErrors('data.mm_project')
+                ->set('data.start_on_completion', false);
+        }
+        $wizard->call('create')->assertHasNoErrors();
     }
 
     public function test_atlauncher_releases_are_browsable_but_do_not_create_a_server(): void
