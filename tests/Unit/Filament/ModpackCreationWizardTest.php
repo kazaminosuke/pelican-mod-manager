@@ -24,7 +24,9 @@ use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Livewire\Livewire;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+use ZipArchive;
 
 #[RunTestsInSeparateProcesses]
 final class ModpackCreationWizardTest extends TestCase
@@ -203,6 +205,153 @@ final class ModpackCreationWizardTest extends TestCase
             ->call('create')
             ->assertHasErrors('data.mm_confirm_compatibility')
             ->set('data.mm_confirm_compatibility', true)
+            ->call('create')
+            ->assertHasNoErrors();
+    }
+
+    /** @return array<string, array{string, string, string, string, string, array<string, string>}> */
+    public static function eggInstallSelections(): array
+    {
+        return [
+            'FTB Server' => [
+                'ftb', '18', '12169', 'FTB Server', 'e60a9de8-a0b1-4d97-b4e2-6568f048668d',
+                ['FTB_MODPACK_ID' => '18', 'FTB_MODPACK_VERSION_ID' => '12169', 'FTB_SEARCH_TERM' => '', 'FTB_VERSION_STRING' => ''],
+            ],
+            'Tekkit 2' => [
+                'technic', 'tekkit-2', 'v1.2.6', 'Tekkit 2', '81bf842b-5647-4c83-9254-523b6f8308fb',
+                ['MODPACK_VERSION' => 'v1.2.6'],
+            ],
+        ];
+    }
+
+    /** @param array<string, string> $variables */
+    #[DataProvider('eggInstallSelections')]
+    public function test_provider_release_variables_reach_the_server_creation_service(
+        string $provider,
+        string $project,
+        string $version,
+        string $eggName,
+        string $eggUuid,
+        array $variables,
+    ): void {
+        $this->addEgg(9, $eggName, $eggUuid, array_fill_keys(array_keys($variables), ''));
+        Http::fake([
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/search/*' => Http::response(['packs' => [18]]),
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/18' => Http::response([
+                'id' => 18, 'name' => 'FTB Vanilla+',
+                'versions' => [
+                    ['id' => 12170, 'name' => 'Later release', 'released' => 300],
+                    ['id' => 12169, 'name' => '1.1.1', 'released' => 200, 'targets' => [
+                        ['name' => 'minecraft', 'version' => '1.7.10', 'type' => 'game'],
+                        ['name' => 'forge', 'version' => '10.13.4.1448', 'type' => 'modloader'],
+                    ]],
+                ],
+            ]),
+            'api.technicpack.net/search?*' => Http::response(['modpacks' => [['slug' => 'tekkit-2', 'name' => 'Tekkit 2']]]),
+            'api.technicpack.net/modpack/tekkit-2?*' => Http::response([
+                'name' => 'tekkit-2', 'version' => '1.2.6', 'minecraft' => '1.12.2',
+                'serverPackUrl' => 'https://servers.technicpack.net/Technic/servers/tekkit-2/Tekkit-2_Server_v1.2.6.zip',
+            ]),
+        ]);
+
+        $service = Mockery::mock(ServerCreationService::class);
+        $service->shouldReceive('handle')->once()->withArgs(function (array $data) use ($provider, $project, $version, $variables): bool {
+            self::assertSame(9, $data['egg_id']);
+            self::assertSame($variables, $data['environment']);
+            self::assertSame('egg_install', $data['mm_install_plan']['mode']);
+            self::assertSame($provider, $data['mm_install_plan']['source']);
+            self::assertSame($project, $data['mm_install_plan']['project_id']);
+            self::assertSame($version, $data['mm_install_plan']['version_id']);
+
+            return true;
+        })->andReturn((new Server())->forceFill(['id' => 49]));
+        $this->app->instance(ServerCreationService::class, $service);
+
+        Livewire::test(ModpackCreationWizardHarness::class)
+            ->set('data.mm_provider', $provider)
+            ->set('data.mm_query', $provider === 'ftb' ? 'Vanilla' : 'Tekkit')
+            ->set('data.mm_modpack', true)
+            ->set('data.mm_project', $provider.':'.$project)
+            ->set('data.mm_version', $version)
+            ->call('create')
+            ->assertHasNoErrors();
+    }
+
+    public function test_atlauncher_releases_are_browsable_but_do_not_create_a_server(): void
+    {
+        Http::fake([
+            'api.atlauncher.com/v1/packs/simple' => Http::response(['data' => [
+                ['type' => 'public', 'name' => 'SevTech: Ages', 'safeName' => 'SevTechAges'],
+            ]]),
+            'api.atlauncher.com/v1/pack/SevTechAges/' => Http::response(['data' => [
+                'name' => 'SevTech: Ages', 'versions' => [['version' => '3.2.3', 'minecraft' => '1.12.2']],
+            ]]),
+        ]);
+        $service = Mockery::mock(ServerCreationService::class);
+        $service->shouldNotReceive('handle');
+        $this->app->instance(ServerCreationService::class, $service);
+
+        Livewire::test(ModpackCreationWizardHarness::class)
+            ->set('data.mm_provider', 'atlauncher')
+            ->set('data.mm_query', 'SevTech')
+            ->set('data.mm_modpack', true)
+            ->assertSee('SevTech: Ages')
+            ->set('data.mm_project', 'atlauncher:SevTechAges')
+            ->set('data.mm_version', '3.2.3')
+            ->assertSee('ATLauncher has no Pelican egg')
+            ->call('create')
+            ->assertHasErrors('data.mm_guard');
+    }
+
+    public function test_modrinth_manifest_pins_the_fabric_loader_for_archive_creation(): void
+    {
+        $this->app->instance(PluginBackgroundRunner::class, PluginBackgroundRunner::fake());
+        $this->addEgg(9, 'Fabric', '78b02ebb-fec8-49c5-943c-ca4aa117b693', [
+            'MC_VERSION' => 'latest', 'LOADER_VERSION' => 'latest', 'FABRIC_VERSION' => 'latest',
+        ]);
+        DB::table('eggs')->where('id', 9)->update(['tags' => '["minecraft","fabric"]']);
+        $archive = tempnam(sys_get_temp_dir(), 'modrinth-fixture');
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($archive, ZipArchive::OVERWRITE));
+        $zip->addFromString('modrinth.index.json', json_encode([
+            'formatVersion' => 1, 'game' => 'minecraft',
+            'dependencies' => ['minecraft' => '1.19.3', 'fabric-loader' => '0.14.12'],
+            'files' => [['path' => 'mods/krypton.jar', 'downloads' => ['https://cdn.modrinth.com/krypton.jar']]],
+        ], JSON_THROW_ON_ERROR));
+        $zip->close();
+        $bytes = file_get_contents($archive);
+        unlink($archive);
+        $release = [
+            'id' => 'vtGmZsbn', 'project_id' => 'YkG1DyHE', 'version_number' => '1.0',
+            'game_versions' => ['1.19.3'], 'loaders' => ['fabric'],
+            'files' => [['filename' => 'pack.mrpack', 'url' => 'https://cdn.modrinth.com/pack.mrpack', 'primary' => true]],
+        ];
+        Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([]),
+            'api.modrinth.com/v2/search*' => Http::response([
+                'hits' => [['project_id' => 'YkG1DyHE', 'title' => 'Fabric Server Optimization']], 'total_hits' => 1,
+            ]),
+            'api.modrinth.com/v2/project/YkG1DyHE/version*' => Http::response([$release]),
+            'api.modrinth.com/v2/version/vtGmZsbn' => Http::response($release),
+            'cdn.modrinth.com/pack.mrpack' => Http::response($bytes),
+        ]);
+
+        $service = Mockery::mock(ServerCreationService::class);
+        $service->shouldReceive('handle')->once()->withArgs(function (array $data): bool {
+            self::assertSame('1.19.3', $data['environment']['MC_VERSION']);
+            self::assertSame('0.14.12', $data['environment']['LOADER_VERSION']);
+            self::assertSame('latest', $data['environment']['FABRIC_VERSION']);
+            self::assertSame('vtGmZsbn', $data['mm_install_plan']['version_id']);
+
+            return true;
+        })->andReturn((new Server())->forceFill(['id' => 50]));
+        $this->app->instance(ServerCreationService::class, $service);
+
+        Livewire::test(ModpackCreationWizardHarness::class)
+            ->set('data.mm_modpack', true)
+            ->set('data.mm_project', 'modrinth:YkG1DyHE')
+            ->set('data.mm_version', 'vtGmZsbn')
+            ->assertSet('data.egg_id', 9)
             ->call('create')
             ->assertHasNoErrors();
     }
