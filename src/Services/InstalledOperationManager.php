@@ -813,6 +813,7 @@ final class InstalledOperationManager
      * Queue a modpack install. The job downloads the pack and places files.
      * Only mod servers accept it; the mod catalog itself is unchanged.
      *
+     * @param  array<string, mixed>|null  $selection  The immutable startup configuration from the creation wizard.
      * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'unsupported_type', state: ?InstalledOperationState}
      */
     public function dispatchModpackInstall(
@@ -822,6 +823,7 @@ final class InstalledOperationManager
         string $projectId,
         ?string $versionId = null,
         ?int $deferSeconds = null,
+        ?array $selection = null,
     ): array {
         $serverId = $this->serverId($server);
         $source = trim($source);
@@ -879,6 +881,7 @@ final class InstalledOperationManager
                     'lease_token' => $leaseToken,
                     'version_id' => $versionId !== null ? trim($versionId) : '',
                     'defer_until' => $deferSeconds !== null && $deferSeconds > 0 ? time() + $deferSeconds : 0,
+                    'selection' => $selection,
                 ],
             )) {
                 throw new \RuntimeException('Unable to start the modpack install.');

@@ -59,6 +59,29 @@ final class ModpackInstallerTest extends TestCase
         self::assertContains('minecraft-version:1.20.1', $result->warnings);
     }
 
+    public function test_creation_job_rejects_a_manifest_for_the_wrong_minecraft_version(): void
+    {
+        $wings = new MemoryModpackWings();
+        $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
+        $zip = $this->pack([
+            'modrinth.index.json' => json_encode([
+                'formatVersion' => 1, 'game' => 'minecraft', 'dependencies' => ['minecraft' => '1.20.1'],
+            ], JSON_THROW_ON_ERROR),
+            'overrides/config/new.toml' => 'new',
+        ]);
+
+        $this->expectException(ModpackException::class);
+        $this->expectExceptionMessage('requires Minecraft [1.20.1]');
+        try {
+            $installer->installFromZip(
+                $this->server(), Mockery::mock(DaemonFileRepository::class), $zip,
+                serverMinecraftVersion: '1.21.1', strictMinecraftVersion: true,
+            );
+        } finally {
+            self::assertSame([], $wings->files);
+        }
+    }
+
     public function test_loader_mismatch_writes_nothing(): void
     {
         $wings = new MemoryModpackWings();

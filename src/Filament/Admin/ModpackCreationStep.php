@@ -265,7 +265,7 @@ final class ModpackCreationStep
         return null;
     }
 
-    /** @return array{mode: string, source: string, project_id: string, version_id: string}|null */
+    /** @return array{mode: string, source: string, project_id: string, version_id: string, selection: array<string, mixed>}|null */
     private static function planForCreation(Get $get, Hidden $component): ?array
     {
         if (!(bool) $get('mm_modpack')) {
@@ -326,6 +326,16 @@ final class ModpackCreationStep
             'source' => $source,
             'project_id' => $project,
             'version_id' => (string) $get('mm_version'),
+            'selection' => [
+                'egg_id' => (string) $result->selected?->id,
+                'minecraft' => $result->minecraftVersion,
+                'loader' => $result->loader ?? $result->selected?->loader,
+                'server_pack' => $result->serverFileStatus === 'server_pack_selected',
+                'variables' => $result->mode === ProvisioningMode::Archive ? array_intersect_key(
+                    $environment,
+                    array_flip(['MINECRAFT_VERSION', 'MC_VERSION', 'LOADER_VERSION', 'FORGE_VERSION', 'NEOFORGE_VERSION', 'QUILT_VERSION']),
+                ) : [],
+            ],
         ];
     }
 

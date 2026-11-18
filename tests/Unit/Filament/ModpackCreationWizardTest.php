@@ -16,9 +16,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\View;
+use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
+use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Livewire\Livewire;
 use Mockery;
@@ -53,6 +55,11 @@ final class ModpackCreationWizardTest extends TestCase
             $table->json('tags');
             $table->json('startup_commands');
             $table->json('docker_images');
+        });
+        Schema::create('servers', function (Blueprint $table): void {
+            $table->id();
+            $table->integer('egg_id');
+            $table->string('status')->nullable();
         });
         Schema::create('egg_variables', function (Blueprint $table): void {
             $table->id();
@@ -136,7 +143,18 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame(BackgroundJob::MODPACK, $runner->spawned[0]['type']);
         self::assertSame('9620701', $runner->spawned[0]['payload']['version_id']);
         self::assertSame('925200', $runner->spawned[0]['payload']['project_id']);
+        self::assertSame([
+            'egg_id' => '7', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
+            'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => 'latest'],
+        ], $runner->spawned[0]['payload']['selection']);
         self::assertGreaterThan(time(), $runner->spawned[0]['payload']['defer_until']);
+
+        // The persisted job must reject a server whose Egg changed while waiting.
+        DB::table('servers')->insert(['id' => 42, 'egg_id' => 99]);
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
+        $state = app(InstalledOperationManager::class)->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        self::assertSame('modpack_rejected', $state?->error);
+        self::assertSame('The server Egg changed after the modpack was queued.', $state?->result['message']);
     }
 
     public function test_wizard_requires_confirmation_and_sends_the_generic_egg_the_exact_version(): void

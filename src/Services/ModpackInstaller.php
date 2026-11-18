@@ -48,6 +48,7 @@ final class ModpackInstaller
         ?string $serverLoader = null,
         ?string $serverMinecraftVersion = null,
         ?callable $progress = null,
+        bool $strictMinecraftVersion = false,
     ): ModpackInstallResult {
         $this->placed = [];
         $this->overrideDirectoryListings = [];
@@ -57,6 +58,9 @@ final class ModpackInstaller
         if ($manifest->minecraftVersion !== null
             && $serverMinecraftVersion !== null
             && $manifest->minecraftVersion !== $serverMinecraftVersion) {
+            if ($strictMinecraftVersion) {
+                throw new ModpackException("This modpack requires Minecraft [{$manifest->minecraftVersion}] but the server uses [{$serverMinecraftVersion}].");
+            }
             $warnings[] = 'minecraft-version:'.$manifest->minecraftVersion;
         }
 

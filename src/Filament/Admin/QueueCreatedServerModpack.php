@@ -34,6 +34,7 @@ final class QueueCreatedServerModpack
                     $plan['project_id'],
                     $plan['version_id'],
                     1200,
+                    $plan['selection'],
                 );
                 if ($outcome['dispatched'] || $outcome['reason'] === 'already_active') {
                     Notification::make()

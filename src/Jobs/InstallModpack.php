@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
+use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
@@ -29,6 +30,7 @@ final class InstallModpack
 
     private const LEASE_REFRESH_SECONDS = 60;
 
+    /** @param array<string, mixed>|null $selection */
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
@@ -37,6 +39,7 @@ final class InstallModpack
         public readonly string $leaseToken,
         public readonly string $versionId = '',
         public readonly int $deferUntil = 0,
+        public readonly ?array $selection = null,
     ) {}
 
     public function uniqueId(): string
@@ -103,9 +106,19 @@ final class InstallModpack
         $leaseRefreshedAt = microtime(true);
 
         try {
+            $this->validateSelection($server);
             $file = $catalog->file($server, $this->source, $this->projectId, $this->versionId !== '' ? $this->versionId : null);
             if ($file === null) {
                 throw new ModpackException('No installable modpack file was found for this server.');
+            }
+
+            if ($this->selection !== null && (
+                $file['version_id'] !== $this->versionId
+                || (!empty($this->selection['server_pack']) && empty($file['server_pack']))
+                || (isset($file['minecraft'], $this->selection['minecraft']) && $file['minecraft'] !== $this->selection['minecraft'])
+                || (isset($file['loader'], $this->selection['loader']) && $file['loader'] !== $this->selection['loader'])
+            )) {
+                throw new ModpackException('The selected modpack file or its runtime requirements changed after server creation.');
             }
 
             try {
@@ -149,7 +162,13 @@ final class InstallModpack
                     $minecraft,
                     $progress,
                 )
-                : $installer->installFromZip($server, $fileRepository, $temp, $loader, $minecraft, $progress);
+                : $installer->installFromZip(
+                    $server, $fileRepository, $temp,
+                    $loader ?? ($this->selection['loader'] ?? null),
+                    $this->selection['minecraft'] ?? $minecraft,
+                    $progress,
+                    strictMinecraftVersion: $this->selection !== null,
+                );
 
             // The Installed list is a cached directory scan. Drop it so the
             // next view queues a scan instead of showing the pre-install files.
@@ -180,6 +199,28 @@ final class InstallModpack
         }
 
         return null;
+    }
+
+    private function validateSelection(Server $server): void
+    {
+        if ($this->selection === null) {
+            return;
+        }
+
+        if ((string) $server->egg_id !== ($this->selection['egg_id'] ?? null)) {
+            throw new ModpackException('The server Egg changed after the modpack was queued.');
+        }
+
+        $expected = $this->selection['variables'] ?? [];
+        if ($expected !== []) {
+            $actual = app(InstalledEggCatalog::class)->variableValues($server);
+            foreach ($expected as $name => $value) {
+                // Pelican persists Egg variables as strings.
+                if ((string) ($actual[$name] ?? '') !== (string) $value) {
+                    throw new ModpackException('Server startup variables changed after the modpack was queued.');
+                }
+            }
+        }
     }
 
     /**
