@@ -170,8 +170,45 @@ class SpigotSourceTest extends TestCase
                 && ($query['sort'] ?? null) === '-downloads'
                 && ($query['size'] ?? null) === '20';
         });
+        Http::assertSent(function ($request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return str_contains($request->url(), '/resources/28140?')
+                && str_contains($query['fields'] ?? '', 'icon.url')
+                && str_contains($query['fields'] ?? '', 'premium');
+        });
         // The official API rate-limits page-sized bursts; the catalog never uses it.
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'api.spigotmc.org'));
+    }
+
+    public function test_cached_compact_rows_pick_up_official_metadata_resolved_after_search(): void
+    {
+        $source = $this->sourceWithExecutor();
+        $server = Mockery::mock(Server::class);
+        Http::fake([
+            'api.spiget.org/v2/resources/for/*' => Http::response([
+                'match' => [['name' => 'Vault', 'id' => 34315]],
+            ]),
+            'api.spiget.org/v2/resources/34315?*' => Http::response([], 404),
+        ]);
+        $filters = ['versions' => ['1.21']];
+        $first = $source->search($server, ProjectType::Plugin, filters: $filters);
+        self::assertNull($first['hits'][0]['downloads']);
+
+        $source->primeProjects([
+            '34315' => [
+                'project_id' => '34315',
+                'description' => 'Economy API',
+                'icon_url' => 'https://www.spigotmc.org/data/resource_icons/vault.jpg',
+                'downloads' => 14,
+            ],
+        ]);
+
+        $cached = $source->search($server, ProjectType::Plugin, filters: $filters);
+        self::assertSame('Economy API', $cached['hits'][0]['description']);
+        self::assertSame('https://www.spigotmc.org/data/resource_icons/vault.jpg', $cached['hits'][0]['icon_url']);
+        self::assertSame(14, $cached['hits'][0]['downloads']);
+        Http::assertSentCount(2);
     }
 
     public function test_version_without_any_tested_resource_is_an_empty_catalog(): void

@@ -28,7 +28,7 @@ final class SourceCache
         private readonly ?LoggerInterface $logger = null,
     ) {}
 
-    public function swr(SourceFetchSpec $spec, CacheProfile $profile): mixed
+    public function swr(SourceFetchSpec $spec, CacheProfile $profile, ?float $inlineBudget = null): mixed
     {
         $shouldProfile = $spec->operation === 'search' && RequestPerformanceProfiler::isCapturing();
         $cacheStartedAt = $shouldProfile ? microtime(true) : 0.0;
@@ -63,7 +63,7 @@ final class SourceCache
             try {
                 $status = 'MISS';
 
-                return $this->fetchAndStore($spec, $profile, $profile->inlineBudgetSeconds());
+                return $this->fetchAndStore($spec, $profile, $inlineBudget ?? $profile->inlineBudgetSeconds());
             } catch (SourceFetchNotFoundException) {
                 // A definitive upstream "not found" is a normal miss, not an
                 // outage: no failure marker, and the negative is not cached.
