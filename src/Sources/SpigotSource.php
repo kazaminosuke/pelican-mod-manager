@@ -1519,7 +1519,22 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return $this->withoutDownloadUrl($version, DownloadUnavailableException::RATE_LIMITED);
         }
 
-        return $this->withoutDownloadUrl($version, DownloadUnavailableException::VERSION_UNAVAILABLE);
+        // This documented endpoint normally redirects to SpigotMC. Accept a
+        // JAR served directly for the requested id, never an unversioned redirect.
+        $versionUrl = $this->spigetResourceUrl($resourceId, '/versions/'.$versionId.'/download');
+        $probe = $this->probeDownloadArchive($versionUrl, $deadline, allowRedirects: false);
+        if ($probe === 'ok') {
+            unset($version['download_unavailable']);
+            $version['files'][0]['url'] = $versionUrl;
+            $version['files'][0]['download_channel'] = 'spiget_version';
+
+            return $version;
+        }
+
+        return $this->withoutDownloadUrl(
+            $version + ['manual_download_url' => $officialUrl],
+            $probe === 'rate_limited' ? DownloadUnavailableException::RATE_LIMITED : DownloadUnavailableException::VERSION_UNAVAILABLE,
+        );
     }
 
     /**

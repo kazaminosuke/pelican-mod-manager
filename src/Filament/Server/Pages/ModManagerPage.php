@@ -1998,7 +1998,10 @@ class ModManagerPage extends Page implements HasTable
 
         $reason = $versionData['download_unavailable'] ?? null;
         if (DownloadUnavailableException::isSupportedReason($reason)) {
-            throw new DownloadUnavailableException((string) $reason);
+            throw new DownloadUnavailableException(
+                (string) $reason,
+                $source instanceof SpigotSource ? ($versionData['manual_download_url'] ?? null) : null,
+            );
         }
 
         throw new Exception('No downloadable file found');
@@ -5168,11 +5171,21 @@ class ModManagerPage extends Page implements HasTable
                 DownloadUnavailableException::DISTRIBUTION => 'download_unavailable_distribution',
                 default => 'download_unavailable_external',
             };
-            Notification::make()
+            $notification = Notification::make()
                 ->title(trans('pelican-mod-manager::strings.notifications.download_unavailable'))
                 ->body(trans('pelican-mod-manager::strings.notifications.'.$bodyKey))
-                ->warning()
-                ->send();
+                ->warning();
+            if ($exception->manualDownloadUrl !== null) {
+                $notification
+                    ->persistent()
+                    ->actions([
+                        Action::make('spigot_version_download')
+                            ->label(trans('pelican-mod-manager::strings.notifications.download_spigot_manually'))
+                            ->url($exception->manualDownloadUrl)
+                            ->openUrlInNewTab(),
+                    ]);
+            }
+            $notification->send();
 
             return;
         }
