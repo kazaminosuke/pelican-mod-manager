@@ -26,6 +26,8 @@ final class ModpackDescriptor
         public readonly ?string $unsupportedReason,
         public readonly ?string $downloadUrl = null,
         public readonly ?string $filename = null,
+        public readonly ?bool $hasServerPack = null,
+        public readonly bool $usesServerPack = false,
     ) {}
 
     public function optionKey(): string

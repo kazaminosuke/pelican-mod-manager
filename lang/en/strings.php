@@ -285,6 +285,11 @@ return [
         'plan' => 'Provisioning plan',
         'plan_unavailable' => 'The modpack details could not be loaded.',
         'confirm_egg_change' => 'I understand this changes the server egg and reinstalls it. Worlds and other server files are not deleted.',
+        'server_pack_selected' => 'Uses the dedicated server ZIP.',
+        'server_pack_unavailable' => 'The dedicated server ZIP is unavailable. Uses the standard modpack ZIP.',
+        'server_pack_unlisted' => 'No dedicated server ZIP was listed. Uses the standard modpack ZIP.',
+        'server_compatibility_unknown' => 'Server compatibility could not be verified for this release. Check the pack instructions and the selected loader and Minecraft versions before continuing.',
+        'confirm_server_compatibility' => 'I want to try installing this release.',
         'provision_queued' => 'Modpack provisioning started',
     ],
 

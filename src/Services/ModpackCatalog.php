@@ -236,15 +236,20 @@ final class ModpackCatalog
             loader: $download['loader'] ?? null,
             loaderVersion: null,
             iconUrl: null,
-            provisioningProfileId: 'curseforge-generic',
-            variables: [
+            // The generic script handles these loaders and follows the
+            // verified server file's parent for the client manifest.
+            provisioningProfileId: $download['egg_version_id'] !== null
+                && in_array($download['loader'], ['forge', 'fabric', 'quilt'], true) ? 'curseforge-generic' : null,
+            variables: $download['egg_version_id'] !== null ? [
                 'PROJECT_ID' => $projectId,
-                'VERSION_ID' => $resolvedVersion,
-            ],
+                'VERSION_ID' => $download['egg_version_id'],
+            ] : [],
             archiveAllowed: true,
             unsupportedReason: null,
-            downloadUrl: (string) $download['url'],
-            filename: (string) ($download['filename'] ?? ''),
+            downloadUrl: $download['url'],
+            filename: $download['filename'],
+            hasServerPack: $download['has_server_pack'],
+            usesServerPack: $download['server_pack'],
         );
     }
 

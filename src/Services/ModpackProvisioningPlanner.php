@@ -65,6 +65,16 @@ final class ModpackProvisioningPlanner
             $profile = null;
         }
 
+        $archiveVariables = [];
+        if ($pack->minecraftVersion !== null) {
+            $archiveVariables = ['MC_VERSION' => $pack->minecraftVersion, 'MINECRAFT_VERSION' => $pack->minecraftVersion];
+        }
+        if ($pack->loader !== null && $pack->loaderVersion !== null) {
+            $archiveVariables[strtoupper($pack->loader).'_VERSION'] = $pack->loaderVersion;
+        }
+
+        $curseForge = $pack->provider === ModpackProvider::CurseForge->value;
+
         return new PackRequirement(
             provider: $pack->provider,
             packId: $pack->id,
@@ -76,6 +86,17 @@ final class ModpackProvisioningPlanner
             archiveAllowed: $archive && $unsupported === null,
             loaderProfileIds: $unsupported === null && $archive ? $loaderProfiles : [],
             unsupportedReason: $unsupported,
+            archiveVariables: $archiveVariables,
+            allowUnknownLoader: $curseForge && $archive && $pack->loader === null,
+            compatibilityWarning: $curseForge
+                && (!$pack->usesServerPack || $pack->loader === null || $pack->minecraftVersion === null)
+                ? 'server_compatibility_unknown' : null,
+            serverFileStatus: match (true) {
+                $pack->usesServerPack => 'server_pack_selected',
+                $pack->hasServerPack === true => 'server_pack_unavailable',
+                $pack->hasServerPack === false => 'server_pack_unlisted',
+                default => null,
+            },
         );
     }
 

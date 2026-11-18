@@ -2,12 +2,14 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Support;
 
+use Kazaminosuke\ModManager\Services\ModpackProvisioningPlanner;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\PackRequirement;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\EggProfileRegistry;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Kazaminosuke\ModManager\Support\Modpacks\TechnicEggBinding;
 use PHPUnit\Framework\TestCase;
 
@@ -60,6 +62,41 @@ final class EggCompatibilityEngineTest extends TestCase
 
         self::assertSame(CompatibilityDisposition::Ambiguous, $result->disposition);
         self::assertCount(2, $result->alternatives);
+    }
+
+    public function test_unknown_curseforge_compatibility_allows_an_explicit_loader_with_a_warning(): void
+    {
+        $fabric = $this->engine->classify(1, 'Fabric', 'fabric-uuid', null, []);
+        $paper = $this->engine->classify(2, 'Paper', 'paper-uuid', null, []);
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        $pack = new ModpackDescriptor(
+            provider: 'curseforge',
+            id: '10',
+            title: 'Unknown Loader Pack',
+            versionId: '20',
+            versionName: '2.0',
+            minecraftVersion: '1.21.1',
+            loader: null,
+            loaderVersion: null,
+            iconUrl: null,
+            provisioningProfileId: null,
+            variables: [],
+            archiveAllowed: true,
+            unsupportedReason: null,
+            hasServerPack: true,
+        );
+
+        $result = $planner->select($pack, [$fabric, $paper], EggCompatibilityEngine::CONTEXT_CREATE);
+        self::assertSame(CompatibilityDisposition::Ambiguous, $result->disposition);
+        self::assertSame([$fabric], $result->alternatives);
+        self::assertSame('server_compatibility_unknown', $result->compatibilityWarning);
+        self::assertSame('server_pack_unavailable', $result->serverFileStatus);
+
+        $selected = $planner->select($pack, [$fabric, $paper], EggCompatibilityEngine::CONTEXT_CREATE, explicitEggId: 1);
+        self::assertSame(ProvisioningMode::Archive, $selected->mode);
+        self::assertSame('1.21.1', $selected->variables['MC_VERSION']);
+        $rejected = $planner->select($pack, [$fabric, $paper], EggCompatibilityEngine::CONTEXT_CREATE, explicitEggId: 2);
+        self::assertSame(CompatibilityDisposition::Unsupported, $rejected->disposition);
     }
 
     public function test_one_high_confidence_fabric_egg_is_selected_for_creation(): void

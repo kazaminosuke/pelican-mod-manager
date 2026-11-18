@@ -64,6 +64,7 @@ final class ModpackInstallCoordinator
         int|string|null $explicitEggId,
         bool $confirmed,
         bool $canChangeEgg = true,
+        bool $confirmedCompatibility = false,
     ): array {
         $preview = $this->preview($server, $selection, $versionId, $explicitEggId);
         $descriptor = $preview['descriptor'];
@@ -79,6 +80,14 @@ final class ModpackInstallCoordinator
 
         if ($result->requiresConfirmation && !$confirmed) {
             throw new ModpackException('Confirm the egg change before installing this modpack.');
+        }
+
+        if ($result->compatibilityWarning !== null && !$confirmedCompatibility) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.'.$result->compatibilityWarning));
+        }
+
+        if ($result->mode === ProvisioningMode::Archive && !$this->operations->supportsAsyncDispatch()) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.operations.queue_required'));
         }
 
         $changedEgg = $result->disposition === CompatibilityDisposition::EggChange

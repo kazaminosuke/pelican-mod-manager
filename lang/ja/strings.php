@@ -285,6 +285,11 @@ return [
         'plan' => '導入プラン',
         'plan_unavailable' => 'Modpackの情報を読み込めませんでした。',
         'confirm_egg_change' => 'この操作でサーバーのEggを変更し、再インストールすることを理解しました。ワールドなどのファイルは削除しません。',
+        'server_pack_selected' => '専用サーバーZIPを使用します。',
+        'server_pack_unavailable' => '専用サーバーZIPを取得できないため、通常のModpack ZIPを使用します。',
+        'server_pack_unlisted' => '専用サーバーZIPの掲載がないため、通常のModpack ZIPを使用します。',
+        'server_compatibility_unknown' => 'このリリースのサーバー互換性を確認できませんでした。続行する前に、配布元の手順とMinecraft・ローダーのバージョンを確認してください。',
+        'confirm_server_compatibility' => 'このリリースの導入を試す',
         'provision_queued' => 'Modpackの導入を開始しました',
     ],
 

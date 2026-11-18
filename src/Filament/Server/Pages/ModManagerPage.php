@@ -53,6 +53,7 @@ use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
 use Kazaminosuke\ModManager\Filament\Filters\CatalogSelectFilter;
@@ -4202,13 +4203,23 @@ class ModManagerPage extends Page implements HasTable
 
                             return $options[$value] ?? (is_string($value) ? $value : null);
                         })
-                        ->afterStateUpdated(fn (callable $set) => $set('version', null)),
+                        ->afterStateUpdated(function (Set $set): void {
+                            $set('version', null);
+                            $set('target_egg', null);
+                            $set('confirm_egg_change', false);
+                            $set('confirm_server_compatibility', false);
+                        }),
                     Select::make('version')
                         ->label(trans('pelican-mod-manager::strings.modpacks.version'))
                         ->required()
                         ->live()
                         ->visible(fn (Get $get): bool => filled($get('project')))
-                        ->options(fn (Get $get): array => app(ModpackCatalog::class)->versionOptions((string) $get('project'))),
+                        ->options(fn (Get $get): array => app(ModpackCatalog::class)->versionOptions((string) $get('project')))
+                        ->afterStateUpdated(function (Set $set): void {
+                            $set('target_egg', null);
+                            $set('confirm_egg_change', false);
+                            $set('confirm_server_compatibility', false);
+                        }),
                     Select::make('target_egg')
                         ->label(trans('pelican-mod-manager::strings.modpacks.choose_egg'))
                         ->helperText(trans('pelican-mod-manager::strings.modpacks.choose_egg_helper'))
@@ -4233,8 +4244,17 @@ class ModManagerPage extends Page implements HasTable
 
                             return $result === null
                                 ? trans('pelican-mod-manager::strings.modpacks.plan_unavailable')
-                                : $result->reasonDetail;
+                                : implode(' ', array_filter([
+                                    $result->reasonDetail,
+                                    $result->serverFileStatus !== null
+                                        ? trans('pelican-mod-manager::strings.modpacks.'.$result->serverFileStatus) : null,
+                                ]));
                         }),
+                    Checkbox::make('confirm_server_compatibility')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.confirm_server_compatibility'))
+                        ->helperText(trans('pelican-mod-manager::strings.modpacks.server_compatibility_unknown'))
+                        ->visible(fn (Get $get): bool => $this->modpackPreview($server, $get, $get('target_egg'))?->compatibilityWarning !== null)
+                        ->accepted(fn (Get $get): bool => $this->modpackPreview($server, $get, $get('target_egg'))?->compatibilityWarning !== null),
                     Checkbox::make('confirm_egg_change')
                         ->label(trans('pelican-mod-manager::strings.modpacks.confirm_egg_change'))
                         ->visible(function (Get $get) use ($server): bool {
@@ -4253,6 +4273,7 @@ class ModManagerPage extends Page implements HasTable
                             isset($data['target_egg']) && $data['target_egg'] !== '' ? $data['target_egg'] : null,
                             (bool) ($data['confirm_egg_change'] ?? false),
                             $this->canEditEggProfile($server),
+                            (bool) ($data['confirm_server_compatibility'] ?? false),
                         );
                         if ($outcome['dispatched']) {
                             $this->notifyInstalledOperationDispatched(['dispatched' => true, 'reason' => null, 'state' => null]);
@@ -4263,6 +4284,12 @@ class ModManagerPage extends Page implements HasTable
                                 ->success()
                                 ->send();
                         }
+                    } catch (ModpackException $exception) {
+                        Notification::make()
+                            ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
+                            ->body($exception->getMessage())
+                            ->warning()
+                            ->send();
                     } catch (Exception $exception) {
                         $this->notifyProjectOperationFailure($exception, 'install_failed');
                     }
@@ -4390,6 +4417,9 @@ class ModManagerPage extends Page implements HasTable
         ];
     }
 
+    /** @var array<string, CompatibilityResult|null> */
+    private array $modpackPreviews = [];
+
     private function modpackPreview(Server $server, Get $get, mixed $explicitEggId = null): ?CompatibilityResult
     {
         $project = (string) $get('project');
@@ -4398,15 +4428,20 @@ class ModManagerPage extends Page implements HasTable
             return null;
         }
 
+        $key = $project.'|'.$version.'|'.(is_scalar($explicitEggId) ? (string) $explicitEggId : '');
+        if (array_key_exists($key, $this->modpackPreviews)) {
+            return $this->modpackPreviews[$key];
+        }
+
         try {
-            return app(ModpackInstallCoordinator::class)->preview(
+            return $this->modpackPreviews[$key] = app(ModpackInstallCoordinator::class)->preview(
                 $server,
                 $project,
                 (string) $version,
                 is_scalar($explicitEggId) && (string) $explicitEggId !== '' ? $explicitEggId : null,
             )['result'];
         } catch (Exception) {
-            return null;
+            return $this->modpackPreviews[$key] = null;
         }
     }
 

@@ -9,6 +9,7 @@ final class PackRequirement
 {
     /**
      * @param  array<string, string>  $variables  env values the provisioning egg must receive
+     * @param  array<string, string>  $archiveVariables  env values for a new loader installation
      * @param  list<string>  $loaderProfileIds  profile ids whose loader may receive an archive install
      */
     public function __construct(
@@ -22,5 +23,9 @@ final class PackRequirement
         public readonly bool $archiveAllowed,
         public readonly array $loaderProfileIds,
         public readonly ?string $unsupportedReason = null,
+        public readonly array $archiveVariables = [],
+        public readonly bool $allowUnknownLoader = false,
+        public readonly ?string $compatibilityWarning = null,
+        public readonly ?string $serverFileStatus = null,
     ) {}
 }

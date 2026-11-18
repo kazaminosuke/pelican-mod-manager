@@ -285,6 +285,11 @@ return [
         'plan' => 'Bereitstellung',
         'plan_unavailable' => 'Die Modpack-Daten konnten nicht geladen werden.',
         'confirm_egg_change' => 'Ich verstehe, dass dadurch das Server-Egg geändert und neu installiert wird. Welten und andere Dateien werden nicht gelöscht.',
+        'server_pack_selected' => 'Verwendet das dedizierte Server-ZIP.',
+        'server_pack_unavailable' => 'Das dedizierte Server-ZIP ist nicht verfügbar. Das reguläre Modpack-ZIP wird verwendet.',
+        'server_pack_unlisted' => 'Kein dediziertes Server-ZIP gelistet. Das reguläre Modpack-ZIP wird verwendet.',
+        'server_compatibility_unknown' => 'Die Serverkompatibilität dieser Version konnte nicht bestätigt werden. Prüfe die Anleitung des Packs sowie die Minecraft- und Loader-Versionen.',
+        'confirm_server_compatibility' => 'Ich möchte die Installation dieser Version versuchen.',
         'provision_queued' => 'Modpack-Bereitstellung gestartet',
     ],
 

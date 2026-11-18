@@ -120,8 +120,7 @@ final class EggCompatibilityEngine
         });
         $loaders = $this->candidates($eggs, function (ClassifiedEgg $egg) use ($requirement): bool {
             return $requirement->archiveAllowed
-                && $requirement->loader !== null
-                && $egg->loader === $requirement->loader
+                && $this->canUsePackLoader($requirement, $egg)
                 && $egg->projectType === 'mod'
                 && ($requirement->loaderProfileIds === []
                     || in_array((string) $egg->profileId, $requirement->loaderProfileIds, true)
@@ -177,8 +176,7 @@ final class EggCompatibilityEngine
             }
 
             if ($requirement->archiveAllowed
-                && $requirement->loader !== null
-                && $current->loader === $requirement->loader
+                && $this->canUsePackLoader($requirement, $current)
                 && $current->projectType === 'mod'
                 && !$current->isProxy) {
                 return $this->chosen(
@@ -189,7 +187,9 @@ final class EggCompatibilityEngine
                     $currentEggId,
                     [],
                     'compatible_loader',
-                    'The current egg uses the loader this modpack requires.',
+                    $requirement->allowUnknownLoader
+                        ? 'This server can attempt the archive with its current loader.'
+                        : 'The current egg uses the loader this modpack requires.',
                     true,
                 );
             }
@@ -218,7 +218,7 @@ final class EggCompatibilityEngine
             static fn (ClassifiedEgg $egg): bool => $egg->confidence === 'high',
         ));
 
-        if ($automatic && count($high) === 1) {
+        if ($automatic && count($high) === 1 && !$requirement->allowUnknownLoader) {
             return $this->chosen(
                 $requirement,
                 $high[0],
@@ -232,7 +232,7 @@ final class EggCompatibilityEngine
             );
         }
 
-        $options = $high !== [] ? $high : $pool;
+        $options = $high !== [] && !$requirement->allowUnknownLoader ? $high : $pool;
 
         return $this->result(
             $requirement,
@@ -241,10 +241,19 @@ final class EggCompatibilityEngine
             null,
             $this->rank($options),
             'ambiguous',
-            count($high) > 1
-                ? 'More than one high-confidence egg matches this modpack.'
-                : 'The matching egg is not confident enough to select automatically.',
+            match (true) {
+                $requirement->allowUnknownLoader => 'Choose the loader egg to try with this modpack.',
+                count($high) > 1 => 'More than one high-confidence egg matches this modpack.',
+                default => 'The matching egg is not confident enough to select automatically.',
+            },
         );
+    }
+
+    private function canUsePackLoader(PackRequirement $requirement, ClassifiedEgg $egg): bool
+    {
+        return $requirement->loader !== null
+            ? $egg->loader === $requirement->loader
+            : $requirement->allowUnknownLoader && in_array($egg->loader, ['forge', 'neoforge', 'fabric', 'quilt'], true);
     }
 
     /**
@@ -396,7 +405,11 @@ final class EggCompatibilityEngine
         bool $automatic,
     ): CompatibilityResult {
         $sameEgg = $currentEggId !== null && (string) $currentEggId === (string) $selected->id;
-        $variables = $mode === ProvisioningMode::EggInstall ? $requirement->variables : [];
+        $variables = match (true) {
+            $mode === ProvisioningMode::EggInstall => $requirement->variables,
+            $mode === ProvisioningMode::Archive && !$sameEgg => $requirement->archiveVariables,
+            default => [],
+        };
         $variablesDiffer = false;
         foreach ($variables as $name => $value) {
             if ((string) ($currentVariables[$name] ?? '') !== (string) $value) {
@@ -490,6 +503,8 @@ final class EggCompatibilityEngine
             minecraftVersion: $requirement->minecraftVersion,
             loader: $requirement->loader,
             provider: $requirement->provider,
+            compatibilityWarning: $requirement->compatibilityWarning,
+            serverFileStatus: $requirement->serverFileStatus,
         );
     }
 }
