@@ -43,6 +43,8 @@ final class ModpackArchiveTest extends TestCase
                 ],
             ], JSON_THROW_ON_ERROR),
             'overrides/config/example.toml' => "hello\n",
+            'server-overrides/config/example.toml' => "server\n",
+            'server-overrides/config/server.toml' => "server only\n",
             'client-overrides/config/client.toml' => "nope\n",
             'overrides/world/level.dat' => 'world',
         ]);
@@ -60,7 +62,8 @@ final class ModpackArchiveTest extends TestCase
         ));
         self::assertTrue($manifest->remoteFiles[0]->required);
         self::assertFalse($manifest->remoteFiles[1]->required);
-        self::assertSame(['config/example.toml', 'world/level.dat'], array_map(
+        self::assertSame('server'."\n", $manifest->overrides[0]->contents);
+        self::assertSame(['config/example.toml', 'config/server.toml', 'world/level.dat'], array_map(
             static fn ($file) => $file->path,
             $manifest->overrides,
         ));

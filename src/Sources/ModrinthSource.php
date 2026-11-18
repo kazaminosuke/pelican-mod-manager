@@ -261,7 +261,8 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             ->get(self::BASE_URL.'/version/'.$versionId)
             ->json();
 
-        if (!is_array($version) || (string) ($version['project_id'] ?? '') !== $projectId) {
+        if (!is_array($version) || ($version['id'] ?? null) !== $versionId
+            || ($version['project_id'] ?? null) !== $projectId) {
             return null;
         }
 

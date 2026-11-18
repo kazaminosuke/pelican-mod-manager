@@ -85,6 +85,21 @@ final class ModpackSearchTest extends TestCase
         self::assertSame('modpack', $executor->spec->arguments['catalog']);
     }
 
+    public function test_modrinth_rejects_a_different_release_in_the_selected_version_response(): void
+    {
+        Http::fake([
+            'api.modrinth.com/v2/version/requested' => Http::response([
+                'id' => 'different',
+                'project_id' => 'project',
+                'version_number' => '2',
+                'files' => [['filename' => 'pack.mrpack', 'url' => 'https://cdn.modrinth.com/pack.mrpack']],
+            ]),
+        ]);
+
+        $source = new ModrinthSource($this->cache(new CapturingExecutor()));
+        self::assertNull($source->modpackDownloadById('project', 'requested'));
+    }
+
     public function test_curseforge_modpack_search_uses_the_modpack_class(): void
     {
         $executor = new CapturingExecutor();
