@@ -228,6 +228,35 @@ final class ModpackSearchTest extends TestCase
         self::assertNull($source->modpackDownloadById('10', '6'));
     }
 
+    public function test_only_an_official_download_url_can_supply_a_missing_server_pack_url(): void
+    {
+        Http::fake([
+            'api.curseforge.com/v1/mods/10/files/5' => Http::response(['data' => [
+                'id' => 5,
+                'fileName' => 'client.zip',
+                'downloadUrl' => 'https://edge.forgecdn.net/client.zip',
+                'serverPackFileId' => 9,
+            ]]),
+            'api.curseforge.com/v1/mods/10/files/9' => Http::response(['data' => [
+                'id' => 9,
+                'fileName' => 'server.zip',
+                'isServerPack' => true,
+                'parentProjectFileId' => 5,
+            ]]),
+            'api.curseforge.com/v1/mods/10/files/9/download-url' => Http::sequence()
+                ->push(['data' => 'https://edge.forgecdn.net/server.zip'])
+                ->push([], 403),
+            'api.curseforge.com/v1/mods/10/files?*' => Http::response(['data' => []]),
+        ]);
+        $source = new CurseForgeSource($this->cache(new CapturingExecutor()));
+
+        self::assertSame('https://edge.forgecdn.net/server.zip', $source->modpackDownloadById('10', '5')['url']);
+        $fallback = $source->modpackDownloadById('10', '5');
+        self::assertTrue($fallback['has_server_pack']);
+        self::assertFalse($fallback['server_pack']);
+        self::assertSame('https://edge.forgecdn.net/client.zip', $fallback['url']);
+    }
+
     public function test_missing_curseforge_download_url_is_a_distribution_block(): void
     {
         Http::fake([

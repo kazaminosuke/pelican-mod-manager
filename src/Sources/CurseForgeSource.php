@@ -177,8 +177,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         bool $constrainToServer = true,
         ?string $minecraft = null,
         ?string $loader = null,
-    ): array
-    {
+    ): array {
         $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer, $minecraft, $loader));
 
         return $this->normalizeSearchResult($result);
@@ -221,7 +220,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
 
         foreach ($files as $file) {
             if (($file['isServerPack'] ?? false) === true && (int) ($file['parentProjectFileId'] ?? 0) === 0) {
-                $download = $this->modpackReleaseDownload($file, $file, true, null);
+                $download = $this->modpackReleaseDownload($projectId, $file, $file, true, null);
                 if ($download !== null) {
                     return $download;
                 }
@@ -288,7 +287,10 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         if (($file['isServerPack'] ?? false) === true) {
             $parent = $this->findModpackFile($projectId, (int) ($file['parentProjectFileId'] ?? 0));
 
-            return $this->modpackReleaseDownload($parent ?? $file, $file, true, $parent !== null ? (string) $file['id'] : null);
+            return $this->modpackReleaseDownload(
+                $projectId, $parent ?? $file, $file, true,
+                $parent !== null ? $this->serverPackEggVersion($parent, $file) : null,
+            );
         }
         if (ModpackFileSelector::isCurseForgeAdditionalFile($file)) {
             return null;
@@ -308,7 +310,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $linked = $this->findModpackFile($projectId, $linkedId);
         $hasServerPack = $linkedId > 0;
         if ($linked !== null && ModpackFileSelector::isCurseForgeServerPackFor($release, $linked)) {
-            $download = $this->modpackReleaseDownload($release, $linked, true, $this->serverPackEggVersion($release, $linked));
+            $download = $this->modpackReleaseDownload($projectId, $release, $linked, true, $this->serverPackEggVersion($release, $linked));
             if ($download !== null) {
                 return $download;
             }
@@ -332,13 +334,13 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             }
 
             $hasServerPack = true;
-            $download = $this->modpackReleaseDownload($release, $candidate, true, $this->serverPackEggVersion($release, $candidate));
+            $download = $this->modpackReleaseDownload($projectId, $release, $candidate, true, $this->serverPackEggVersion($release, $candidate));
             if ($download !== null) {
                 return $download;
             }
         }
 
-        $download = $this->modpackReleaseDownload($release, $release, false, $linkedId === 0 ? (string) $release['id'] : null);
+        $download = $this->modpackReleaseDownload($projectId, $release, $release, false, $linkedId === 0 ? (string) $release['id'] : null);
 
         return $download === null ? null : array_replace($download, ['has_server_pack' => $hasServerPack]);
     }
@@ -363,9 +365,9 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
      * @param array<string, mixed> $file
      * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
      */
-    private function modpackReleaseDownload(array $release, array $file, bool $serverPack, ?string $eggVersion): ?array
+    private function modpackReleaseDownload(string $projectId, array $release, array $file, bool $serverPack, ?string $eggVersion): ?array
     {
-        $download = $this->modpackZipDownload($file);
+        $download = $this->modpackZipDownload($file, $projectId);
         if ($download === null) {
             return null;
         }
@@ -697,19 +699,33 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     }
 
     /**
-     * @param  array<string, mixed>|null  $file
+     * @param  array<string, mixed>  $file
      * @return array{version_id: string, version_number: string, filename: string, url: string}|null
      */
-    private function modpackZipDownload(?array $file): ?array
+    private function modpackZipDownload(array $file, ?string $projectId = null): ?array
     {
-        if ($file === null) {
-            return null;
-        }
-
         $filename = trim((string) ($file['fileName'] ?? ''));
         $url = $file['downloadUrl'] ?? null;
         $id = trim((string) ($file['id'] ?? ''));
-        if ($id === '' || $filename === '' || !str_ends_with(strtolower($filename), '.zip') || !is_string($url) || !ModpackPaths::isSafeHttpsDownloadUrl($url)) {
+        if (!ctype_digit($id) || !str_ends_with(strtolower($filename), '.zip')) {
+            return null;
+        }
+
+        if (($url === null || $url === '') && $projectId !== null) {
+            // Use the official endpoint when the file object omits the URL.
+            // A denied URL stays denied; the provider controls distribution.
+            try {
+                $url = $this->getJson("/mods/{$projectId}/files/{$id}/download-url", timeoutSeconds: 5.0)['data'] ?? null;
+            } catch (RequestException $exception) {
+                if (!in_array($exception->response->status(), [403, 404, 410], true)) {
+                    throw $exception;
+                }
+
+                return null;
+            }
+        }
+
+        if (!is_string($url) || !ModpackPaths::isSafeHttpsDownloadUrl($url)) {
             return null;
         }
 
