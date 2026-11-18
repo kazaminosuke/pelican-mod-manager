@@ -56,7 +56,7 @@ final class ModpackArchive
      */
     public static function serverFiles(ZipArchive $zip): array
     {
-        $roots = ['mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'global_packs', 'openloader', 'resourcepacks'];
+        $roots = ['mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'global_packs', 'openloader', 'resourcepacks', 'resources', 'structures'];
         $byRoot = [];
 
         for ($index = 0; $index < $zip->numFiles; $index++) {

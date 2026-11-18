@@ -114,6 +114,30 @@ final class ModpackArchiveTest extends TestCase
         }
     }
 
+    public function test_legacy_server_zip_keeps_mod_resources_and_generated_structures(): void
+    {
+        // Directory layout from the RLCraft 2.9.3 server pack (file 4612990).
+        $path = $this->zip([
+            'resources/antiqueatlas/textures/gui/markers/anvil.png' => 'marker',
+            'structures/active/10Surface.rcgp' => 'structure',
+            'mods/example.jar' => 'jar',
+            'server.properties' => 'protected',
+            'options.txt' => 'client config',
+            'start.sh' => 'launcher',
+        ]);
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($path));
+        try {
+            self::assertSame([
+                'resources/antiqueatlas/textures/gui/markers/anvil.png',
+                'structures/active/10Surface.rcgp',
+                'mods/example.jar',
+            ], array_column(ModpackArchive::serverFiles($zip), 'path'));
+        } finally {
+            $zip->close();
+        }
+    }
+
     public function test_unsafe_modrinth_path_is_rejected(): void
     {
         $path = $this->zip([
