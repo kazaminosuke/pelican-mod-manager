@@ -1337,6 +1337,11 @@ class SpigotSourceTest extends TestCase
         Http::fake([
             'cdn.spiget.org/file/spiget-resources/50.jar' => Http::response("PK\x03\x04", 206),
             'www.spigotmc.org/resources/50/download?version=2' => Http::response('<!DOCTYPE html>Cloudflare', 403),
+            'api.spiget.org/v2/resources/50/versions/2/download?*' => Http::response('', 302, [
+                'Location' => 'https://cdn.spiget.org/file/spiget-resources/50.jar',
+            ]),
+            'www.spigotmc.org/resources/50/download?version=4' => Http::response('', 404),
+            'api.spiget.org/v2/resources/50/versions/4/download?*' => Http::response("PK\x03\x04", 206),
             'www.spigotmc.org/resources/50/download?version=1' => Http::response("PK\x03\x04", 206),
             'api.spiget.org/v2/resources/50/versions/latest*' => Http::response([
                 'name' => '1.2.0',
@@ -1353,6 +1358,17 @@ class SpigotSourceTest extends TestCase
         ], $server, ProjectType::Plugin);
         self::assertSame([], $olderBlocked['files']);
         self::assertSame('version_unavailable', $olderBlocked['download_unavailable']);
+        self::assertSame('https://www.spigotmc.org/resources/50/download?version=2', $olderBlocked['manual_download_url']);
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'cdn.spiget.org'));
+
+        $olderFromSpiget = $source->resolveInstallableVersion('50', [
+            'id' => '4',
+            'version_number' => '1.1.1',
+        ], $server, ProjectType::Plugin);
+        self::assertStringStartsWith(
+            'https://api.spiget.org/v2/resources/50/versions/4/download?',
+            ProjectPrimaryFile::fromVersion($olderFromSpiget)['url'] ?? '',
+        );
 
         $olderDirect = $source->resolveInstallableVersion('50', [
             'id' => '1',
