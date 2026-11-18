@@ -174,7 +174,11 @@ final class ModpackCreationStep
                     }),
                 Checkbox::make('mm_confirm_compatibility')
                     ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.confirm_server_compatibility'))
-                    ->helperText(fn (): string => trans('pelican-mod-manager::strings.modpacks.server_compatibility_unknown'))
+                    ->helperText(function (Get $get): string {
+                        $warning = self::result($get, $get('mm_egg'))?->compatibilityWarning;
+
+                        return $warning !== null ? trans('pelican-mod-manager::strings.modpacks.'.$warning) : '';
+                    })
                     ->visible(fn (Get $get): bool => self::result($get, $get('mm_egg'))?->compatibilityWarning !== null)
                     ->accepted()
                     ->dehydrated(false),

@@ -4253,7 +4253,11 @@ class ModManagerPage extends Page implements HasTable
                         }),
                     Checkbox::make('confirm_server_compatibility')
                         ->label(trans('pelican-mod-manager::strings.modpacks.confirm_server_compatibility'))
-                        ->helperText(trans('pelican-mod-manager::strings.modpacks.server_compatibility_unknown'))
+                        ->helperText(function (Get $get) use ($server): string {
+                            $warning = $this->modpackPreview($server, $get, $get('target_egg'))?->compatibilityWarning;
+
+                            return $warning !== null ? trans('pelican-mod-manager::strings.modpacks.'.$warning) : '';
+                        })
                         ->visible(fn (Get $get): bool => $this->modpackPreview($server, $get, $get('target_egg'))?->compatibilityWarning !== null)
                         ->accepted(fn (Get $get): bool => $this->modpackPreview($server, $get, $get('target_egg'))?->compatibilityWarning !== null),
                     Checkbox::make('confirm_egg_change')

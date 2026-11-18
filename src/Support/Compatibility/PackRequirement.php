@@ -27,5 +27,6 @@ final class PackRequirement
         public readonly bool $allowUnknownLoader = false,
         public readonly ?string $compatibilityWarning = null,
         public readonly ?string $serverFileStatus = null,
+        public readonly ?string $archiveCompatibilityWarning = null,
     ) {}
 }

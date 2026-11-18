@@ -92,6 +92,7 @@ final class ModpackProvisioningPlanner
             compatibilityWarning: $curseForge
                 && (!$pack->usesServerPack || $pack->loader === null || $pack->minecraftVersion === null)
                 ? 'server_compatibility_unknown' : null,
+            archiveCompatibilityWarning: $pack->loaderVersion === null ? 'loader_build_unknown' : null,
             serverFileStatus: match (true) {
                 $pack->usesServerPack => 'server_pack_selected',
                 $pack->hasServerPack === true => 'server_pack_unavailable',

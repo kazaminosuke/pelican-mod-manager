@@ -125,6 +125,10 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_version', '9620701')
             ->assertSet('data.egg_id', 7)
             ->assertSet('data.environment.MC_VERSION', '1.21.1')
+            ->assertSee('could not determine the required loader build')
+            ->call('nextModpackStep')
+            ->assertHasErrors('data.mm_confirm_compatibility')
+            ->set('data.mm_confirm_compatibility', true)
             ->call('nextModpackStep')
             ->assertHasNoErrors()
             ->set('data.mm_modpack', false)
@@ -135,7 +139,9 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSet('data.mm_minecraft', '1.21.1')
             ->assertSet('data.mm_version', '9620701');
 
-        $wizard->set('data.start_on_completion', true)->call('create')->assertHasErrors('data.mm_project');
+        $wizard->set('data.mm_confirm_compatibility', true)
+            ->set('data.environment.NEOFORGE_VERSION', '21.1.266')
+            ->set('data.start_on_completion', true)->call('create')->assertHasErrors('data.mm_project');
         self::assertSame([], $runner->spawned);
         $wizard->set('data.start_on_completion', false)->call('create')->assertHasNoErrors();
 
@@ -145,7 +151,7 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('925200', $runner->spawned[0]['payload']['project_id']);
         self::assertSame([
             'egg_id' => '7', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
-            'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => 'latest'],
+            'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => '21.1.266'],
         ], $runner->spawned[0]['payload']['selection']);
         self::assertGreaterThan(time(), $runner->spawned[0]['payload']['defer_until']);
 

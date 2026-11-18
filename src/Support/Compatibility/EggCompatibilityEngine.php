@@ -503,7 +503,8 @@ final class EggCompatibilityEngine
             minecraftVersion: $requirement->minecraftVersion,
             loader: $requirement->loader,
             provider: $requirement->provider,
-            compatibilityWarning: $requirement->compatibilityWarning,
+            compatibilityWarning: $requirement->compatibilityWarning
+                ?? ($mode === ProvisioningMode::Archive ? $requirement->archiveCompatibilityWarning : null),
             serverFileStatus: $requirement->serverFileStatus,
         );
     }
