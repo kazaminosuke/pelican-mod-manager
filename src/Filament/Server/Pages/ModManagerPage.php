@@ -38,6 +38,7 @@ use Filament\Tables\Filters\Indicator;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -474,7 +475,7 @@ class ModManagerPage extends Page implements HasTable
         return $this->activeTab !== 'installed' && $this->getCurrentSource() instanceof SpigotSource;
     }
 
-    protected function resolveTableRecord(?string $key): \Illuminate\Database\Eloquent\Model|array|null
+    protected function resolveTableRecord(?string $key): Model|array|null
     {
         if ($this->isSpigotCatalog()) {
             return $key === null ? null : ($this->renderedSpigotRecords[$key] ?? null);

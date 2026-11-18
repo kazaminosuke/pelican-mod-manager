@@ -73,8 +73,7 @@ final class ModpackFileSelector
         $zips = array_values(array_filter($files, static fn (mixed $file): bool => is_array($file)
             && (int) ($file['id'] ?? 0) > 0
             && str_ends_with(strtolower((string) ($file['fileName'] ?? '')), '.zip')));
-        usort($zips, static fn (array $left, array $right): int =>
-            strcmp((string) ($right['fileDate'] ?? ''), (string) ($left['fileDate'] ?? '')));
+        usort($zips, static fn (array $left, array $right): int => strcmp((string) ($right['fileDate'] ?? ''), (string) ($left['fileDate'] ?? '')));
 
         return $zips;
     }

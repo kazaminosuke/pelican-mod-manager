@@ -147,8 +147,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         bool $constrainToServer = true,
         ?string $minecraft = null,
         ?string $loader = null,
-    ): array
-    {
+    ): array {
         $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer, $minecraft, $loader));
 
         return is_array($result) && is_array($result['hits'] ?? null)

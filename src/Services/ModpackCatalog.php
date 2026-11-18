@@ -268,6 +268,7 @@ final class ModpackCatalog
                 ProjectSourceKey::CurseForge->value => $this->curseForge->modpackDownloadById($projectId, $versionId),
                 default => null,
             };
+
             return $download === null ? null : ['source' => $source, 'project_id' => $projectId] + $download;
         }
 
