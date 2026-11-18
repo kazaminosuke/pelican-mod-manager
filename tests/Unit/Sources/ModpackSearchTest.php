@@ -124,6 +124,73 @@ final class ModpackSearchTest extends TestCase
 
         self::assertSame('https://edge.forgecdn.net/server.zip', $download['url']);
         self::assertSame('server.zip', $download['filename']);
+        self::assertSame('5', $download['version_id']);
+        self::assertTrue($download['server_pack']);
+    }
+
+    public function test_selected_curseforge_release_matches_only_its_own_additional_server_zip(): void
+    {
+        $release = [
+            'id' => 9620701,
+            'modId' => 925200,
+            'fileName' => 'ATM10-8.6.zip',
+            'gameVersions' => ['NeoForge', '1.21.1'],
+            'downloadUrl' => 'https://edge.forgecdn.net/client.zip',
+        ];
+        $additional = [
+            'id' => 9620727,
+            'modId' => 925200,
+            'fileName' => 'ServerFiles-8.6.zip',
+            'parentProjectFileId' => 9620701,
+            'isServerPack' => true,
+            'downloadUrl' => 'https://edge.forgecdn.net/server.zip',
+        ];
+        Http::fake([
+            'api.curseforge.com/v1/mods/925200/files/9620701' => Http::response(['data' => $release]),
+            'api.curseforge.com/v1/mods/925200/files?*' => Http::response(['data' => [
+                array_replace($additional, ['id' => 9620728, 'parentProjectFileId' => 8]),
+                array_replace($additional, ['id' => 9620729, 'isServerPack' => false]),
+                $additional,
+                $release,
+            ]]),
+        ]);
+        $source = new CurseForgeSource($this->cache(new CapturingExecutor()));
+        $download = $source->modpackDownloadById('925200', '9620701');
+
+        self::assertSame('9620701', $download['version_id']);
+        self::assertSame('9620727', $download['egg_version_id']);
+        self::assertSame('https://edge.forgecdn.net/server.zip', $download['url']);
+        self::assertSame('1.21.1', $download['minecraft']);
+        self::assertSame('neoforge', $download['loader']);
+        self::assertSame(['9620701'], array_column($source->listModpackVersions('925200'), 'id'));
+    }
+
+    public function test_unavailable_server_zip_preserves_its_parent_release_and_distribution_rules(): void
+    {
+        $client = [
+            'id' => 5,
+            'fileName' => 'client.zip',
+            'downloadUrl' => 'https://edge.forgecdn.net/client.zip',
+            'serverPackFileId' => 9,
+        ];
+        Http::fake([
+            'api.curseforge.com/v1/mods/10/files/5' => Http::response(['data' => $client]),
+            'api.curseforge.com/v1/mods/10/files/9' => Http::response([], 404),
+            'api.curseforge.com/v1/mods/10/files/6' => Http::response(['data' => array_replace($client, [
+                'id' => 6,
+                'downloadUrl' => 'https://127.0.0.1/client.zip',
+            ])]),
+            'api.curseforge.com/v1/mods/10/files?*' => Http::response(['data' => []]),
+        ]);
+        $source = new CurseForgeSource($this->cache(new CapturingExecutor()));
+        $download = $source->modpackDownloadById('10', '5');
+
+        self::assertSame('5', $download['version_id']);
+        self::assertSame('https://edge.forgecdn.net/client.zip', $download['url']);
+        self::assertTrue($download['has_server_pack']);
+        self::assertFalse($download['server_pack']);
+        self::assertNull($download['egg_version_id']);
+        self::assertNull($source->modpackDownloadById('10', '6'));
     }
 
     public function test_missing_curseforge_download_url_is_a_distribution_block(): void

@@ -6,6 +6,7 @@ use App\Models\Server;
 use Exception;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\AuthoritativeBatchProjectSourceInterface;
@@ -180,7 +181,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
      * Newest installable pack zip. A server pack is preferred over the
      * client installer when CurseForge publishes one.
      *
-     * @return array{version_id: string, version_number: string, filename: string, url: string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
      */
     public function latestModpackDownload(Server $server, string $projectId): ?array
     {
@@ -199,17 +200,28 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         }
 
         $response = $this->getJson('/mods/'.$projectId.'/files', $params);
-        $files = is_array($response['data'] ?? null) ? $response['data'] : [];
-        $selected = ModpackFileSelector::curseForgeServerPack($files);
-        if ($selected === null) {
-            return null;
+        $files = ModpackFileSelector::curseForgeZips((array) ($response['data'] ?? []));
+        foreach ($files as $release) {
+            if (ModpackFileSelector::isCurseForgeAdditionalFile($release)) {
+                continue;
+            }
+
+            $download = $this->resolveModpackRelease($projectId, $release, $files);
+            if ($download !== null) {
+                return $download;
+            }
         }
 
-        if (($selected['lookup'] ?? false) === true) {
-            $selected = $this->modpackFile((int) $projectId, (int) $selected['id']);
+        foreach ($files as $file) {
+            if (($file['isServerPack'] ?? false) === true && (int) ($file['parentProjectFileId'] ?? 0) === 0) {
+                $download = $this->modpackReleaseDownload($file, $file, true, null);
+                if ($download !== null) {
+                    return $download;
+                }
+            }
         }
 
-        return $this->modpackZipDownload(is_array($selected) ? $selected : null);
+        return null;
     }
 
     /**
@@ -224,17 +236,12 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $response = $this->getJson('/mods/'.$projectId.'/files', ['pageSize' => 30]);
         $files = is_array($response['data'] ?? null) ? $response['data'] : [];
         $choices = [];
-        foreach ($files as $file) {
-            if (!is_array($file)) {
+        foreach (ModpackFileSelector::curseForgeZips($files) as $file) {
+            if (ModpackFileSelector::isCurseForgeAdditionalFile($file)) {
                 continue;
             }
 
-            $name = strtolower((string) ($file['fileName'] ?? ''));
-            $id = trim((string) ($file['id'] ?? ''));
-            if ($id === '' || !str_ends_with($name, '.zip')) {
-                continue;
-            }
-
+            $id = (string) $file['id'];
             [$minecraft, $loader] = $this->curseForgeFileTargets($file);
             $display = trim((string) ($file['displayName'] ?? ''));
             $label = $display !== '' ? $display : (string) $file['fileName'];
@@ -257,7 +264,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     }
 
     /**
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
      */
     public function modpackDownloadById(string $projectId, string $fileId): ?array
     {
@@ -265,18 +272,133 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return null;
         }
 
-        $file = $this->modpackFile((int) $projectId, (int) $fileId);
-        $download = $this->modpackZipDownload($file);
-        if ($download === null || !is_array($file)) {
+        $file = $this->findModpackFile($projectId, (int) $fileId);
+        if ($file === null) {
             return null;
         }
 
-        [$minecraft, $loader] = $this->curseForgeFileTargets($file);
+        // Accept old callers that saved a server pack ID directly.
+        if (($file['isServerPack'] ?? false) === true) {
+            $parent = $this->findModpackFile($projectId, (int) ($file['parentProjectFileId'] ?? 0));
 
-        return $download + [
-            'minecraft' => $minecraft,
-            'loader' => $loader,
-        ];
+            return $this->modpackReleaseDownload($parent ?? $file, $file, true, $parent !== null ? (string) $file['id'] : null);
+        }
+        if (ModpackFileSelector::isCurseForgeAdditionalFile($file)) {
+            return null;
+        }
+
+        return $this->resolveModpackRelease($projectId, $file);
+    }
+
+    /**
+     * @param  array<string, mixed>  $release
+     * @param  list<array<string, mixed>>|null  $listedFiles
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
+     */
+    private function resolveModpackRelease(string $projectId, array $release, ?array $listedFiles = null): ?array
+    {
+        $linkedId = (int) ($release['serverPackFileId'] ?? 0);
+        $linked = $this->findModpackFile($projectId, $linkedId);
+        $hasServerPack = $linkedId > 0;
+        if ($linked !== null && ModpackFileSelector::isCurseForgeServerPackFor($release, $linked)) {
+            $download = $this->modpackReleaseDownload($release, $linked, true, $this->serverPackEggVersion($release, $linked));
+            if ($download !== null) {
+                return $download;
+            }
+        }
+
+        if ($listedFiles === null) {
+            // The additional file may only point back to its parent. Scope
+            // this lookup to the selected project's file listing.
+            try {
+                $response = $this->getJson('/mods/'.$projectId.'/files', ['pageSize' => 50]);
+                $listedFiles = ModpackFileSelector::curseForgeZips((array) ($response['data'] ?? []));
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        foreach ($listedFiles ?? [] as $candidate) {
+            if ((string) ($candidate['modId'] ?? $projectId) !== $projectId
+                || !ModpackFileSelector::isCurseForgeServerPackFor($release, $candidate)) {
+                continue;
+            }
+
+            $hasServerPack = true;
+            $download = $this->modpackReleaseDownload($release, $candidate, true, $this->serverPackEggVersion($release, $candidate));
+            if ($download !== null) {
+                return $download;
+            }
+        }
+
+        $download = $this->modpackReleaseDownload($release, $release, false, $linkedId === 0 ? (string) $release['id'] : null);
+
+        return $download === null ? null : array_replace($download, ['has_server_pack' => $hasServerPack]);
+    }
+
+    /**
+     * @param array<string, mixed> $release
+     * @param array<string, mixed> $serverPack
+     */
+    private function serverPackEggVersion(array $release, array $serverPack): ?string
+    {
+        // Pelican's generic egg resolves the client manifest from the
+        // server file's parentProjectFileId.
+        return ($serverPack['isServerPack'] ?? false) === true
+            && (int) ($serverPack['parentProjectFileId'] ?? 0) === (int) $release['id']
+            && $this->modpackZipDownload($release) !== null
+            ? (string) $serverPack['id']
+            : null;
+    }
+
+    /**
+     * @param array<string, mixed> $release
+     * @param array<string, mixed> $file
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string}|null
+     */
+    private function modpackReleaseDownload(array $release, array $file, bool $serverPack, ?string $eggVersion): ?array
+    {
+        $download = $this->modpackZipDownload($file);
+        if ($download === null) {
+            return null;
+        }
+
+        [$minecraft, $loader] = $this->curseForgeFileTargets($release);
+        [$fileMinecraft, $fileLoader] = $this->curseForgeFileTargets($file);
+
+        return array_replace($download, [
+            'version_id' => (string) $release['id'],
+            'version_number' => trim((string) ($release['displayName'] ?? '')) ?: (string) $release['fileName'],
+            'minecraft' => $minecraft ?? $fileMinecraft,
+            'loader' => $loader ?? $fileLoader,
+            'server_pack' => $serverPack,
+            'has_server_pack' => $serverPack,
+            'egg_version_id' => $eggVersion,
+        ]);
+    }
+
+    /** @return array<string, mixed>|null */
+    private function findModpackFile(string $projectId, int $fileId): ?array
+    {
+        if ($fileId <= 0) {
+            return null;
+        }
+
+        try {
+            $file = $this->modpackFile((int) $projectId, $fileId);
+        } catch (RequestException $exception) {
+            if (!in_array($exception->response->status(), [403, 404, 410], true)) {
+                throw $exception;
+            }
+
+            return null;
+        }
+
+        return $file !== null
+            && (int) ($file['id'] ?? 0) === $fileId
+            && (string) ($file['modId'] ?? $projectId) === $projectId
+            ? $file
+            : null;
     }
 
     /**
@@ -576,7 +698,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $filename = trim((string) ($file['fileName'] ?? ''));
         $url = $file['downloadUrl'] ?? null;
         $id = trim((string) ($file['id'] ?? ''));
-        if ($id === '' || $filename === '' || !str_ends_with(strtolower($filename), '.zip') || !is_string($url) || !str_starts_with($url, 'https://')) {
+        if ($id === '' || $filename === '' || !str_ends_with(strtolower($filename), '.zip') || !is_string($url) || !ModpackPaths::isSafeHttpsDownloadUrl($url)) {
             return null;
         }
 

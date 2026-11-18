@@ -175,44 +175,6 @@ final class ModpackArchiveTest extends TestCase
         self::assertSame('1.0.0', $selected['version_number']);
     }
 
-    public function test_curseforge_selector_prefers_a_server_pack_over_a_newer_client_zip(): void
-    {
-        $selected = ModpackFileSelector::curseForgeServerPack([
-            [
-                'id' => 2,
-                'fileName' => 'client.zip',
-                'fileDate' => '2026-02-01T00:00:00Z',
-                'downloadUrl' => 'https://edge.forgecdn.net/client.zip',
-                'isServerPack' => false,
-            ],
-            [
-                'id' => 1,
-                'fileName' => 'server.zip',
-                'fileDate' => '2026-01-01T00:00:00Z',
-                'downloadUrl' => 'https://edge.forgecdn.net/server.zip',
-                'isServerPack' => true,
-            ],
-        ]);
-
-        self::assertSame(1, $selected['id']);
-    }
-
-    public function test_curseforge_selector_asks_for_a_server_pack_that_is_not_on_the_page(): void
-    {
-        $selected = ModpackFileSelector::curseForgeServerPack([
-            [
-                'id' => 5,
-                'fileName' => 'client.zip',
-                'fileDate' => '2026-02-01T00:00:00Z',
-                'downloadUrl' => 'https://edge.forgecdn.net/client.zip',
-                'serverPackFileId' => 99,
-            ],
-        ]);
-
-        self::assertSame(99, $selected['id']);
-        self::assertTrue($selected['lookup']);
-    }
-
     /** @param array<string, string> $entries */
     private function zip(array $entries): string
     {
