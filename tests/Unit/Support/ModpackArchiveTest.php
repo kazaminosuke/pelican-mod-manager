@@ -114,6 +114,15 @@ final class ModpackArchiveTest extends TestCase
         }
     }
 
+    public function test_curseforge_server_pack_creator_sidecar_accepts_only_one_literal_per_field(): void
+    {
+        // Loader metadata from the Better MC Fabric v40 server ZIP (7522918).
+        $variables = "MINECRAFT_VERSION=1.20.1\r\nMODLOADER=Fabric\r\nMODLOADER_VERSION=0.18.4\r\nJAVA_ARGS=ignored\r\n";
+        self::assertSame(['minecraft' => '1.20.1', 'loader' => 'fabric', 'build' => '0.18.4'], ModpackArchive::curseForgeServerPackMetadata($variables));
+        self::assertNull(ModpackArchive::curseForgeServerPackMetadata($variables."MODLOADER_VERSION=0.18.5\n"));
+        self::assertNull(ModpackArchive::curseForgeServerPackMetadata(str_replace('0.18.4', '$OTHER_VERSION', $variables)));
+    }
+
     public function test_legacy_server_zip_keeps_mod_resources_and_generated_structures(): void
     {
         // Directory layout from the RLCraft 2.9.3 server pack (file 4612990).

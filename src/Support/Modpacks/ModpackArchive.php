@@ -250,6 +250,32 @@ final class ModpackArchive
         ];
     }
 
+    /** @return array{minecraft: string, loader: string, build: string}|null */
+    public static function curseForgeServerPackMetadata(string $variables): ?array
+    {
+        // ServerPackCreator defines these values as literals in variables.txt.
+        $fields = [];
+        foreach (preg_split('/\r?\n/', $variables) as $line) {
+            if (preg_match('/^\s*(MINECRAFT_VERSION|MODLOADER|MODLOADER_VERSION)\s*=([^\r\n]*)$/D', $line, $matches) !== 1) {
+                continue;
+            }
+            if (isset($fields[$matches[1]])) {
+                return null;
+            }
+            $fields[$matches[1]] = trim($matches[2]);
+        }
+
+        $minecraft = $fields['MINECRAFT_VERSION'] ?? '';
+        $loader = ModpackLoader::normalize($fields['MODLOADER'] ?? '');
+        $build = $fields['MODLOADER_VERSION'] ?? '';
+        if ($loader === null || preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $minecraft) !== 1
+            || preg_match('/^[0-9][A-Za-z0-9.+_-]{0,63}$/D', $build) !== 1) {
+            return null;
+        }
+
+        return ['minecraft' => $minecraft, 'loader' => $loader, 'build' => $build];
+    }
+
     private static function fromCurseForge(ZipArchive $zip, string $json): ModpackManifest
     {
         $manifest = self::decodeObject($json, 'manifest.json');

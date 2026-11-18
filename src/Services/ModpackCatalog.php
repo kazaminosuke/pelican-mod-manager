@@ -403,6 +403,21 @@ final class ModpackCatalog
             });
         }
 
+        if (!isset($metadata['build']) && $download['server_pack']) {
+            $serverUrl = $download['url'];
+            $serverMetadata = Cache::remember('mod-manager:cf-variables:'.hash('sha256', $serverUrl), 600, static function () use ($serverUrl): array {
+                $variables = (new CurseForgeManifestReader())->read($serverUrl, 'variables.txt');
+
+                return $variables !== null ? (ModpackArchive::curseForgeServerPackMetadata($variables) ?? []) : [];
+            });
+            $minecraft = $metadata['minecraft'] ?? $download['minecraft'];
+            $loader = $metadata['loader'] ?? $download['loader'];
+            if ($serverMetadata !== [] && ($minecraft === null || $minecraft === $serverMetadata['minecraft'])
+                && ($loader === null || $loader === $serverMetadata['loader'])) {
+                $metadata = $serverMetadata;
+            }
+        }
+
         return new ModpackDescriptor(
             provider: ModpackProvider::CurseForge->value,
             id: $projectId,

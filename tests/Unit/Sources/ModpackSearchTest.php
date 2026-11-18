@@ -109,6 +109,7 @@ final class ModpackSearchTest extends TestCase
         $zip = new \ZipArchive();
         self::assertTrue($zip->open($temp, \ZipArchive::OVERWRITE));
         $zip->addFromString('manifest.json', $metadata);
+        $zip->addFromString('variables.txt', 'MODLOADER_VERSION=0.18.4');
         $zip->addFromString('overrides/large.bin', str_repeat('x', 2 * 1024 * 1024));
         $zip->setCompressionName('overrides/large.bin', \ZipArchive::CM_STORE);
         $zip->close();
@@ -134,6 +135,7 @@ final class ModpackSearchTest extends TestCase
         self::assertSame($metadata, $result);
         self::assertSame(['minecraft' => '1.21.1', 'loader' => 'neoforge', 'build' => '21.1.266'], ModpackArchive::curseForgeInstallMetadata($result));
         Http::assertSentCount(2);
+        self::assertSame('MODLOADER_VERSION=0.18.4', (new CurseForgeManifestReader())->read($url, 'variables.txt'));
     }
 
     public function test_curseforge_manifest_probe_does_not_follow_redirects_or_accept_full_responses(): void
