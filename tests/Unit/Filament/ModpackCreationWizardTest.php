@@ -305,6 +305,35 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertHasErrors('data.mm_guard');
     }
 
+    public function test_modrinth_client_pack_is_blocked_before_downloading_an_archive(): void
+    {
+        $release = [
+            'id' => 'N276l2ON', 'project_id' => '1KVo5zza', 'version_number' => '6.5.0',
+            'game_versions' => ['1.21.1'], 'loaders' => ['fabric'],
+            'files' => [['filename' => 'pack.mrpack', 'url' => 'https://cdn.modrinth.com/pack.mrpack', 'primary' => true]],
+        ];
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([]),
+            'api.modrinth.com/v2/search*' => Http::response(['hits' => [], 'total_hits' => 0]),
+            'api.modrinth.com/v2/project/1KVo5zza/version*' => Http::response([$release]),
+            'api.modrinth.com/v2/project/1KVo5zza' => Http::response(['id' => '1KVo5zza', 'server_side' => 'unsupported']),
+            'api.modrinth.com/v2/version/N276l2ON' => Http::response($release),
+        ]);
+        $service = Mockery::mock(ServerCreationService::class);
+        $service->shouldNotReceive('handle');
+        $this->app->instance(ServerCreationService::class, $service);
+
+        Livewire::test(ModpackCreationWizardHarness::class)
+            ->set('data.mm_modpack', true)
+            ->set('data.mm_project', 'modrinth:1KVo5zza')
+            ->set('data.mm_version', 'N276l2ON')
+            ->assertSee('Modrinth marks this modpack as unsupported on a dedicated server.')
+            ->call('create')
+            ->assertHasErrors('data.mm_guard');
+        Http::assertNotSent(static fn ($request): bool => str_starts_with($request->url(), 'https://cdn.modrinth.com/'));
+    }
+
     public function test_modrinth_manifest_pins_the_fabric_loader_for_archive_creation(): void
     {
         $this->app->instance(PluginBackgroundRunner::class, PluginBackgroundRunner::fake());
@@ -335,6 +364,7 @@ final class ModpackCreationWizardTest extends TestCase
             ]),
             'api.modrinth.com/v2/project/YkG1DyHE/version*' => Http::response([$release]),
             'api.modrinth.com/v2/version/vtGmZsbn' => Http::response($release),
+            'api.modrinth.com/v2/project/YkG1DyHE' => Http::response(['id' => 'YkG1DyHE', 'server_side' => 'required']),
             'cdn.modrinth.com/pack.mrpack' => Http::response($bytes),
         ]);
 
