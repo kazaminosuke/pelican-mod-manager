@@ -163,7 +163,14 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      */
     public function search(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): array
     {
-        return $this->cachedSearch->search($this->buildSearchSpec($server, $type, $page, $search, $filters));
+        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
+        // Version-filtered pages take two upstream round trips: the compact
+        // listing, then one parallel batch for the visible resources.
+        $compact = $spec !== null && $spec->arguments['query'] === '' && filled($spec->arguments['version']);
+        $result = $this->cachedSearch->search($spec, $compact ? 3.0 : null);
+        $result['hits'] = $this->withCachedOfficialProjectOverlay($result['hits']);
+
+        return $result;
     }
 
     /** @param array<string, mixed> $filters */
@@ -589,7 +596,6 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         [$hits, $incompleteDetails] = $this->withSpigetDetails($hits, $compactIds, $deadline);
-        $hits = $this->withCachedOfficialProjectOverlay($hits);
 
         $total = (int) $response->header('X-Total');
         if ($total < 1) {
@@ -605,7 +611,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         if ($incompleteDetails) {
             throw new PartialSourceFetchException(
                 'Spigot catalog details were only partially resolved within the time budget.',
-                $result,
+                ['hits' => $this->withCachedOfficialProjectOverlay($hits), 'total_hits' => $total],
             );
         }
 
@@ -654,7 +660,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             } else {
                 $urls = [];
                 foreach ($missingIds as $projectId) {
-                    $urls[$projectId] = $this->spigetResourceUrl($projectId);
+                    $urls[$projectId] = $this->spigetResourceUrl($projectId, query: [
+                        // SpiGet supports field projection. Skip the embedded
+                        // base64 image while keeping the distribution flags.
+                        'fields' => 'id,name,tag,downloads,icon.url,author,updateDate,releaseDate,file,premium,price,external',
+                    ]);
                 }
 
                 try {
@@ -670,7 +680,13 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                     $response = $responses[$projectId] ?? null;
                     if ($response instanceof Response && $response->successful()) {
                         $resource = $response->json();
-                        if (is_array($resource) && $this->shouldExcludeFromCatalog($resource)) {
+                        if (!is_array($resource) || (string) ($resource['id'] ?? '') !== $projectId) {
+                            $hadFailure = true;
+
+                            continue;
+                        }
+
+                        if ($this->shouldExcludeFromCatalog($resource)) {
                             $excluded = ['excluded' => true];
                             $resolved[$projectId] = $excluded;
                             $toPrime[] = [
@@ -681,7 +697,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                             continue;
                         }
 
-                        $normalized = is_array($resource) ? $this->normalizeSpigetProject($resource) : null;
+                        $normalized = $this->normalizeSpigetProject($resource);
                         if ($normalized !== null) {
                             $resolved[$projectId] = $normalized;
                             $toPrime[] = [
@@ -750,14 +766,10 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 return $hit;
             }
 
-            if (($hit['author'] ?? null) === null && is_string($official['author'] ?? null) && $official['author'] !== '') {
-                $hit['author'] = $official['author'];
-            }
-            if (($hit['downloads'] ?? null) === null && is_int($official['downloads'] ?? null)) {
-                $hit['downloads'] = $official['downloads'];
-            }
-            if (($hit['date_modified'] ?? null) === null && is_string($official['date_modified'] ?? null)) {
-                $hit['date_modified'] = $official['date_modified'];
+            foreach (['author', 'description', 'downloads', 'date_modified', 'icon_url'] as $field) {
+                if (($hit[$field] ?? '') === '' && ($official[$field] ?? '') !== '') {
+                    $hit[$field] = $official[$field];
+                }
             }
 
             return $hit;
