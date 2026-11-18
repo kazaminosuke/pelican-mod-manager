@@ -71,7 +71,15 @@ final class ModpackProvisioningPlanner
         }
         if ($pack->loader !== null && $pack->loaderVersion !== null) {
             $variable = $pack->loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($pack->loader).'_VERSION';
-            $archiveVariables[$variable] = $pack->loaderVersion;
+            $build = $pack->loaderVersion;
+            if ($pack->loader === 'forge' && $pack->minecraftVersion !== null && !str_contains($build, '-')) {
+                // The official Forge Egg uses a full Maven version when FORGE_VERSION is set.
+                $build = $pack->minecraftVersion.'-'.$build;
+                if (in_array($pack->minecraftVersion, ['1.7.10', '1.8.9'], true)) {
+                    $build .= '-'.$pack->minecraftVersion;
+                }
+            }
+            $archiveVariables[$variable] = $build;
         }
 
         $curseForge = $pack->provider === ModpackProvider::CurseForge->value;

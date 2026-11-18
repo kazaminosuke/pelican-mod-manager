@@ -99,6 +99,20 @@ final class EggCompatibilityEngineTest extends TestCase
         self::assertSame(CompatibilityDisposition::Unsupported, $rejected->disposition);
     }
 
+    public function test_forge_archive_uses_the_full_maven_coordinate_required_by_the_official_egg(): void
+    {
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        foreach ([
+            ['1.12.2', '14.23.5.2860', '1.12.2-14.23.5.2860'], // RLCraft 2.9.3
+            ['1.20.1', '47.4.20', '1.20.1-47.4.20'], // Better MC Forge v63 HF
+            ['1.7.10', '10.13.4.1614', '1.7.10-10.13.4.1614-1.7.10'],
+            ['1.20.1', '1.20.1-47.4.20', '1.20.1-47.4.20'],
+        ] as [$minecraft, $build, $coordinate]) {
+            $pack = new ModpackDescriptor('curseforge', '10', 'Forge pack', '20', '2.0', $minecraft, 'forge', $build, null, null, [], true, null);
+            self::assertSame($coordinate, $planner->requirement($pack)->archiveVariables['FORGE_VERSION']);
+        }
+    }
+
     public function test_one_high_confidence_fabric_egg_is_selected_for_creation(): void
     {
         $fabric = $this->engine->classify(1, 'Fabric', 'fabric-uuid', null, ['FABRIC_VERSION', 'LOADER_VERSION', 'MC_VERSION', 'SERVER_JARFILE']);
