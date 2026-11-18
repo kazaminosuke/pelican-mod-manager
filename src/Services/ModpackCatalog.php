@@ -219,7 +219,7 @@ final class ModpackCatalog
                     ? $this->curseForge->listModpackVersions($projectId)
                     : [],
                 ModpackProvider::Ftb->value => $this->ftb->versions($projectId),
-                ModpackProvider::Technic->value => [['id' => 'recommended', 'label' => 'Recommended server pack']],
+                ModpackProvider::Technic->value => $this->technicVersions($projectId),
                 ModpackProvider::Atlauncher->value => $this->atlauncher->versions($projectId),
                 default => [],
             };
@@ -250,7 +250,7 @@ final class ModpackCatalog
                 ProjectSourceKey::Modrinth->value => $this->describeModrinth($server, $projectId, $versionId),
                 ProjectSourceKey::CurseForge->value => $this->describeCurseForge($server, $projectId, $versionId),
                 ModpackProvider::Ftb->value => $this->ftb->describe($projectId, $versionId),
-                ModpackProvider::Technic->value => $this->technic->describe($projectId),
+                ModpackProvider::Technic->value => $this->technic->describe($projectId, $versionId),
                 ModpackProvider::Atlauncher->value => $this->atlauncher->describe($projectId, $versionId),
                 default => null,
             };
@@ -277,6 +277,17 @@ final class ModpackCatalog
         }
 
         return $this->latestFile($server, $source, $projectId);
+    }
+
+    /** @return list<array{id: string, label: string}> */
+    private function technicVersions(string $projectId): array
+    {
+        $pack = $this->technic->describe($projectId);
+        if ($pack === null || $pack->versionId === null) {
+            return [];
+        }
+
+        return [['id' => $pack->versionId, 'label' => $pack->versionName ?? $pack->versionId]];
     }
 
     private function describeModrinth(Server $server, string $projectId, ?string $versionId): ?ModpackDescriptor

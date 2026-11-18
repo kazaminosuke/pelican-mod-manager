@@ -125,7 +125,7 @@ final class FtbModpackSource
             ->throw()
             ->json();
 
-        return is_array($response) ? $response : [];
+        return is_array($response) && (string) ($response['id'] ?? '') === $packId ? $response : [];
     }
 
     /**

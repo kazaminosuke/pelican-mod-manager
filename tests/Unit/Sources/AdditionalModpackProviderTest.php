@@ -91,6 +91,19 @@ final class AdditionalModpackProviderTest extends TestCase
         self::assertSame('89', $older?->variables['FTB_MODPACK_VERSION_ID']);
     }
 
+    public function test_ftb_rejects_metadata_for_a_different_pack(): void
+    {
+        Http::fake([
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/18' => Http::response([
+                'id' => 19,
+                'versions' => [['id' => 12169, 'name' => '1.1.1']],
+            ]),
+        ]);
+
+        self::assertSame([], (new FtbModpackSource())->versions('18'));
+        self::assertNull((new FtbModpackSource())->describe('18', '12169'));
+    }
+
     public function test_technic_without_a_matching_egg_is_unsupported(): void
     {
         Http::fake([
@@ -130,6 +143,8 @@ final class AdditionalModpackProviderTest extends TestCase
         self::assertSame('tekkit', $pack?->provisioningProfileId);
         self::assertSame('v1.2.9g-2', $pack?->variables['MODPACK_VERSION']);
         self::assertNotSame('1.0', $pack?->variables['MODPACK_VERSION']);
+        self::assertSame('v1.2.9g-2', (new TechnicModpackSource())->describe('tekkitmain', 'v1.2.9g-2')?->versionId);
+        self::assertNull((new TechnicModpackSource())->describe('tekkitmain', 'v1.2.8'));
     }
 
     public function test_atlauncher_versions_do_not_invent_a_loader_or_archive(): void

@@ -66,7 +66,7 @@ final class TechnicModpackSource
         return $descriptors;
     }
 
-    public function describe(string $slug): ?ModpackDescriptor
+    public function describe(string $slug, ?string $versionId = null): ?ModpackDescriptor
     {
         $slug = trim($slug);
         if ($slug === '' || preg_match('/^[A-Za-z0-9._-]+$/', $slug) !== 1) {
@@ -128,6 +128,11 @@ final class TechnicModpackSource
         }
 
         [$matched, $version] = $binding;
+        // The public endpoint exposes only the currently recommended server
+        // archive. If it changed since selection, ask the operator to reselect.
+        if ($versionId !== null && $versionId !== '' && $versionId !== $version) {
+            return null;
+        }
 
         return new ModpackDescriptor(
             provider: ModpackProvider::Technic->value,
