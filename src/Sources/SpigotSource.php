@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Sources;
 use App\Models\Server;
 use Exception;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\ArchiveMetadataIdentificationInterface;
@@ -36,9 +37,9 @@ use Throwable;
  * Plugin catalog source for SpigotMC resources.
  *
  * Canonical per-resource metadata (Installed rows, identification, project
- * lookups) comes from the official Spigot Simple API. Catalog listings,
- * search, and version listings come from Spiget because those operations are
- * not exposed by the official API. The SpiGet CDN stores the resource's
+ * lookups) comes from the official Spigot Simple API, with public SpiGet
+ * metadata as a fallback for HTTP 403. SpiGet provides catalog listings,
+ * search, and version history. The SpiGet CDN stores the resource's
  * current hosted file, so it is used only when the requested install is that
  * current version. An older version id keeps the official Spigot download
  * URL. Premium, buyer-only, and externally hosted files are never downloaded.
@@ -784,12 +785,28 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             throw new Exception('Invalid Spigot resource identifier.');
         }
 
-        // A 404 becomes a definitive miss in request(); any other failure is
-        // rethrown so the cache records an outage instead of a missing project.
-        $project = $this->normalizeOfficialProject($this->getJson(self::OFFICIAL_API, [
-            'action' => 'getResource',
-            'id' => $projectId,
-        ], $timeoutSeconds));
+        $deadline = microtime(true) + max(0.1, $timeoutSeconds);
+        try {
+            $project = $this->normalizeOfficialProject($this->getJson(self::OFFICIAL_API, [
+                'action' => 'getResource',
+                'id' => $projectId,
+            ], $timeoutSeconds));
+        } catch (RequestException $exception) {
+            if ($exception->response->status() !== 403) {
+                throw $exception;
+            }
+
+            try {
+                $resource = $this->getJson($this->spigetResourceUrl($projectId), [], $this->remainingTimeout($deadline));
+                $project = $this->normalizeSpigetProject($resource);
+            } catch (Throwable) {
+                throw $exception;
+            }
+
+            if (($project['project_id'] ?? null) !== $projectId) {
+                throw $exception;
+            }
+        }
 
         if ($project === null) {
             throw new SourceFetchNotFoundException("Spigot resource [$projectId] was not found.");
@@ -838,11 +855,17 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 continue;
             }
 
+            $fallbackUrls = [];
             foreach ($chunk as $projectId) {
+                $response = $responses[$projectId] ?? null;
+                if ($response instanceof Response && $response->status() === 403) {
+                    $fallbackUrls[$projectId] = $this->spigetResourceUrl($projectId);
+
+                    continue;
+                }
+
                 try {
-                    $normalized = $this->normalizeOfficialProject(
-                        $this->poolJson($responses[$projectId] ?? null, $projectId),
-                    );
+                    $normalized = $this->normalizeOfficialProject($this->poolJson($response, $projectId));
                 } catch (SourceFetchNotFoundException) {
                     // A definitive miss is left out of the batch map.
                     continue;
@@ -853,6 +876,26 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 }
 
                 if ($normalized !== null) {
+                    $resolved[$projectId] = $normalized;
+                }
+            }
+
+            if ($fallbackUrls === []) {
+                continue;
+            }
+
+            try {
+                $fallbacks = $this->pool($fallbackUrls, $this->remainingTimeout($deadline));
+            } catch (Throwable $exception) {
+                report($exception);
+
+                continue;
+            }
+
+            foreach (array_keys($fallbackUrls) as $projectId) {
+                [$resource] = $this->decodeOptionalPoolJson($fallbacks[$projectId] ?? null);
+                $normalized = $resource === null ? null : $this->normalizeSpigetProject($resource);
+                if (($normalized['project_id'] ?? null) === (string) $projectId) {
                     $resolved[$projectId] = $normalized;
                 }
             }

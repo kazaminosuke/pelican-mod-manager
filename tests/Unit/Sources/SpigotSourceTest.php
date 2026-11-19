@@ -318,6 +318,59 @@ class SpigotSourceTest extends TestCase
         ]), 1.5);
     }
 
+    public function test_project_metadata_uses_public_spiget_details_when_spigot_returns_403(): void
+    {
+        Http::fake([
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response(null, 403),
+            'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.20'])),
+        ]);
+
+        $project = $this->sourceWithExecutor()->getProject('28140');
+
+        self::assertSame('LuckPerms', $project['title']);
+        self::assertSame('A permissions plugin', $project['description']);
+        self::assertSame(8_932_095, $project['downloads']);
+        self::assertSame('https://www.spigotmc.org/data/resource_icons/28/28140.jpg?1490821714', $project['icon_url']);
+        Http::assertSentCount(2);
+    }
+
+    public function test_batch_project_metadata_only_uses_spiget_for_forbidden_projects(): void
+    {
+        Http::fake([
+            'api.spigotmc.org/simple/0.2/index.php*id=28140' => Http::response(null, 403),
+            'api.spigotmc.org/simple/0.2/index.php*id=11431' => Http::response($this->officialResource(11431, 'WorldGuard')),
+            'api.spigotmc.org/simple/0.2/index.php*id=12345' => Http::response(null, 404),
+            'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(28140, 'LuckPerms', ['1.20'])),
+        ]);
+        $source = $this->sourceWithExecutor();
+
+        $projects = $source->getProjectsByIds(['28140', '11431', '12345']);
+
+        self::assertSame('A permissions plugin', $projects['28140']['description']);
+        self::assertSame('sk89q', $projects['11431']['author']);
+        self::assertArrayNotHasKey('12345', $projects);
+        self::assertSame($projects['28140'], $source->peekProject('28140')['data']);
+        Http::assertSentCount(4);
+    }
+
+    public function test_unverified_spiget_metadata_does_not_mask_the_official_403(): void
+    {
+        Http::fake([
+            'api.spigotmc.org/simple/0.2/index.php*' => Http::response(null, 403),
+            'api.spiget.org/v2/resources/28140?*' => Http::response($this->spigetResource(12345, 'Other plugin', ['1.20'])),
+        ]);
+
+        try {
+            $this->source()->fetchSourceData(new SourceFetchSpec('spigot', 'project', [
+                'project_id' => '28140',
+            ]), 1.5);
+            self::fail('An unrelated resource must not replace the failed lookup.');
+        } catch (RequestException $exception) {
+            self::assertSame(403, $exception->response->status());
+        }
+        Http::assertSentCount(2);
+    }
+
     public function test_official_outage_is_not_mistaken_for_a_missing_project(): void
     {
         Http::fake([
