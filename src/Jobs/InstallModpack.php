@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\CurseForgeDependenciesPending;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -104,8 +105,18 @@ final class InstallModpack
         }
 
         $leaseRefreshedAt = microtime(true);
+        $isCurseForge = $this->source === 'curseforge';
+        $resume = $this->selection['manual_token'] ?? null;
+        $archiveHash = null;
+        $file = null;
 
         try {
+            if ($resume !== null && ($operations->waitingCurseForgeModpack($server)['token'] ?? null) !== $resume) {
+                throw new ModpackException('This pending modpack has expired or was cancelled.');
+            }
+            if ($isCurseForge) {
+                $operations->modpackPhase($this->serverId, 'downloading');
+            }
             $this->validateSelection($server);
             $file = $catalog->file($server, $this->source, $this->projectId, $this->versionId !== '' ? $this->versionId : null);
             if ($file === null) {
@@ -115,7 +126,7 @@ final class InstallModpack
             if ($this->selection !== null && (
                 $file['version_id'] !== $this->versionId
                 || (isset($this->selection['server_pack']) && (bool) $this->selection['server_pack'] !== (bool) ($file['server_pack'] ?? false))
-                || (isset($this->selection['artifact_id']) && ($file['artifact_id'] ?? null) !== $this->selection['artifact_id'])
+                || (isset($this->selection['artifact_id']) && ($file['artifact_id'] ?? $file['version_id']) !== $this->selection['artifact_id'])
                 || (isset($file['minecraft'], $this->selection['minecraft']) && $file['minecraft'] !== $this->selection['minecraft'])
                 || (isset($file['loader'], $this->selection['loader']) && $file['loader'] !== $this->selection['loader'])
             )) {
@@ -132,6 +143,14 @@ final class InstallModpack
                     $leases->refresh($this->serverId, $type, $this->leaseToken);
                     $leaseRefreshedAt = microtime(true);
                 }
+            }
+
+            if ($isCurseForge && !($file['server_pack'] ?? false)) {
+                $archiveHash = hash_file('sha256', $temp);
+                if (!is_string($archiveHash) || ($resume !== null && $archiveHash !== ($this->selection['archive_sha256'] ?? null))) {
+                    throw new ModpackException('The downloaded CurseForge archive no longer matches the selected file.');
+                }
+                $operations->modpackPhase($this->serverId, 'verifying');
             }
 
             $progress = function (int $progress, int $total) use ($operations, $leases, $server, $type, &$leaseRefreshedAt): void {
@@ -168,13 +187,17 @@ final class InstallModpack
                     $loader ?? ($this->selection['loader'] ?? null),
                     $this->selection['minecraft'] ?? $minecraft,
                     $progress,
-                    strictMinecraftVersion: $this->selection !== null,
+                    strictMinecraftVersion: $this->selection !== null && ($this->selection['strict_minecraft'] ?? true),
+                    prepared: $isCurseForge ? fn () => $operations->modpackPhase($this->serverId, 'installing') : null,
                 );
 
             // The Installed list is a cached directory scan. Drop it so the
             // next view queues a scan instead of showing the pre-install files.
             Cache::forget(app(InstalledProjectService::class)->getHashScanCacheKey($server, $type));
 
+            if ($resume !== null) {
+                $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
+            }
             $operations->complete(
                 $server,
                 $type,
@@ -183,6 +206,22 @@ final class InstallModpack
                 $this->leaseToken,
             );
             $this->rememberPack($server, $fileRepository, $file);
+        } catch (CurseForgeDependenciesPending $pending) {
+            if (!$isCurseForge || $file === null || !is_string($archiveHash) || $file['version_id'] === '') {
+                $operations->fail($server, $type, InstalledOperationManager::OPERATION_MODPACK, 'modpack_rejected', leaseToken: $this->leaseToken);
+
+                return null;
+            }
+            $selection = $this->selection ?? [
+                'egg_id' => (string) $server->egg_id,
+                'image' => $server->image,
+                'variables' => app(InstalledEggCatalog::class)->variableValues($server),
+                'strict_minecraft' => false,
+            ];
+            $selection['archive_sha256'] = $archiveHash;
+            $selection['server_pack'] = false;
+            $selection['artifact_id'] = $file['artifact_id'] ?? $file['version_id'];
+            $operations->pauseCurseForgeModpack($this->serverId, $this->leaseToken, $this->projectId, $file['version_id'], $selection, $pending->files);
         } catch (Throwable $exception) {
             report($exception);
             $operations->fail(

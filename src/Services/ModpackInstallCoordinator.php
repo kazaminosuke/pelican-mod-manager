@@ -66,6 +66,10 @@ final class ModpackInstallCoordinator
         bool $canChangeEgg = true,
         bool $confirmedCompatibility = false,
     ): array {
+        if ($this->operations->waitingCurseForgeModpack($server) !== null) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.curseforge_manual.pending_selection'));
+        }
+
         $preview = $this->preview($server, $selection, $versionId, $explicitEggId);
         $descriptor = $preview['descriptor'];
         $result = $preview['result'];

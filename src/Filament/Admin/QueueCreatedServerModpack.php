@@ -4,10 +4,12 @@ namespace Kazaminosuke\ModManager\Filament\Admin;
 
 use App\Filament\Admin\Resources\Servers\Pages\CreateServer;
 use App\Models\Server;
+use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Illuminate\Database\Eloquent\Model;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Throwable;
@@ -37,10 +39,17 @@ final class QueueCreatedServerModpack
                     $plan['selection'],
                 );
                 if ($outcome['dispatched'] || $outcome['reason'] === 'already_active') {
-                    Notification::make()
+                    $notification = Notification::make()
                         ->title(trans('pelican-mod-manager::strings.modpacks.provision_queued'))
-                        ->success()
-                        ->send();
+                        ->success();
+                    if ($plan['source'] === 'curseforge') {
+                        $notification->actions([
+                            Action::make('modpack_progress')
+                                ->label(trans('pelican-mod-manager::strings.curseforge_manual.open_progress'))
+                                ->url(ModManagerPage::getUrl(panel: 'server', tenant: $record)),
+                        ])->persistent();
+                    }
+                    $notification->send();
 
                     return;
                 }

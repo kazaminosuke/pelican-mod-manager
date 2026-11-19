@@ -12,6 +12,8 @@ final class InstalledOperationState
 
     public const STATUS_RUNNING = 'running';
 
+    public const STATUS_WAITING_FILES = 'waiting_files';
+
     public const STATUS_COMPLETED = 'completed';
 
     public const STATUS_FAILED = 'failed';
@@ -28,6 +30,7 @@ final class InstalledOperationState
     private const STATUSES = [
         self::STATUS_QUEUED,
         self::STATUS_RUNNING,
+        self::STATUS_WAITING_FILES,
         self::STATUS_COMPLETED,
         self::STATUS_FAILED,
     ];
@@ -146,6 +149,23 @@ final class InstalledOperationState
             error: null,
             queuedAt: $this->queuedAt,
             startedAt: null,
+            finishedAt: null,
+        );
+    }
+
+    public function waitingForFiles(): self
+    {
+        return new self(
+            status: self::STATUS_WAITING_FILES,
+            operation: $this->operation,
+            serverId: $this->serverId,
+            projectType: $this->projectType,
+            progress: $this->progress,
+            total: $this->total,
+            result: [],
+            error: null,
+            queuedAt: $this->queuedAt,
+            startedAt: $this->startedAt,
             finishedAt: null,
         );
     }

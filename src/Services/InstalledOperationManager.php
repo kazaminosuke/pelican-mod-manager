@@ -3,7 +3,6 @@
 namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
-use DateTimeImmutable;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -26,6 +25,8 @@ final class InstalledOperationManager
     private const CACHE_PREFIX = 'mod_manager_operation:v1';
 
     private const CACHE_TTL_MINUTES = 120;
+
+    private const MODPACK_WAIT_SECONDS = 7 * 86400;
 
     /**
      * Crash recovery for a queued job whose row was lost. It matches the
@@ -687,7 +688,8 @@ final class InstalledOperationManager
         $this->cache->put(
             $key,
             $state->toCachePayload(),
-            new DateTimeImmutable('+'.self::CACHE_TTL_MINUTES.' minutes'),
+            $state->status === InstalledOperationState::STATUS_WAITING_FILES
+                ? self::MODPACK_WAIT_SECONDS : self::CACHE_TTL_MINUTES * 60,
         );
 
         return $state;
@@ -718,7 +720,7 @@ final class InstalledOperationManager
     }
 
     /**
-     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'unsupported_type', state: ?InstalledOperationState}
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'unsupported_type'|'manual_pending', state: ?InstalledOperationState}
      */
     public function dispatchBulkUpdate(
         Server|int $server,
@@ -809,12 +811,91 @@ final class InstalledOperationManager
         ];
     }
 
+    /** @return array{token: string, project_id: string, version_id: string, selection: array<string, mixed>, files: list<array<string, mixed>>}|null */
+    public function waitingCurseForgeModpack(Server|int $server): ?array
+    {
+        $plan = $this->cache->get($this->curseForgePlanKey($this->serverId($server)));
+
+        return is_array($plan) ? $plan : null;
+    }
+
+    /** @param array<string, mixed> $selection @param list<array<string, mixed>> $files */
+    public function pauseCurseForgeModpack(int $serverId, string $leaseToken, string $projectId, string $versionId, array $selection, array $files): void
+    {
+        $type = ProjectType::Mod;
+        if (!$this->leases->owns($serverId, $type, $leaseToken)) {
+            return;
+        }
+
+        $token = $selection['manual_token'] ?? bin2hex(random_bytes(16));
+        $selection['manual_token'] = $token;
+        $this->cache->put($this->curseForgePlanKey($serverId), [
+            'token' => $token, 'project_id' => $projectId, 'version_id' => $versionId,
+            'selection' => $selection, 'files' => $files,
+        ], self::MODPACK_WAIT_SECONDS);
+        $state = $this->state($serverId, $type, self::OPERATION_MODPACK)
+            ?? InstalledOperationState::queued(self::OPERATION_MODPACK, $serverId, $type);
+        $this->put($state->waitingForFiles());
+        $this->leases->release($serverId, $type, $leaseToken);
+    }
+
+    public function modpackPhase(int $serverId, string $phase): void
+    {
+        $state = $this->state($serverId, ProjectType::Mod, self::OPERATION_MODPACK);
+        if ($state?->isActive()) {
+            $this->put($state->withResult([...$state->result, 'phase' => $phase]));
+        }
+    }
+
+    public function resumeCurseForgeModpack(Server|int $server, string $token): bool
+    {
+        $plan = $this->waitingCurseForgeModpack($server);
+
+        return $plan !== null && hash_equals($plan['token'], $token)
+            && $this->dispatchModpackInstall($server, ProjectType::Mod, 'curseforge', $plan['project_id'], $plan['version_id'], 1200, $plan['selection'])['dispatched'];
+    }
+
+    public function cancelCurseForgeModpack(Server|int $server, string $token): bool
+    {
+        $serverId = $this->serverId($server);
+        $type = ProjectType::Mod;
+        $lease = $this->leases->tryAcquire($serverId, $type, InstalledOperationLease::OPERATION_MODPACK);
+        if ($lease === null) {
+            return false;
+        }
+
+        try {
+            $plan = $this->waitingCurseForgeModpack($server);
+            if ($plan === null || !hash_equals($plan['token'], $token)) {
+                return false;
+            }
+            $this->clearCurseForgeModpack($serverId, $lease);
+            $this->forget($serverId, $type, self::OPERATION_MODPACK);
+
+            return true;
+        } finally {
+            $this->leases->release($serverId, $type, $lease);
+        }
+    }
+
+    public function clearCurseForgeModpack(int $serverId, string $leaseToken): void
+    {
+        if ($this->leases->owns($serverId, ProjectType::Mod, $leaseToken)) {
+            $this->cache->forget($this->curseForgePlanKey($serverId));
+        }
+    }
+
+    private function curseForgePlanKey(int $serverId): string
+    {
+        return $this->cacheKey($serverId, ProjectType::Mod, self::OPERATION_MODPACK).':curseforge-plan';
+    }
+
     /**
      * Queue a modpack install. The job downloads the pack and places files.
      * Only mod servers accept it; the mod catalog itself is unchanged.
      *
      * @param  array<string, mixed>|null  $selection  The immutable startup configuration from the creation wizard.
-     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'unsupported_type', state: ?InstalledOperationState}
+     * @return array{dispatched: bool, reason: null|'already_active'|'sync_queue'|'dispatch_failed'|'unsupported_type'|'manual_pending', state: ?InstalledOperationState}
      */
     public function dispatchModpackInstall(
         Server|int $server,
@@ -867,10 +948,18 @@ final class InstalledOperationManager
             ];
         }
 
+        $plan = $this->waitingCurseForgeModpack($serverId);
+        if (($plan['token'] ?? null) !== ($selection['manual_token'] ?? null)) {
+            $this->leases->release($serverId, $projectType, $leaseToken);
+
+            return ['dispatched' => false, 'reason' => 'manual_pending', 'state' => $current];
+        }
+
         $state = $current;
 
         try {
-            $state = $this->queue($serverId, $projectType, self::OPERATION_MODPACK);
+            $state = $this->queue($serverId, $projectType, self::OPERATION_MODPACK,
+                $plan === null ? [] : ['phase' => 'resuming']);
             if (!$this->runner->run(
                 BackgroundJob::MODPACK,
                 [

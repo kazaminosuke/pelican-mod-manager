@@ -25,6 +25,7 @@ use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Support\ArrayRecord;
 use Filament\Support\Enums\TextSize;
@@ -4281,6 +4282,7 @@ class ModManagerPage extends Page implements HasTable
                             (bool) ($data['confirm_server_compatibility'] ?? false),
                         );
                         if ($outcome['dispatched']) {
+                            $this->refreshInstalledOperationState();
                             $this->notifyInstalledOperationDispatched(['dispatched' => true, 'reason' => null, 'state' => null]);
                         } else {
                             Notification::make()
@@ -4450,6 +4452,53 @@ class ModManagerPage extends Page implements HasTable
         }
     }
 
+    /** @return array<string, mixed> */
+    protected function curseForgeManualPanel(Server $server): array
+    {
+        $operations = app(InstalledOperationManager::class);
+        $plan = $operations->waitingCurseForgeModpack($server);
+        $state = $plan === null ? null : $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+
+        return [
+            'plan' => $state?->isActive() ? null : $plan,
+            'failed' => $state?->status === InstalledOperationState::STATUS_FAILED,
+            'filesUrl' => $plan === null ? '' : ListFiles::getUrl(),
+        ];
+    }
+
+    public function resumeCurseForgeModpack(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        abort_unless(static::detectProjectType($server) === ProjectType::Mod, 403);
+        $this->authorizeProjectOperation($server, ProjectOperation::Install);
+        $dispatched = app(InstalledOperationManager::class)->resumeCurseForgeModpack($server, $token);
+        $this->refreshInstalledOperationState();
+        if (!$dispatched) {
+            $this->notifyStaleCurseForgePlan();
+        }
+    }
+
+    public function cancelCurseForgeModpack(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        abort_unless(static::detectProjectType($server) === ProjectType::Mod, 403);
+        $this->authorizeProjectOperation($server, ProjectOperation::Install);
+        if (!app(InstalledOperationManager::class)->cancelCurseForgeModpack($server, $token)) {
+            $this->notifyStaleCurseForgePlan();
+        }
+        $this->refreshInstalledOperationState();
+    }
+
+    private function notifyStaleCurseForgePlan(): void
+    {
+        Notification::make()
+            ->title(trans('pelican-mod-manager::strings.curseforge_manual.retry_unavailable'))
+            ->warning()
+            ->send();
+    }
+
     public function content(Schema $schema): Schema
     {
         /** @var Server $server */
@@ -4522,6 +4571,9 @@ class ModManagerPage extends Page implements HasTable
                             ->size(TextSize::Large),
                     ]),
                 $this->getTabsContentComponent(),
+                View::make('pelican-mod-manager::components.curseforge-manual')
+                    ->visible(fn (): bool => $type === ProjectType::Mod && $this->canManageCurrentProjectOperation(ProjectOperation::Install))
+                    ->viewData(fn (): array => $this->curseForgeManualPanel($server)),
                 Section::make()
                     ->extraAttributes(fn () => $this->installedOperationStatusExtraAttributes())
                     ->schema([
@@ -4752,7 +4804,13 @@ class ModManagerPage extends Page implements HasTable
 
         /** @var Server $server */
         $server = Filament::getTenant();
-        app(InstalledOperationManager::class)->forget(
+        $operations = app(InstalledOperationManager::class);
+        if ($state->operation === InstalledOperationManager::OPERATION_MODPACK
+            && $state->status === InstalledOperationState::STATUS_FAILED
+            && $operations->waitingCurseForgeModpack($server) !== null) {
+            return;
+        }
+        $operations->forget(
             $server,
             $state->projectType,
             $state->operation,
@@ -4818,6 +4876,12 @@ class ModManagerPage extends Page implements HasTable
                 $this->flushCachedTableRecords();
             }
 
+            $this->pollInstalledOperations = false;
+
+            return;
+        }
+
+        if ($state->status === InstalledOperationState::STATUS_WAITING_FILES) {
             $this->pollInstalledOperations = false;
 
             return;
@@ -5121,6 +5185,9 @@ class ModManagerPage extends Page implements HasTable
         if ($state->isActive()) {
             return true;
         }
+        if ($state->status === InstalledOperationState::STATUS_WAITING_FILES) {
+            return false;
+        }
 
         return $this->handledInstalledOperation !== $state->operation.':'.($state->finishedAt ?? '');
     }
@@ -5148,6 +5215,11 @@ class ModManagerPage extends Page implements HasTable
 
         $operation = $this->installedOperationLabel((string) ($installedOperation['operation'] ?? ''));
         $status = $installedOperation['status'] ?? null;
+        $phase = $installedOperation['result']['phase'] ?? null;
+        if (($installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_MODPACK
+            && in_array($phase, ['resuming', 'downloading', 'verifying'], true)) {
+            return trans('pelican-mod-manager::strings.curseforge_manual.phases.'.$phase);
+        }
         $progress = (int) ($installedOperation['progress'] ?? 0);
         $total = $installedOperation['total'] ?? null;
 

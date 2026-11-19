@@ -47,6 +47,7 @@ final class ModpackInstaller
 
     /**
      * @param  callable(int, int): void|null  $progress
+     * @param  callable(): void|null  $prepared
      */
     public function installFromZip(
         Server $server,
@@ -56,6 +57,7 @@ final class ModpackInstaller
         ?string $serverMinecraftVersion = null,
         ?callable $progress = null,
         bool $strictMinecraftVersion = false,
+        ?callable $prepared = null,
     ): ModpackInstallResult {
         $this->placed = [];
         $this->overrideDirectoryListings = [];
@@ -77,6 +79,9 @@ final class ModpackInstaller
 
         try {
             $remoteFiles = $this->resolveDownloads($server, $fileRepository, $manifest, $warnings, $staged);
+            if ($prepared !== null) {
+                $prepared();
+            }
             $steps = count($remoteFiles) + count($manifest->overrides);
             $skipped = count($manifest->remoteFiles) - count($remoteFiles);
             foreach ($remoteFiles as $file) {
