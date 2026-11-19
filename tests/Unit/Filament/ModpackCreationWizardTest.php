@@ -331,11 +331,11 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame(1, $preview['summary']['mods']['delete']);
         self::assertSame('original', $wings->files['mods/old.bin']);
         $backup = Mockery::mock(InitiateBackupService::class);
-        $backup->shouldReceive('setIgnoredFiles')->with([])->andReturnSelf();
+        $backup->shouldReceive('setIgnoredFiles')->with(['# Full modpack update backup'])->andReturnSelf();
         $backup->shouldReceive('setIsLocked')->with(true)->andReturnSelf();
         $backup->shouldReceive('handle')->once()->andReturnUsing(function (): Backup {
             $id = DB::table('backups')->insertGetId(['server_id' => 42, 'uuid' => 'backup-42', 'is_successful' => true,
-                'ignored_files' => '[]', 'completed_at' => now(), 'created_at' => now()]);
+                'ignored_files' => json_encode(['# Full modpack update backup'], JSON_THROW_ON_ERROR), 'completed_at' => now(), 'created_at' => now()]);
 
             return Backup::findOrFail($id);
         });

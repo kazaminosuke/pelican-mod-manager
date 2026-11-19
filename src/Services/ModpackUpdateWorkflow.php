@@ -17,6 +17,10 @@ final class ModpackUpdateWorkflow
 {
     private const TTL = 86400;
 
+    // A blank request makes Wings read .pelicanignore or .pteroignore.
+    // An explicit comment is a nonempty request with no exclusion patterns.
+    private const FULL_BACKUP = ['# Full modpack update backup'];
+
     public function __construct(
         private readonly Repository $cache,
         private readonly DaemonServerRepository $daemon,
@@ -48,13 +52,11 @@ final class ModpackUpdateWorkflow
         $this->leases->run((int) $server->getKey(), ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK, function () use ($server, $token, $backups): void {
             $review = $this->requiredReview($server, $token);
             $this->assertStopped($server);
-            if ($review['backup_id'] !== null) {
-                $existing = $server->backups()->find($review['backup_id']);
-                if ($existing !== null && (!$existing->completed_at || $existing->is_successful)) {
-                    return;
-                }
+            $existing = $this->backup($server, $review);
+            if ($existing !== null && (!$existing->completed_at || $existing->is_successful)) {
+                return;
             }
-            $backup = $backups->setIgnoredFiles([])->setIsLocked(true)->handle($server, 'Modpack update');
+            $backup = $backups->setIgnoredFiles(self::FULL_BACKUP)->setIsLocked(true)->handle($server, 'Modpack update');
             $review['backup_id'] = (int) $backup->getKey();
             $this->cache->put($this->key($server), $review, self::TTL);
         });
@@ -66,14 +68,16 @@ final class ModpackUpdateWorkflow
             return null;
         }
 
-        return $server->backups()->find($review['backup_id']);
+        $backup = $server->backups()->find($review['backup_id']);
+
+        return $backup?->ignored_files === self::FULL_BACKUP ? $backup : null;
     }
 
     public function requireBackup(Server $server, array $review): Backup
     {
         $backup = $this->backup($server, $review);
         if ($backup === null || !$backup->is_successful || $backup->completed_at === null
-            || ($backup->ignored_files ?? []) !== [] || $backup->created_at->getTimestamp() < $review['created_at']) {
+            || $backup->created_at->getTimestamp() < $review['created_at']) {
             throw new ModpackException('A successful full Pelican backup from this preview is required.');
         }
 

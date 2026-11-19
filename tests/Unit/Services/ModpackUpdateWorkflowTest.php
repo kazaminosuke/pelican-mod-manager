@@ -22,6 +22,8 @@ use PHPUnit\Framework\TestCase;
 
 final class ModpackUpdateWorkflowTest extends TestCase
 {
+    private const FULL_BACKUP = ['# Full modpack update backup'];
+
     protected function tearDown(): void
     {
         Mockery::close();
@@ -39,12 +41,12 @@ final class ModpackUpdateWorkflowTest extends TestCase
         $token = $workflow->review($server)['token'];
         self::assertNull($leases->currentOperation(43, ProjectType::Mod));
         $backup = (new Backup())->setDateFormat('Y-m-d H:i:s');
-        $backup->forceFill(['id' => 9, 'created_at' => date('Y-m-d H:i:s'), 'completed_at' => date('Y-m-d H:i:s'), 'is_successful' => false, 'ignored_files' => []]);
+        $backup->forceFill(['id' => 9, 'created_at' => date('Y-m-d H:i:s'), 'completed_at' => date('Y-m-d H:i:s'), 'is_successful' => false, 'ignored_files' => self::FULL_BACKUP]);
         $replacement = (new Backup())->setDateFormat('Y-m-d H:i:s');
-        $replacement->forceFill(['id' => 10, 'created_at' => date('Y-m-d H:i:s'), 'completed_at' => date('Y-m-d H:i:s'), 'is_successful' => true, 'ignored_files' => []]);
+        $replacement->forceFill(['id' => 10, 'created_at' => date('Y-m-d H:i:s'), 'completed_at' => date('Y-m-d H:i:s'), 'is_successful' => true, 'ignored_files' => self::FULL_BACKUP]);
         $server->backups = [9 => $backup, 10 => $replacement];
         $panel = Mockery::mock(InitiateBackupService::class);
-        $panel->shouldReceive('setIgnoredFiles')->with([])->twice()->andReturnSelf();
+        $panel->shouldReceive('setIgnoredFiles')->with(self::FULL_BACKUP)->twice()->andReturnSelf();
         $panel->shouldReceive('setIsLocked')->with(true)->twice()->andReturnSelf();
         $panel->shouldReceive('handle')->with($server, 'Modpack update')->twice()->andReturn($backup, $replacement);
         $workflow->createBackup($server, $token, $panel);
@@ -85,6 +87,32 @@ final class ModpackUpdateWorkflowTest extends TestCase
         self::assertSame([], $runner->spawned);
         $this->expectExceptionMessage('preview expired');
         $workflow->approve($server, $token, false, null);
+    }
+
+    public function test_successful_backup_using_wings_default_exclusions_is_not_accepted(): void
+    {
+        [$workflow, , $leases, $runner] = $this->setupWorkflow(ContainerStatus::Offline);
+        $server = $this->server();
+        $lease = $leases->tryAcquire(43, ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK);
+        $workflow->publish($server, $lease, ['switch' => false], [], ['mod_conflicts' => []]);
+        $token = $workflow->review($server)['token'];
+        $backup = (new Backup())->setDateFormat('Y-m-d H:i:s');
+        $backup->forceFill(['id' => 9, 'created_at' => date('Y-m-d H:i:s'), 'completed_at' => date('Y-m-d H:i:s'), 'is_successful' => true, 'ignored_files' => self::FULL_BACKUP]);
+        $server->backups = [9 => $backup];
+        $panel = Mockery::mock(InitiateBackupService::class);
+        $panel->shouldReceive('setIgnoredFiles')->with(self::FULL_BACKUP)->once()->andReturnSelf();
+        $panel->shouldReceive('setIsLocked')->with(true)->once()->andReturnSelf();
+        $panel->shouldReceive('handle')->with($server, 'Modpack update')->once()->andReturn($backup);
+        $workflow->createBackup($server, $token, $panel);
+        $backup->ignored_files = [];
+
+        try {
+            $workflow->approve($server, $token, false, null);
+            self::fail('A backup that can inherit Wings exclusions must not be used.');
+        } catch (ModpackException $error) {
+            self::assertStringContainsString('full Pelican backup', $error->getMessage());
+        }
+        self::assertSame([], $runner->spawned);
     }
 
     public function test_running_server_cannot_begin_a_backup(): void
