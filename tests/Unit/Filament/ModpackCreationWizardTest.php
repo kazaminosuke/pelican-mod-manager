@@ -347,33 +347,63 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertHasErrors('data.mm_guard');
     }
 
-    public function test_modrinth_client_pack_is_blocked_before_downloading_an_archive(): void
+    public function test_modrinth_client_pack_can_only_continue_with_a_loader_egg_and_confirmation(): void
     {
+        $runner = PluginBackgroundRunner::fake();
+        $this->app->instance(PluginBackgroundRunner::class, $runner);
+        $this->addEgg(8, 'Modrinth Generic', '04befa18-37cf-41e9-b04d-89b3578bba6d', ['PROJECT_ID' => '', 'VERSION_ID' => '']);
+        $this->addEgg(9, 'Fabric', '78b02ebb-fec8-49c5-943c-ca4aa117b693', [
+            'MC_VERSION' => 'latest', 'LOADER_VERSION' => 'latest', 'FABRIC_VERSION' => 'latest',
+        ]);
+        $archive = tempnam(sys_get_temp_dir(), 'modrinth-fixture');
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($archive, ZipArchive::OVERWRITE));
+        $zip->addFromString('modrinth.index.json', json_encode([
+            'formatVersion' => 1, 'game' => 'minecraft',
+            'dependencies' => ['minecraft' => '1.20.1', 'fabric-loader' => '0.15.11'],
+            'files' => [['path' => 'mods/known.jar', 'env' => ['server' => 'required'], 'downloads' => ['https://cdn.modrinth.com/known.jar']]],
+        ], JSON_THROW_ON_ERROR));
+        $zip->close();
+        $bytes = file_get_contents($archive);
+        unlink($archive);
         $release = [
-            'id' => 'N276l2ON', 'project_id' => '1KVo5zza', 'version_number' => '6.5.0',
-            'game_versions' => ['1.21.1'], 'loaders' => ['fabric'],
+            'id' => 'test1234', 'project_id' => 'pack1234', 'version_number' => '6.5.0',
+            'game_versions' => ['1.20.1'], 'loaders' => ['fabric'],
             'files' => [['filename' => 'pack.mrpack', 'url' => 'https://cdn.modrinth.com/pack.mrpack', 'primary' => true]],
         ];
-        Http::preventStrayRequests();
         Http::fake([
             'api.modrinth.com/v2/tag/game_version' => Http::response([]),
             'api.modrinth.com/v2/search*' => Http::response(['hits' => [], 'total_hits' => 0]),
-            'api.modrinth.com/v2/project/1KVo5zza/version*' => Http::response([$release]),
-            'api.modrinth.com/v2/project/1KVo5zza' => Http::response(['id' => '1KVo5zza', 'server_side' => 'unsupported']),
-            'api.modrinth.com/v2/version/N276l2ON' => Http::response($release),
+            'api.modrinth.com/v2/project/pack1234/version*' => Http::response([$release]),
+            'api.modrinth.com/v2/project/pack1234' => Http::response(['id' => 'pack1234', 'server_side' => 'unsupported']),
+            'api.modrinth.com/v2/version/test1234' => Http::response($release),
+            'cdn.modrinth.com/pack.mrpack' => Http::response($bytes),
         ]);
         $service = Mockery::mock(ServerCreationService::class);
-        $service->shouldNotReceive('handle');
+        $service->shouldReceive('handle')->once()->withArgs(static function (array $data): bool {
+            self::assertSame(9, $data['egg_id']);
+            self::assertSame('0.15.11', $data['environment']['LOADER_VERSION']);
+            self::assertFalse($data['start_on_completion']);
+            self::assertSame('archive', $data['mm_install_plan']['mode']);
+            self::assertSame('test1234', $data['mm_install_plan']['version_id']);
+
+            return true;
+        })->andReturn((new Server())->forceFill(['id' => 48]));
         $this->app->instance(ServerCreationService::class, $service);
 
         Livewire::test(ModpackCreationWizardHarness::class)
             ->set('data.mm_modpack', true)
-            ->set('data.mm_project', 'modrinth:1KVo5zza')
-            ->set('data.mm_version', 'N276l2ON')
-            ->assertSee('Modrinth marks this modpack as unsupported on a dedicated server.')
-            ->call('create')
-            ->assertHasErrors('data.mm_guard');
-        Http::assertNotSent(static fn ($request): bool => str_starts_with($request->url(), 'https://cdn.modrinth.com/'));
+            ->set('data.mm_project', 'modrinth:pack1234')
+            ->set('data.mm_version', 'test1234')
+            ->assertSet('data.egg_id', 9)
+            ->assertSee('Modrinth marks this modpack as unsupported on dedicated servers.')
+            ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
+            ->set('data.mm_confirm_compatibility', true)
+            ->set('data.start_on_completion', true)
+            ->call('create')->assertHasErrors('data.mm_project')
+            ->set('data.start_on_completion', false)
+            ->call('create')->assertHasNoErrors();
+        self::assertSame('test1234', $runner->spawned[0]['payload']['version_id']);
     }
 
     public function test_modrinth_manifest_pins_the_fabric_loader_for_archive_creation(): void

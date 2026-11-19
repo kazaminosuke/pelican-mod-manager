@@ -29,6 +29,7 @@ final class ModpackDescriptor
         public readonly ?bool $hasServerPack = null,
         public readonly bool $usesServerPack = false,
         public readonly ?string $artifactId = null,
+        public readonly ?string $compatibilityWarning = null,
     ) {}
 
     public function optionKey(): string

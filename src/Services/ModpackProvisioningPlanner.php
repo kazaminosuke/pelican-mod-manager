@@ -97,7 +97,7 @@ final class ModpackProvisioningPlanner
             unsupportedReason: $unsupported,
             archiveVariables: $archiveVariables,
             allowUnknownLoader: $curseForge && $archive && $pack->loader === null,
-            compatibilityWarning: match (true) {
+            compatibilityWarning: $pack->compatibilityWarning ?? match (true) {
                 $pack->provider === ModpackProvider::Ftb->value => 'ftb_install_unverified',
                 $curseForge && (!$pack->usesServerPack || $pack->loader === null || $pack->minecraftVersion === null) => 'server_compatibility_unknown',
                 default => null,

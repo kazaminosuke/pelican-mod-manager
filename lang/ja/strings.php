@@ -300,6 +300,7 @@ return [
         'server_pack_unavailable' => '専用サーバーZIPを取得できないため、通常のModpack ZIPを使用します。',
         'server_pack_unlisted' => '専用サーバーZIPの掲載がないため、通常のModpack ZIPを使用します。',
         'java_too_old' => '選択したイメージのJavaは、このMinecraftリリースが必要とする :java より古いバージョンです。',
+        'modrinth_server_unsupported' => 'ModrinthではこのModpackが専用サーバー非対応と表示されています。対応するローダーのEggで導入を試せます。ファイルを確認し、手動起動時に起動ログを確認してください。',
         'ftb_install_unverified' => 'FTB Eggはインストーラーが失敗しても完了と表示する場合があります。手動で起動する前に、インストールログと起動ファイルを確認してください。',
         'loader_build_unknown' => 'アーカイブ方式で必要なローダーのビルド番号を特定できませんでした。配布元のリリース手順を確認し、起動前にEggの起動変数に指定のビルド番号を設定してください。',
         'server_compatibility_unknown' => 'このリリースのサーバー互換性を確認できませんでした。続行する前に、配布元の手順とMinecraft・ローダーのバージョンを確認してください。',
