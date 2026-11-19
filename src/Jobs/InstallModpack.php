@@ -124,6 +124,22 @@ final class InstallModpack
                 $operations->modpackPhase($this->serverId, 'downloading');
             }
             $this->validateSelection($server);
+            $phase = $this->selection['managed_phase'] ?? ($this->selection !== null
+                && ($this->selection['strict_minecraft'] ?? true) ? 'initial' : 'preview');
+            if (!in_array($phase, ['initial', 'preview', 'apply'], true)) {
+                throw new ModpackException('Unsupported modpack job phase.');
+            }
+            $workflow = app(ModpackUpdateWorkflow::class);
+            $review = $phase === 'apply' ? $workflow->requiredReview($server, $this->selection['review_token']) : null;
+            $backup = $review === null ? null : $workflow->requireBackup($server, $review);
+            if ($review !== null) {
+                if ($review['release']['provider'] !== $this->source || $review['release']['pack_id'] !== $this->projectId
+                    || $review['release']['version_id'] !== $this->versionId) {
+                    throw new ModpackException('The job does not match the approved release.');
+                }
+                $workflow->assertStopped($server);
+            }
+
             $file = $catalog->file($server, $this->source, $this->projectId, $this->versionId !== '' ? $this->versionId : null);
             if ($file === null) {
                 throw new ModpackException('No installable modpack file was found for this server.');
@@ -159,11 +175,6 @@ final class InstallModpack
                 $operations->modpackPhase($this->serverId, 'verifying');
             }
 
-            $phase = $this->selection['managed_phase'] ?? ($this->selection !== null
-                && ($this->selection['strict_minecraft'] ?? true) ? 'initial' : 'preview');
-            $workflow = app(ModpackUpdateWorkflow::class);
-            $review = $phase === 'apply' ? $workflow->requiredReview($server, $this->selection['review_token']) : null;
-            $backup = $review === null ? null : $workflow->requireBackup($server, $review);
             $current = app(ModpackInventory::class)->read($server);
             if ($phase === 'initial' && $current['inventory'] !== null) {
                 throw new ModpackException('This server already has a modpack. Generate an update preview.');
