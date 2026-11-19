@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Support;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use Illuminate\Http\Client\RequestException;
 
 /**
  * Thin Wings file operations used by install/update transactions.
@@ -104,11 +105,21 @@ class WingsRemoteFilesystem
         Server $server,
         string $directory,
     ): array {
-        $listing = $fileRepository
-            ->setServer($server)
-            ->getDirectory($directory === '' ? '/' : $directory);
+        try {
+            $listing = $fileRepository
+                ->setServer($server)
+                ->getDirectory($directory === '' ? '/' : $directory);
+        } catch (RequestException $exception) {
+            // A foreground pull creates its parent directory on the first install.
+            if (trim($directory, '/') !== '' && $exception->response->status() === 404
+                && $exception->response->json('error') === 'The requested directory was not found on the server.') {
+                return [];
+            }
 
-        return is_array($listing) ? array_values($listing) : [];
+            throw $exception;
+        }
+
+        return array_values($listing);
     }
 
     /**
