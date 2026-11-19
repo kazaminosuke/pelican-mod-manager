@@ -6,6 +6,7 @@ use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Kazaminosuke\ModManager\Support\Modpacks\TechnicEggBinding;
 use Kazaminosuke\ModManager\Support\UpstreamHttp;
+use Throwable;
 
 /**
  * Technic platform search. A pack is installable only when its serverPackUrl
@@ -17,6 +18,8 @@ final class TechnicModpackSource
     private const SEARCH = 'https://api.technicpack.net/search';
 
     private const PACK = 'https://api.technicpack.net/modpack/';
+
+    private const SOLDER = 'https://solder.technicpack.net/api/';
 
     /**
      * @return list<ModpackDescriptor>
@@ -85,7 +88,6 @@ final class TechnicModpackSource
         }
 
         $serverPackUrl = is_string($pack['serverPackUrl'] ?? null) ? $pack['serverPackUrl'] : '';
-        $minecraft = trim((string) ($pack['minecraft'] ?? '')) ?: null;
         $displayVersion = trim((string) ($pack['version'] ?? '')) ?: null;
         $title = (string) ($pack['displayName'] ?? $pack['name']);
         $icon = $pack['icon']['url'] ?? null;
@@ -98,7 +100,7 @@ final class TechnicModpackSource
                 title: $title,
                 versionId: 'recommended',
                 versionName: $displayVersion,
-                minecraftVersion: $minecraft,
+                minecraftVersion: null,
                 loader: null,
                 loaderVersion: null,
                 iconUrl: is_string($icon) && str_starts_with($icon, 'https://') ? $icon : null,
@@ -116,7 +118,7 @@ final class TechnicModpackSource
                 title: $title,
                 versionId: 'recommended',
                 versionName: $displayVersion,
-                minecraftVersion: $minecraft,
+                minecraftVersion: null,
                 loader: null,
                 loaderVersion: null,
                 iconUrl: is_string($icon) && str_starts_with($icon, 'https://') ? $icon : null,
@@ -140,7 +142,7 @@ final class TechnicModpackSource
             title: $title,
             versionId: $version,
             versionName: $version,
-            minecraftVersion: $minecraft,
+            minecraftVersion: $this->solderMinecraft($pack, $slug, $version, $displayVersion),
             loader: null,
             loaderVersion: null,
             iconUrl: is_string($icon) && str_starts_with($icon, 'https://') ? $icon : null,
@@ -149,5 +151,28 @@ final class TechnicModpackSource
             archiveAllowed: false,
             unsupportedReason: null,
         );
+    }
+
+    /** @param array<string, mixed> $pack */
+    private function solderMinecraft(array $pack, string $slug, string $serverVersion, ?string $displayVersion): ?string
+    {
+        // The Platform's top-level Minecraft value is not release metadata.
+        // Associate Solder only when its build matches the server ZIP token.
+        if (($pack['solder'] ?? null) !== self::SOLDER || $displayVersion === null
+            || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/D', $displayVersion) !== 1
+            || !in_array($serverVersion, [$displayVersion, 'v'.$displayVersion], true)) {
+            return null;
+        }
+
+        try {
+            $metadata = UpstreamHttp::json()->timeout(3)->connectTimeout(2)
+                ->withOptions(['allow_redirects' => false])
+                ->get(self::SOLDER.'modpack/'.rawurlencode($slug).'/'.rawurlencode($displayVersion));
+            $minecraft = $metadata->ok() ? $metadata->json('minecraft') : null;
+
+            return is_string($minecraft) && preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $minecraft) === 1 ? $minecraft : null;
+        } catch (Throwable) {
+            return null;
+        }
     }
 }

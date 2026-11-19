@@ -141,10 +141,30 @@ final class AdditionalModpackProviderTest extends TestCase
         $pack = (new TechnicModpackSource())->describe('tekkitmain');
 
         self::assertSame('tekkit', $pack?->provisioningProfileId);
+        self::assertNull($pack?->minecraftVersion);
         self::assertSame('v1.2.9g-2', $pack?->variables['MODPACK_VERSION']);
         self::assertNotSame('1.0', $pack?->variables['MODPACK_VERSION']);
         self::assertSame('v1.2.9g-2', (new TechnicModpackSource())->describe('tekkitmain', 'v1.2.9g-2')?->versionId);
         self::assertNull((new TechnicModpackSource())->describe('tekkitmain', 'v1.2.8'));
+    }
+
+    public function test_technic_uses_the_exact_solder_release_and_never_falls_back_to_the_platform_minecraft_version(): void
+    {
+        Http::fake([
+            'api.technicpack.net/modpack/tekkit-legends*' => Http::response([
+                'name' => 'tekkit-legends', 'minecraft' => '1.4.7', 'version' => '1.1.1',
+                'solder' => 'https://solder.technicpack.net/api/',
+                'serverPackUrl' => 'https://servers.technicpack.net/Technic/servers/tekkit-legends/Tekkit_Legends_Server_v1.1.1.zip',
+            ]),
+            'solder.technicpack.net/api/modpack/tekkit-legends/1.1.1' => Http::sequence()
+                ->push(['minecraft' => '1.7.10'])->pushStatus(503),
+        ]);
+        $source = new TechnicModpackSource();
+        $pack = $source->describe('tekkit-legends', '1.1.1');
+        self::assertSame('1.7.10', $pack?->minecraftVersion);
+        self::assertSame('tekkit-legends', $pack->provisioningProfileId);
+        self::assertSame(['MODPACK_VERSION' => '1.1.1'], $pack->variables);
+        self::assertNull($source->describe('tekkit-legends', '1.1.1')?->minecraftVersion);
     }
 
     public function test_atlauncher_versions_do_not_invent_a_loader_or_archive(): void

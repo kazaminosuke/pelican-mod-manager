@@ -285,9 +285,11 @@ final class ModpackCreationWizardTest extends TestCase
             ]),
             'api.technicpack.net/search?*' => Http::response(['modpacks' => [['slug' => 'tekkit-2', 'name' => 'Tekkit 2']]]),
             'api.technicpack.net/modpack/tekkit-2?*' => Http::response([
-                'name' => 'tekkit-2', 'version' => '1.2.6', 'minecraft' => '1.12.2',
+                'name' => 'tekkit-2', 'version' => '1.2.6', 'minecraft' => '1.4.7',
+                'solder' => 'https://solder.technicpack.net/api/',
                 'serverPackUrl' => 'https://servers.technicpack.net/Technic/servers/tekkit-2/Tekkit-2_Server_v1.2.6.zip',
             ]),
+            'solder.technicpack.net/api/modpack/tekkit-2/1.2.6' => Http::response(['minecraft' => '1.12.2']),
         ]);
 
         $service = Mockery::mock(ServerCreationService::class);
