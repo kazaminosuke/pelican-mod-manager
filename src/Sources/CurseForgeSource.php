@@ -4,6 +4,7 @@ namespace Kazaminosuke\ModManager\Sources;
 
 use App\Models\Server;
 use Exception;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\RequestException;
@@ -27,6 +28,7 @@ use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackFileSelector;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
@@ -443,6 +445,145 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             count(array_unique($minecraft)) === 1 ? $minecraft[0] : null,
             count(array_unique($loaders)) === 1 ? $loaders[0] : null,
         ];
+    }
+
+    /**
+     * Read exact Core API file records, including files without a download URL.
+     *
+     * @param list<array{project_id: int, file_id: int}> $dependencies
+     * @return array<string, CurseForgeFile> keyed by "projectId/fileId"
+     */
+    public function dependencyFiles(array $dependencies): array
+    {
+        $deadline = microtime(true) + 45;
+        $resolved = [];
+        $stopReason = $this->isConfigured() ? null : 'api_unconfigured';
+        foreach (array_chunk($dependencies, self::BULK_FILES_CHUNK_SIZE) as $chunk) {
+            $bulk = [];
+            if ($stopReason === null && count($chunk) > 1) {
+                try {
+                    $data = $this->getBulkFiles(array_map('strval', array_column($chunk, 'file_id')), $this->remainingTimeout($deadline));
+                    foreach ($data['data'] as $file) {
+                        $bulk[(int) ($file['id'] ?? 0)] = $file;
+                    }
+                } catch (Throwable $exception) {
+                    $stopReason = $this->dependencyFailureReason($exception);
+                }
+            }
+
+            $files = [];
+            $needProjects = [];
+            foreach ($chunk as ['project_id' => $projectId, 'file_id' => $fileId]) {
+                $key = "{$projectId}/{$fileId}";
+                $file = $bulk[$fileId] ?? null;
+                $reason = null;
+                if ($file === null && $stopReason === null) {
+                    try {
+                        $file = $this->getJson("/mods/{$projectId}/files/{$fileId}", timeoutSeconds: $this->remainingTimeout($deadline))['data'] ?? null;
+                    } catch (Throwable $exception) {
+                        $reason = $this->dependencyFailureReason($exception);
+                        if ($reason !== 'api_not_found') {
+                            $stopReason = $reason;
+                        }
+                    }
+                }
+                if ($file === null) {
+                    $resolved[$key] = new CurseForgeFile($projectId, $fileId, reason: $reason ?? $stopReason ?? 'metadata_missing');
+
+                    continue;
+                }
+                if (!is_array($file) || (int) ($file['id'] ?? 0) !== $fileId || (int) ($file['modId'] ?? 0) !== $projectId) {
+                    $resolved[$key] = new CurseForgeFile($projectId, $fileId, reason: 'metadata_mismatch');
+
+                    continue;
+                }
+                $files[$key] = $file;
+                if (!ModpackPaths::isSafeHttpsDownloadUrl($file['downloadUrl'] ?? null)) {
+                    $needProjects[$projectId] = (string) $projectId;
+                }
+            }
+
+            $projects = [];
+            if ($needProjects !== [] && $stopReason === null) {
+                try {
+                    foreach ($this->getBulkMods(array_values($needProjects), min(5.0, $this->remainingTimeout($deadline)))['data'] ?? [] as $project) {
+                        if (is_array($project)) {
+                            $projects[(int) ($project['id'] ?? 0)] = $project;
+                        }
+                    }
+                } catch (Throwable) {
+                    // File identity and hashes do not depend on display metadata.
+                }
+            }
+
+            foreach ($files as $key => $file) {
+                $resolved[$key] = $this->dependencyFile($file, $projects[(int) $file['modId']] ?? []);
+            }
+        }
+
+        return $resolved;
+    }
+
+    private function dependencyFailureReason(Throwable $exception): string
+    {
+        if ($exception instanceof RequestException) {
+            return match ($exception->response->status()) {
+                401 => 'api_authentication',
+                403 => 'api_forbidden',
+                404, 410 => 'api_not_found',
+                429 => 'api_rate_limited',
+                default => 'api_error',
+            };
+        }
+
+        return $exception instanceof ConnectionException || str_contains($exception->getMessage(), 'time budget')
+            ? 'api_timeout' : 'api_error';
+    }
+
+    /** @param array<string, mixed> $file @param array<string, mixed> $project */
+    private function dependencyFile(array $file, array $project): CurseForgeFile
+    {
+        $filename = ModpackPaths::safeRelative((string) ($file['fileName'] ?? ''));
+        if ($filename !== null && ($filename !== ($file['fileName'] ?? null) || str_contains($filename, '/'))) {
+            $filename = null;
+        }
+        $url = $file['downloadUrl'] ?? null;
+        $canDownload = $filename !== null && ModpackPaths::isSafeHttpsDownloadUrl($url);
+        $reason = match (true) {
+            $filename === null => 'invalid_filename',
+            $canDownload => null,
+            ($project['allowModDistribution'] ?? null) === false,
+            array_key_exists('downloadUrl', $file) && $url === null && ($project['allowModDistribution'] ?? null) !== true => 'distribution',
+            default => 'metadata_missing',
+        };
+        $id = (int) $file['id'];
+        $website = rtrim((string) ($project['links']['websiteUrl'] ?? ''), '/');
+        $page = preg_match('~^https://(?:www\.)?curseforge\.com/minecraft/mc-mods/[a-z0-9_-]+$~iD', $website) === 1
+            ? $website.'/files/'.$id : null;
+        $hashes = [];
+        foreach ($file['hashes'] ?? [] as $hash) {
+            $algo = match ($hash['algo'] ?? null) {
+                1 => 'sha1',
+                2 => 'md5',
+                default => null,
+            };
+            $value = $hash['value'] ?? null;
+            if ($algo !== null && is_string($value) && ctype_xdigit($value) && strlen($value) === ($algo === 'sha1' ? 40 : 32)) {
+                $hashes[$algo] = strtolower($value);
+            }
+        }
+
+        return new CurseForgeFile(
+            projectId: (int) $file['modId'],
+            fileId: $id,
+            filename: $filename,
+            url: $canDownload ? $url : null,
+            size: is_numeric($file['fileLength'] ?? null) && (int) $file['fileLength'] > 0 ? (int) $file['fileLength'] : null,
+            hashes: $hashes,
+            name: $project['name'] ?? $file['displayName'] ?? $filename,
+            page: $page,
+            reason: $reason,
+        );
     }
 
     /**
