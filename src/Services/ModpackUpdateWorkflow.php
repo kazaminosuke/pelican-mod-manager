@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Enums\ContainerStatus;
 use App\Models\Backup;
 use App\Models\Server;
+use App\Repositories\Daemon\DaemonFileRepository;
 use App\Repositories\Daemon\DaemonServerRepository;
 use App\Services\Backups\InitiateBackupService;
 use Illuminate\Contracts\Cache\Repository;
@@ -117,6 +118,16 @@ final class ModpackUpdateWorkflow
         if ($fresh === null || $fresh->status !== null || $this->daemon->setServer($server)->getState(5) !== ContainerStatus::Offline) {
             throw new ModpackException('Stop the server in Pelican and wait for Wings to confirm it is offline.');
         }
+    }
+
+    public function confirmRestored(Server $server, string $token, ModpackDeployment $deployment, DaemonFileRepository $repo): void
+    {
+        $this->leases->run((int) $server->getKey(), ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK, function () use ($server, $token, $deployment, $repo): void {
+            $this->assertStopped($server);
+            $deployment->confirmRestored($server, $repo, $token);
+            $this->done($server);
+            $this->operations->forget($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        });
     }
 
     public function cancel(Server $server, string $token): void

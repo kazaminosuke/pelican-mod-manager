@@ -7,6 +7,7 @@ return [
     'minecraft_resource_packs' => 'Minecraft Resource Packs',
 
     'modpack_updates' => [
+        'confirm_restored' => 'Wiederhergestellte Dateien prüfen',
         'choose' => 'Modpack-Version auswählen',
         'preview' => 'Vorschau der Modpack-Änderungen',
         'current' => 'Aktuelles Modpack',

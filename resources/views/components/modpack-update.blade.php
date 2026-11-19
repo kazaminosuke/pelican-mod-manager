@@ -15,6 +15,13 @@
                 @if ($current['recovery'] !== null)
                     <p role="alert">{{ __('pelican-mod-manager::strings.modpack_updates.recovery') }}
                         {{ $current['recovery']['backup'] ?? '' }}</p>
+                    @if ($canRecover)
+                        <div>
+                            <x-filament::button wire:click="confirmModpackBackupRestored('{{ $current['recovery']['transaction'] }}')" wire:loading.attr="disabled">
+                                {{ __('pelican-mod-manager::strings.modpack_updates.confirm_restored') }}
+                            </x-filament::button>
+                        </div>
+                    @endif
                 @endif
                 @if ($review !== null)
                     <h2 class="font-semibold">{{ __('pelican-mod-manager::strings.modpack_updates.preview') }}</h2>

@@ -7,6 +7,7 @@ return [
     'minecraft_resource_packs' => 'Minecraft Resource Pack',
 
     'modpack_updates' => [
+        'confirm_restored' => '復元したファイルを検証',
         'choose' => 'Modpackのリリースを選択',
         'preview' => 'Modpack更新のプレビュー',
         'current' => '現在のModpack',

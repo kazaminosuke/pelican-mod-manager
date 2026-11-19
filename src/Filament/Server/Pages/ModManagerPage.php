@@ -68,6 +68,7 @@ use Kazaminosuke\ModManager\ModManagerPlugin;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackDeployment;
 use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
 use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
@@ -4526,6 +4527,7 @@ class ModManagerPage extends Page implements HasTable
             'backup' => $review === null ? null : $workflow->backup($server, $review),
             'canBackup' => user()->can(SubuserPermission::BackupCreate, $server),
             'canStart' => user()->can(SubuserPermission::ControlStart, $server),
+            'canRecover' => $this->canManageModpackChange($server) && user()->can(SubuserPermission::BackupRestore, $server),
         ];
     }
 
@@ -4550,6 +4552,18 @@ class ModManagerPage extends Page implements HasTable
         }
         $this->runModpackUpdateAction(fn () => app(ModpackUpdateWorkflow::class)->approve($server, $token, $this->confirmModpackSwitch, $actor));
         $this->confirmModpackSwitch = $this->startAfterModpackUpdate = false;
+    }
+
+    public function confirmModpackBackupRestored(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $this->authorizeModpackChange($server);
+        abort_unless(user()->can(SubuserPermission::BackupRestore, $server), 403);
+        $this->runModpackUpdateAction(fn () => app(ModpackUpdateWorkflow::class)->confirmRestored(
+            $server, $token, app(ModpackDeployment::class), app(DaemonFileRepository::class),
+        ));
+        $this->modpackInventoryForRequest = null;
     }
 
     public function cancelModpackUpdate(string $token): void

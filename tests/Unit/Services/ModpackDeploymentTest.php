@@ -95,6 +95,30 @@ final class ModpackDeploymentTest extends TestCase
         self::assertNull($store->data['recovery']);
     }
 
+    public function test_crash_journal_can_only_be_cleared_after_restoration_is_verified(): void
+    {
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $wings = new DeploymentWings();
+        $store = new DeploymentInventory();
+        $store->begin($server, null, 'token', 'backup', ['mods/old.bin' => hash('sha256', 'old'), 'mods/new.bin' => null]);
+        $wings->files = ['mods/old.bin' => 'wrong', 'mods/new.bin' => 'unfinished update'];
+        $service = new ModpackDeployment($wings, $store);
+        try {
+            $service->confirmRestored($server, $repo, 'token');
+            self::fail('Incomplete restoration must be refused.');
+        } catch (ModpackException $error) {
+            self::assertStringContainsString('before clearing', $error->getMessage());
+        }
+        self::assertNotNull($store->data['recovery']);
+
+        $wings->files = ['mods/old.bin' => 'old'];
+        $service->confirmRestored($server, $repo, 'token');
+
+        self::assertNull($store->data['recovery']);
+        self::assertSame(['mods/old.bin' => 'old'], $wings->files);
+    }
+
     private function file(string $contents): array
     {
         $hash = hash('sha256', $contents);
@@ -118,9 +142,9 @@ final class DeploymentInventory extends ModpackInventory
         return $this->data;
     }
 
-    public function begin(Server $server, ?string $revision, string $token, ?string $backup): void
+    public function begin(Server $server, ?string $revision, string $token, ?string $backup, array $originals = []): void
     {
-        $this->data['recovery'] = ['backup' => $backup, 'token' => $token];
+        $this->data['recovery'] = ['backup' => $backup, 'transaction' => $token, 'originals' => $originals];
     }
 
     public function finish(Server $server, string $token, array $inventory): void

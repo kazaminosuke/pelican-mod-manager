@@ -24,12 +24,12 @@ class ModpackInventory
         ];
     }
 
-    public function begin(Server $server, ?string $revision, string $token, ?string $backup): void
+    public function begin(Server $server, ?string $revision, string $token, ?string $backup, array $originals = []): void
     {
         DB::table('mod_manager_modpacks')->insertOrIgnore(['server_id' => $server->getKey()]);
         if ($this->row($server)->where('revision', $revision)->whereNull('mutation')->update([
             'mutation' => $token,
-            'recovery' => json_encode(['transaction' => $token, 'backup' => $backup], JSON_THROW_ON_ERROR),
+            'recovery' => json_encode(['transaction' => $token, 'backup' => $backup, 'originals' => $originals], JSON_THROW_ON_ERROR),
         ]) !== 1) {
             throw new ModpackException('The modpack inventory changed or a previous transaction still requires recovery.');
         }

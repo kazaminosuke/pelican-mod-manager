@@ -98,7 +98,13 @@ final class ModpackDeployment
                 throw new ModpackException('Server files changed during staging. No modpack files were applied.');
             }
             $guard();
-            $this->inventory->begin($server, $state['revision'], $token, $backup);
+            $originals = [];
+            foreach ($plan as $path => $change) {
+                if (in_array($change['action'], ['add', 'replace', 'delete'], true)) {
+                    $originals[$path] = $change['observed'];
+                }
+            }
+            $this->inventory->begin($server, $state['revision'], $token, $backup, $originals);
             $started = true;
             $next = [];
             foreach ($plan as $path => $change) {
@@ -165,6 +171,31 @@ final class ModpackDeployment
         }
 
         return $summary;
+    }
+
+    /**
+     * Clear a crash journal only after proving that every touched path
+     * is back at its previous value. Restoration itself belongs to Panel.
+     */
+    public function confirmRestored(Server $server, DaemonFileRepository $repo, string $token): void
+    {
+        $this->listings = [];
+        $journal = $this->inventory->read($server)['recovery'];
+        if ($journal === null || !hash_equals($journal['transaction'], $token) || !is_array($journal['originals'] ?? null)) {
+            throw new ModpackException('The modpack recovery journal no longer matches this request.');
+        }
+        $world = $this->world($server, $repo);
+        foreach ($journal['originals'] as $path => $expected) {
+            if (!ModpackPaths::isManaged($path, $world)) {
+                throw new ModpackException("Cannot verify recovery of protected path [$path].");
+            }
+            $entry = $this->entry($server, $repo, $path);
+            $actual = $entry === null ? null : ($this->regular($entry) ? $this->digest($server, $repo, $path) : false);
+            if ($actual !== $expected) {
+                throw new ModpackException("Restore the previous file at [$path] before clearing the recovery journal.");
+            }
+        }
+        $this->inventory->abort($server, $token);
     }
 
     private function fingerprint(?string $revision, array $release, string $world, array $plan, array $target): string
