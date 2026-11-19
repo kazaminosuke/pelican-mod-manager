@@ -7,6 +7,7 @@ return [
     'minecraft_resource_packs' => 'Minecraft Resource Packs',
 
     'curseforge_manual' => [
+        'optional_skipped' => 'Optional CurseForge files that could not be obtained (project/file): :files.',
         'single_title' => 'CurseForge file needs attention',
         'single_instructions' => 'Download :filename from CurseForge. In Files, create .mod-manager-curseforge at the server root, then upload it as :path. Return to Version Selection and click Install on this same file.',
         'waiting' => 'CurseForge dependencies need attention',
@@ -302,7 +303,7 @@ return [
         'download_unavailable_invalid' => 'This resource does not have a usable download address, so it cannot be installed automatically.',
         'download_unavailable_distribution' => 'The author has disabled third-party downloads for this file, so it cannot be installed automatically.',
         'modpack_install_success' => 'Modpack installed',
-        'modpack_install_success_body' => ':name :version placed :installed file(s). :skipped file(s) were skipped because they already existed, are client-only, or are protected.',
+        'modpack_install_success_body' => ':name :version placed :installed file(s) and skipped :skipped.',
         'install_failed' => 'Installation failed',
         'install_failed_body' => 'An error occurred during installation. Please try again or contact support if the issue persists.',
         'update_success' => 'Update completed',

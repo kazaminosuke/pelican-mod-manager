@@ -7,6 +7,7 @@ return [
     'minecraft_resource_packs' => 'Minecraft Resource Packs',
 
     'curseforge_manual' => [
+        'optional_skipped' => 'Optionale CurseForge-Dateien, die nicht bezogen werden konnten (Projekt/Datei): :files.',
         'single_title' => 'Eine CurseForge-Datei erfordert deine Aufmerksamkeit',
         'single_instructions' => 'Lade :filename von CurseForge herunter. Erstelle unter Dateien den Ordner .mod-manager-curseforge im Server-Stammverzeichnis und lade die Datei als :path hoch. Wähle danach dieselbe Version erneut zur Installation aus.',
         'waiting' => 'CurseForge-Abhängigkeiten erfordern deine Aufmerksamkeit',
@@ -302,7 +303,7 @@ return [
         'download_unavailable_invalid' => 'Für diese Ressource gibt es keine verwendbare Download-Adresse, daher kann sie nicht automatisch installiert werden.',
         'download_unavailable_distribution' => 'Der Autor hat Downloads durch Dritte für diese Datei deaktiviert, daher kann sie nicht automatisch installiert werden.',
         'modpack_install_success' => 'Modpack installiert',
-        'modpack_install_success_body' => ':name :version hat :installed Datei(en) abgelegt. :skipped Datei(en) wurden übersprungen, weil sie bereits vorhanden, nur für den Client oder geschützt sind.',
+        'modpack_install_success_body' => ':name :version hat :installed Datei(en) installiert und :skipped übersprungen.',
         'install_failed' => 'Installation fehlgeschlagen',
         'install_failed_body' => 'Bei der Installation ist ein Fehler aufgetreten. Bitte versuche es erneut oder wende dich an den Support, wenn das Problem weiterhin besteht.',
         'update_success' => 'Aktualisierung abgeschlossen',

@@ -5304,16 +5304,28 @@ class ModManagerPage extends Page implements HasTable
         if ($state->operation === InstalledOperationManager::OPERATION_MODPACK) {
             $installed = (int) ($state->result['installed'] ?? 0);
             $skipped = (int) ($state->result['skipped'] ?? 0);
-            Notification::make()
-                ->title(trans('pelican-mod-manager::strings.notifications.modpack_install_success'))
-                ->body(trans('pelican-mod-manager::strings.notifications.modpack_install_success_body', [
-                    'name' => (string) ($state->result['name'] ?? ''),
-                    'version' => (string) ($state->result['version'] ?? ''),
-                    'installed' => $installed,
-                    'skipped' => $skipped,
-                ]))
-                ->success()
-                ->send();
+            $optionalUnavailable = [];
+            foreach ($state->result['warnings'] ?? [] as $warning) {
+                if (is_string($warning) && preg_match('~^unavailable:([0-9]+/[0-9]+):[a-z_]+$~D', $warning, $match) === 1) {
+                    $optionalUnavailable[] = $match[1];
+                }
+            }
+            $body = trans('pelican-mod-manager::strings.notifications.modpack_install_success_body', [
+                'name' => (string) ($state->result['name'] ?? ''),
+                'version' => (string) ($state->result['version'] ?? ''),
+                'installed' => $installed,
+                'skipped' => $skipped,
+            ]);
+            $notification = Notification::make()->title(trans('pelican-mod-manager::strings.notifications.modpack_install_success'));
+            if ($optionalUnavailable !== []) {
+                $body .= ' '.trans('pelican-mod-manager::strings.curseforge_manual.optional_skipped', [
+                    'files' => implode(', ', array_unique($optionalUnavailable)),
+                ]);
+                $notification->warning();
+            } else {
+                $notification->success();
+            }
+            $notification->body($body)->send();
 
             return;
         }

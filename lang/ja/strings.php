@@ -7,6 +7,7 @@ return [
     'minecraft_resource_packs' => 'Minecraft Resource Pack',
 
     'curseforge_manual' => [
+        'optional_skipped' => '取得できなかった任意のCurseForgeファイル（プロジェクトID/ファイルID） :files',
         'single_title' => 'CurseForgeファイルに対応が必要です',
         'single_instructions' => 'CurseForgeから :filename をダウンロードしてください。Filesでサーバーのルートに .mod-manager-curseforge を作成し、:path としてアップロードします。その後、バージョン選択の同じファイルで導入を実行してください。',
         'waiting' => 'CurseForgeの依存Modに対応が必要です',
@@ -302,7 +303,7 @@ return [
         'download_unavailable_invalid' => 'このリソースには使えるダウンロード先がないため、自動インストールできません。',
         'download_unavailable_distribution' => '作者が第三者によるダウンロードを無効にしているため、自動インストールできません。',
         'modpack_install_success' => 'Modpackをインストールしました',
-        'modpack_install_success_body' => ':name :version のファイルを :installed 件配置しました。:skipped 件は既存、クライアント専用、または保護対象のためスキップしました。',
+        'modpack_install_success_body' => ':name :version の :installed 件を配置し、:skipped 件をスキップしました。',
         'install_failed' => 'インストールに失敗しました',
         'install_failed_body' => 'インストール中にエラーが発生しました。もう一度お試しいただくか、問題が解決しない場合はサポートにお問い合わせください。',
         'update_success' => '更新が完了しました',
