@@ -248,7 +248,13 @@ final class ModpackCreationWizardTest extends TestCase
         Http::assertSentCount(3);
     }
 
-    public function test_existing_update_runs_preview_backup_and_apply_through_the_background_entry_point(): void
+    public static function existingUpdateDependencies(): array
+    {
+        return ['without manual files' => [false], 'after manual upload' => [true]];
+    }
+
+    #[DataProvider('existingUpdateDependencies')]
+    public function test_existing_update_runs_preview_backup_and_apply_through_the_background_entry_point(bool $manual): void
     {
         require_once __DIR__.'/../Services/ModpackDeploymentTest.php';
         $this->addEgg(7, 'Fabric', '10000000-b803-4f34-82cf-2d6518c6351a', ['MC_VERSION' => '1.20.1', 'LOADER_VERSION' => '0.15.0']);
@@ -299,11 +305,17 @@ final class ModpackCreationWizardTest extends TestCase
             'mods/old.bin' => ['identity' => 'old', 'sha256' => hash('sha256', 'original')],
         ]]);
 
-        $archive = tempnam(sys_get_temp_dir(), 'managed-update-job');
         $zip = new ZipArchive();
+        $jar = tempnam(sys_get_temp_dir(), 'managed-update-jar');
+        $zip->open($jar, ZipArchive::OVERWRITE);
+        $zip->addFromString('fixture/Main.class', 'test bytes');
+        $zip->close();
+        $jarBytes = file_get_contents($jar);
+        unlink($jar);
+        $archive = tempnam(sys_get_temp_dir(), 'managed-update-job');
         $zip->open($archive, ZipArchive::OVERWRITE);
         $zip->addFromString('manifest.json', json_encode([
-            'manifestType' => 'minecraftModpack', 'files' => [],
+            'manifestType' => 'minecraftModpack', 'files' => $manual ? [['projectID' => 238222, 'fileID' => 3043174, 'required' => true]] : [],
             'minecraft' => ['version' => '1.20.1', 'modLoaders' => [['id' => 'fabric-0.15.0', 'primary' => true]]],
         ], JSON_THROW_ON_ERROR));
         $zip->addFromString('overrides/config/old.toml', 'default-v2');
@@ -316,6 +328,11 @@ final class ModpackCreationWizardTest extends TestCase
                 'gameVersions' => ['1.20.1', 'Fabric'],
             ]]),
             'https://api.curseforge.com/v1/mods/285109/files?*' => Http::response(['data' => []]),
+            'https://api.curseforge.com/v1/mods/238222/files/3043174' => Http::response(['data' => [
+                'id' => 3043174, 'modId' => 238222, 'fileName' => 'manual.jar', 'downloadUrl' => null,
+                'fileLength' => strlen($jarBytes), 'hashes' => [['algo' => 1, 'value' => sha1($jarBytes)]],
+            ]]),
+            'https://api.curseforge.com/v1/mods' => Http::response(['data' => []]),
             'https://edge.forgecdn.net/job-pack.zip' => static fn () => Http::response($archiveBytes),
         ]);
 
@@ -325,6 +342,16 @@ final class ModpackCreationWizardTest extends TestCase
             'minecraft' => '1.20.1', 'loader' => 'fabric', 'loader_version' => '0.15.0', 'server_pack' => false, 'artifact_id' => '4612979'];
         self::assertTrue($operations->dispatchModpackInstall($server, ProjectType::Mod, 'curseforge', '285109', '4612979', selection: $selection)['dispatched']);
         BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
+        if ($manual) {
+            $pending = $operations->waitingCurseForgeModpack($server);
+            self::assertSame('4612979', $pending['version_id']);
+            self::assertNull($workflow->review($server));
+            self::assertArrayNotHasKey('mods/manual.jar', $wings->files);
+            $wings->files['.mod-manager-curseforge/238222-3043174.jar'] = $jarBytes;
+            self::assertTrue($operations->resumeCurseForgeModpack($server, $pending['token']));
+            BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[1]['payload']);
+            self::assertNull($operations->waitingCurseForgeModpack($server));
+        }
         $preview = $workflow->review($server);
         $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
         self::assertSame('waiting_review', $state?->status, (string) ($state?->result['message'] ?? ''));
@@ -341,7 +368,7 @@ final class ModpackCreationWizardTest extends TestCase
         });
         $workflow->createBackup($server, $preview['token'], $backup);
         $workflow->approve($server, $preview['token'], false, null);
-        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[1]['payload']);
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[$manual ? 2 : 1]['payload']);
         $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
         self::assertSame('completed', $state?->status, (string) ($state?->result['message'] ?? ''));
         self::assertSame('backup-42', $state->result['backup']);
@@ -349,6 +376,10 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertArrayNotHasKey('mods/old.bin', $wings->files);
         self::assertNull($workflow->review($server));
         self::assertSame('4612979', $inventory->read($server)['inventory']['version_id']);
+        if ($manual) {
+            self::assertSame($jarBytes, $wings->files['mods/manual.jar']);
+            self::assertSame('3043174', $inventory->read($server)['inventory']['files']['mods/manual.jar']['file_id']);
+        }
     }
 
     public function test_wizard_requires_confirmation_and_sends_the_generic_egg_the_exact_version(): void

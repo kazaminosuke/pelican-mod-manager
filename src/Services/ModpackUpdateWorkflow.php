@@ -40,6 +40,8 @@ final class ModpackUpdateWorkflow
         if (!$this->leases->owns((int) $server->getKey(), ProjectType::Mod, $lease)) {
             throw new ModpackException('The modpack operation no longer owns the server lease.');
         }
+        // The file-wait token authorizes only the preflight that just finished.
+        unset($selection['manual_token']);
         $this->cache->put($this->key($server), [
             'token' => bin2hex(random_bytes(16)), 'release' => $release, 'selection' => $selection,
             'summary' => $summary, 'created_at' => time(), 'backup_id' => null,
