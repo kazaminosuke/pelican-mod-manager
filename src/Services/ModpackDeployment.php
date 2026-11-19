@@ -91,13 +91,15 @@ final class ModpackDeployment
                 $guard(false);
             }
 
-            $this->listings = [];
             $guard();
-            if ($world !== $this->world($server, $repo)
-                || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo))) {
-                throw new ModpackException('Server files changed during staging. No modpack files were applied.');
+            if ($staged !== [] || $summary['counts']['delete'] > 0) {
+                $this->listings = [];
+                if ($world !== $this->world($server, $repo)
+                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo))) {
+                    throw new ModpackException('Server files changed during staging. No modpack files were applied.');
+                }
+                $guard();
             }
-            $guard();
             $originals = [];
             foreach ($plan as $path => $change) {
                 if (in_array($change['action'], ['add', 'replace', 'delete'], true)) {
