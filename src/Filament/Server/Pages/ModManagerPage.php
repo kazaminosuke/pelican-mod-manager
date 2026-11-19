@@ -5067,7 +5067,11 @@ class ModManagerPage extends Page implements HasTable
             $modpackState = $fetched[InstalledOperationManager::OPERATION_MODPACK];
         }
 
-        if ($modpackState?->isActive()) {
+        // A catalog-triggered scan must not hide a user-requested modpack
+        // result or the transition back to waiting after file validation.
+        if ($modpackState !== null && ($modpackState->isActive()
+            || $modpackState->status === InstalledOperationState::STATUS_WAITING_FILES
+            || ($modpackState->isFinished() && $this->shouldPollInstalledOperation($modpackState)))) {
             $this->setInstalledOperationState($modpackState);
 
             return $modpackState;
