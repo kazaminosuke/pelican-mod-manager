@@ -57,7 +57,7 @@ stop
 
 - 無料のLuckPermsを実カタログで確認しました。実検索結果に現れた明確な有料のItemsAdder `73355`、外部配布のEssentialsX `9089` とViaVersion `19254` は除外されました。価格欠損・非JAR・配布エラーの分岐はモックで再現しました。[Spigotの回帰テスト](../tests/Unit/Sources/SpigotSourceTest.php)
 - Spigotでは実APIでページ送りと更新済みキャッシュからの行の表示を確認し、Chromiumの版選択を実行しました。可視行のIDがキャッシュ更新でページ外に移る条件は、`SpigotCatalogRecordTest` で更新前後のスナップショットを決定的に再現しました。Modrinth・CurseForge・Hangar・GitHub Releasesのソースキャッシュテストと共通SWRテストも実行しました。共有の429、タイムアウト、再検証失敗、再試行はモックで確認しました。外部APIには429を誘発する負荷をかけていません。[キャッシュ競合のテスト](../tests/Unit/Filament/SpigotCatalogRecordTest.php) · [SWRのテスト](../tests/Unit/Support/SourceCacheTest.php)
-- モックでリースによる重複防止、権限の継承と拒否、既存ファイルとの衝突、同名更新、メタデータ保存後の削除、途中失敗時のロールバック、Modpackの保護パスを検証しました。実環境で確認したのは所有者による操作、取得失敗時の未導入、既存JAR保持、Wings上の削除、Modpackジョブの完了と失敗です。実Panelの読み取り専用サブユーザーについても、操作権限の評価が導入・更新・削除・スキャンをすべて拒否することを確認しました。非所有者のブラウザ上の操作と、すべての配布元での個別のロールバックは未検証です。[権限](../tests/Unit/Support/ProjectOperationAuthorizerTest.php) · [重複防止](../tests/Unit/Services/InstalledProjectMutationServiceTest.php) · [ファイル保護](../tests/Unit/Services/InstalledArchiveTransactionTest.php) · [Modpackのファイル保護](../tests/Unit/Services/ModpackInstallerTest.php)
+- モックでリースによる重複防止、権限の継承と拒否、既存ファイルとの衝突、同名更新、メタデータ保存後の削除、途中失敗時のロールバック、Modpackの保護パスを検証しました。実環境で確認したのは所有者による操作、取得失敗時の未導入、既存JAR保持、Wings上の削除、Modpackジョブの完了と失敗です。実Panelの `file.read` / `file.read-content` だけを持つサブユーザーは、導入・更新・削除・スキャンの権限がなく、Chromiumではカタログと版選択を閲覧できました。Installedタブ、導入・削除アクションは表示されませんでした（`browser-viewer-final.log`）。すべての配布元での個別のロールバックは未検証です。[権限](../tests/Unit/Support/ProjectOperationAuthorizerTest.php) · [重複防止](../tests/Unit/Services/InstalledProjectMutationServiceTest.php) · [ファイル保護](../tests/Unit/Services/InstalledArchiveTransactionTest.php) · [Modpackのファイル保護](../tests/Unit/Services/ModpackInstallerTest.php)
 
 ## 自動テスト
 
