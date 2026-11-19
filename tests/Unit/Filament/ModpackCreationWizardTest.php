@@ -22,6 +22,7 @@ use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Livewire\Livewire;
 use Mockery;
@@ -409,6 +410,13 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.start_on_completion', '0')
             ->call('create')->assertHasNoErrors();
         self::assertSame('test1234', $runner->spawned[0]['payload']['version_id']);
+
+        $existing = new Server();
+        $existing->exists = true;
+        $pack = app(ModpackCatalog::class)->describe($existing, 'modrinth', 'pack1234', 'test1234');
+        self::assertNotNull($pack);
+        self::assertFalse($pack->archiveAllowed);
+        self::assertNotNull($pack->unsupportedReason);
     }
 
     public function test_modrinth_manifest_pins_the_fabric_loader_for_archive_creation(): void

@@ -303,7 +303,8 @@ final class ModpackCatalog
         $resolvedVersion = (string) $download['version_id'];
         $project = $this->modrinth->getProject($projectId);
         $serverUnsupported = ($project['id'] ?? null) === $projectId && ($project['server_side'] ?? null) === 'unsupported';
-        $metadata = $this->inspectModrinthArchive($download['url']);
+        $archiveAllowed = !$serverUnsupported || !$server->exists;
+        $metadata = $archiveAllowed ? $this->inspectModrinthArchive($download['url']) : null;
         $minecraft = $metadata['minecraft'] ?? $download['minecraft'] ?? null;
         $java = JavaRuntimeImage::preferredLabel($minecraft);
         $usableGeneric = !$serverUnsupported && ($metadata['generic_egg'] ?? false) && in_array($java, ['Java 8', 'Java 16', 'Java 17'], true)
@@ -322,11 +323,11 @@ final class ModpackCatalog
             iconUrl: null,
             provisioningProfileId: $usableGeneric ? 'modrinth-generic' : null,
             variables: $usableGeneric ? ['PROJECT_ID' => $projectId, 'VERSION_ID' => $resolvedVersion] : [],
-            archiveAllowed: true,
-            unsupportedReason: null,
+            archiveAllowed: $archiveAllowed,
+            unsupportedReason: $archiveAllowed ? null : 'Modrinth marks this modpack as unsupported on a dedicated server.',
             downloadUrl: (string) $download['url'],
             filename: (string) ($download['filename'] ?? ''),
-            compatibilityWarning: $serverUnsupported ? 'modrinth_server_unsupported' : null,
+            compatibilityWarning: $archiveAllowed && $serverUnsupported ? 'modrinth_server_unsupported' : null,
         );
     }
 
