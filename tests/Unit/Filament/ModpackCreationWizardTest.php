@@ -7,6 +7,7 @@ use App\Models\Server;
 use App\Services\Servers\ServerCreationService;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\ToggleButtons;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Wizard;
 use Filament\Schemas\Components\Wizard\Step;
@@ -134,7 +135,7 @@ final class ModpackCreationWizardTest extends TestCase
             self::assertSame('21.1.266', $data['environment']['NEOFORGE_VERSION']);
             self::assertSame('java -jar server.jar', $data['startup']);
             self::assertSame('ghcr.io/pelican-eggs/yolks:java_21', $data['image']);
-            self::assertFalse($data['start_on_completion']);
+            self::assertSame(0, $data['start_on_completion']);
             self::assertSame('9620701', $data['mm_install_plan']['version_id']);
 
             return true;
@@ -155,7 +156,8 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSet('data.egg_id', 7)
             ->assertSet('data.environment.MC_VERSION', '1.21.1');
         if ($manifestAvailable) {
-            $wizard->assertSet('data.environment.NEOFORGE_VERSION', '21.1.266')
+            $wizard->assertSet('data.skip_scripts', '0')->assertSet('data.start_on_completion', '0')
+                ->assertSet('data.environment.NEOFORGE_VERSION', '21.1.266')
                 ->assertDontSee('could not determine the required loader build');
         } else {
             $wizard->assertSee('could not determine the required loader build')
@@ -176,9 +178,9 @@ final class ModpackCreationWizardTest extends TestCase
             $wizard->set('data.mm_confirm_compatibility', true)
                 ->set('data.environment.NEOFORGE_VERSION', '21.1.266');
         }
-        $wizard->set('data.start_on_completion', true)->call('create')->assertHasErrors('data.mm_project');
+        $wizard->set('data.start_on_completion', '1')->call('create')->assertHasErrors('data.mm_project');
         self::assertSame([], $runner->spawned);
-        $wizard->set('data.start_on_completion', false)
+        $wizard->set('data.start_on_completion', '0')
             ->set('data.image', 'ghcr.io/pelican-eggs/yolks:java_17')->call('create')->assertHasErrors('data.image')
             ->set('data.image', 'ghcr.io/pelican-eggs/yolks:java_21')->call('create')->assertHasNoErrors();
 
@@ -313,12 +315,12 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_version', $version);
         if ($provider === 'ftb') {
             $wizard->assertSee('The FTB Egg can report completion after an installer failure.')
-                ->assertSet('data.start_on_completion', false)
+                ->assertSet('data.start_on_completion', '0')
                 ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
                 ->set('data.mm_confirm_compatibility', true)
-                ->set('data.start_on_completion', true)
+                ->set('data.start_on_completion', '1')
                 ->call('create')->assertHasErrors('data.mm_project')
-                ->set('data.start_on_completion', false);
+                ->set('data.start_on_completion', '0');
         }
         $wizard->call('create')->assertHasNoErrors();
     }
@@ -385,7 +387,7 @@ final class ModpackCreationWizardTest extends TestCase
         $service->shouldReceive('handle')->once()->withArgs(static function (array $data): bool {
             self::assertSame(9, $data['egg_id']);
             self::assertSame('0.15.11', $data['environment']['LOADER_VERSION']);
-            self::assertFalse($data['start_on_completion']);
+            self::assertSame(0, $data['start_on_completion']);
             self::assertSame('archive', $data['mm_install_plan']['mode']);
             self::assertSame('test1234', $data['mm_install_plan']['version_id']);
 
@@ -398,12 +400,13 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_project', 'modrinth:pack1234')
             ->set('data.mm_version', 'test1234')
             ->assertSet('data.egg_id', 9)
+            ->assertSet('data.skip_scripts', '0')->assertSet('data.start_on_completion', '0')
             ->assertSee('Modrinth marks this modpack as unsupported on dedicated servers.')
             ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
             ->set('data.mm_confirm_compatibility', true)
-            ->set('data.start_on_completion', true)
+            ->set('data.start_on_completion', '1')
             ->call('create')->assertHasErrors('data.mm_project')
-            ->set('data.start_on_completion', false)
+            ->set('data.start_on_completion', '0')
             ->call('create')->assertHasNoErrors();
         self::assertSame('test1234', $runner->spawned[0]['payload']['version_id']);
     }
@@ -492,8 +495,8 @@ final class ModpackCreationWizardHarness extends CreateServer
                 Hidden::make('select_startup'),
                 Hidden::make('image'),
                 Hidden::make('select_image'),
-                Hidden::make('skip_scripts')->default(false),
-                Hidden::make('start_on_completion')->default(true),
+                ToggleButtons::make('skip_scripts')->options([0 => 'Yes', 1 => 'Skip'])->default(0)->required(),
+                ToggleButtons::make('start_on_completion')->options([1 => 'Yes', 0 => 'No'])->default(1)->required(),
                 Hidden::make('server_variables')->default([]),
                 Hidden::make('environment')->default([]),
             ]),

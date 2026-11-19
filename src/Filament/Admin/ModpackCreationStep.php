@@ -418,9 +418,10 @@ final class ModpackCreationStep
         $image = JavaRuntimeImage::fromEggImages($images, $result->minecraftVersion);
         $set('image', $image);
         $set('select_image', $image);
-        $set('skip_scripts', false);
+        // Panel uses required ToggleButtons with numeric option keys.
+        $set('skip_scripts', 0);
         if (self::requiresManualStart($result)) {
-            $set('start_on_completion', false);
+            $set('start_on_completion', 0);
         }
         $rows = [];
         $environment = [];
