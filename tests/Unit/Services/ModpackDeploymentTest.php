@@ -311,6 +311,11 @@ final class DeploymentWings extends WingsRemoteFilesystem
         return Utils::streamFor($this->files[$path]);
     }
 
+    public function put(DaemonFileRepository $fileRepository, Server $server, string $path, string $contents): void
+    {
+        $this->files[$path] = $contents;
+    }
+
     public function putStream(DaemonFileRepository $fileRepository, Server $server, string $path, StreamInterface $contents): void
     {
         $this->uploads++;

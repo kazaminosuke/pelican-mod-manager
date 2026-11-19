@@ -2,9 +2,13 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Filament;
 
+use App\Enums\ContainerStatus;
 use App\Filament\Admin\Resources\Servers\Pages\CreateServer;
+use App\Models\Backup;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use App\Repositories\Daemon\DaemonServerRepository;
+use App\Services\Backups\InitiateBackupService;
 use App\Services\Servers\ServerCreationService;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Hidden;
@@ -22,9 +26,14 @@ use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
+use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
+use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use Kazaminosuke\ModManager\Tests\Unit\Services\DeploymentWings;
 use Livewire\Livewire;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -237,6 +246,109 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('The downloaded CurseForge archive no longer matches the selected file.', $state?->result['message']);
         self::assertSame($plan, $manager->waitingCurseForgeModpack(42));
         Http::assertSentCount(3);
+    }
+
+    public function test_existing_update_runs_preview_backup_and_apply_through_the_background_entry_point(): void
+    {
+        require_once __DIR__.'/../Services/ModpackDeploymentTest.php';
+        $this->addEgg(7, 'Fabric', '10000000-b803-4f34-82cf-2d6518c6351a', ['MC_VERSION' => '1.20.1', 'LOADER_VERSION' => '0.15.0']);
+        DB::table('eggs')->where('id', 7)->update(['tags' => '["minecraft","fabric"]']);
+        Schema::table('servers', function (Blueprint $table): void {
+            $table->string('uuid');
+            $table->string('image')->nullable();
+            $table->text('startup')->nullable();
+        });
+        Schema::create('server_variables', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedInteger('server_id');
+            $table->unsignedInteger('variable_id');
+            $table->string('variable_value');
+        });
+        Schema::create('backups', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedInteger('server_id');
+            $table->string('uuid');
+            $table->json('ignored_files');
+            $table->boolean('is_successful');
+            $table->timestamp('completed_at')->nullable();
+            $table->timestamps();
+        });
+        $migration = require dirname(__DIR__, 3).'/database/migrations/2026_11_19_000006_create_mod_manager_modpacks_table.php';
+        $migration->up();
+        DB::table('servers')->insert(['id' => 42, 'egg_id' => 7, 'uuid' => 'server-42', 'image' => 'ghcr.io/pelican-eggs/yolks:java_17']);
+        foreach (DB::table('egg_variables')->get() as $variable) {
+            DB::table('server_variables')->insert(['server_id' => 42, 'variable_id' => $variable->id, 'variable_value' => $variable->default_value]);
+        }
+        $server = Server::findOrFail(42);
+        $runner = PluginBackgroundRunner::fake();
+        $this->app->instance(PluginBackgroundRunner::class, $runner);
+        $repo = Mockery::mock(DaemonFileRepository::class);
+        $daemon = Mockery::mock(DaemonServerRepository::class);
+        $daemon->shouldReceive('setServer')->andReturnSelf();
+        $daemon->shouldReceive('getState')->with(5)->andReturn(ContainerStatus::Offline);
+        $daemon->shouldNotReceive('power');
+        $this->app->instance(DaemonFileRepository::class, $repo);
+        $this->app->instance(DaemonServerRepository::class, $daemon);
+        $wings = new DeploymentWings();
+        $wings->files = ['config/old.toml' => 'default-v1', 'mods/old.bin' => 'original'];
+        $this->app->instance(WingsRemoteFilesystem::class, $wings);
+        $inventory = app(ModpackInventory::class);
+        $inventory->begin($server, null, 'initial', null);
+        $inventory->finish($server, 'initial', ['provider' => 'curseforge', 'pack_id' => '285109', 'version_id' => 'old', 'files' => [
+            'config/old.toml' => ['identity' => hash('sha256', 'default-v1'), 'sha256' => hash('sha256', 'default-v1')],
+            'mods/old.bin' => ['identity' => 'old', 'sha256' => hash('sha256', 'original')],
+        ]]);
+
+        $archive = tempnam(sys_get_temp_dir(), 'managed-update-job');
+        $zip = new ZipArchive();
+        $zip->open($archive, ZipArchive::OVERWRITE);
+        $zip->addFromString('manifest.json', json_encode([
+            'manifestType' => 'minecraftModpack', 'files' => [],
+            'minecraft' => ['version' => '1.20.1', 'modLoaders' => [['id' => 'fabric-0.15.0', 'primary' => true]]],
+        ], JSON_THROW_ON_ERROR));
+        $zip->addFromString('overrides/config/old.toml', 'default-v2');
+        $zip->close();
+        $archiveBytes = file_get_contents($archive);
+        unlink($archive);
+        Http::fake([
+            'https://api.curseforge.com/v1/mods/285109/files/4612979' => Http::response(['data' => [
+                'id' => 4612979, 'modId' => 285109, 'fileName' => 'RLCraft.zip', 'downloadUrl' => 'https://edge.forgecdn.net/job-pack.zip',
+                'gameVersions' => ['1.20.1', 'Fabric'],
+            ]]),
+            'https://api.curseforge.com/v1/mods/285109/files?*' => Http::response(['data' => []]),
+            'https://edge.forgecdn.net/job-pack.zip' => static fn () => Http::response($archiveBytes),
+        ]);
+
+        $operations = app(InstalledOperationManager::class);
+        $workflow = app(ModpackUpdateWorkflow::class);
+        $selection = ['managed_phase' => 'preview', 'egg_id' => '7', 'image' => $server->image, 'variables' => app(InstalledEggCatalog::class)->variableValues($server),
+            'minecraft' => '1.20.1', 'loader' => 'fabric', 'loader_version' => '0.15.0', 'server_pack' => false, 'artifact_id' => '4612979'];
+        self::assertTrue($operations->dispatchModpackInstall($server, ProjectType::Mod, 'curseforge', '285109', '4612979', selection: $selection)['dispatched']);
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
+        $preview = $workflow->review($server);
+        $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        self::assertSame('waiting_review', $state?->status, (string) ($state?->result['message'] ?? ''));
+        self::assertSame(1, $preview['summary']['mods']['delete']);
+        self::assertSame('original', $wings->files['mods/old.bin']);
+        $backup = Mockery::mock(InitiateBackupService::class);
+        $backup->shouldReceive('setIgnoredFiles')->with([])->andReturnSelf();
+        $backup->shouldReceive('setIsLocked')->with(true)->andReturnSelf();
+        $backup->shouldReceive('handle')->once()->andReturnUsing(function (): Backup {
+            $id = DB::table('backups')->insertGetId(['server_id' => 42, 'uuid' => 'backup-42', 'is_successful' => true,
+                'ignored_files' => '[]', 'completed_at' => now(), 'created_at' => now()]);
+
+            return Backup::findOrFail($id);
+        });
+        $workflow->createBackup($server, $preview['token'], $backup);
+        $workflow->approve($server, $preview['token'], false, null);
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[1]['payload']);
+        $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        self::assertSame('completed', $state?->status, (string) ($state?->result['message'] ?? ''));
+        self::assertSame('backup-42', $state->result['backup']);
+        self::assertSame('default-v2', $wings->files['config/old.toml']);
+        self::assertArrayNotHasKey('mods/old.bin', $wings->files);
+        self::assertNull($workflow->review($server));
+        self::assertSame('4612979', $inventory->read($server)['inventory']['version_id']);
     }
 
     public function test_wizard_requires_confirmation_and_sends_the_generic_egg_the_exact_version(): void
