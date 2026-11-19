@@ -7,6 +7,8 @@ return [
     'minecraft_resource_packs' => 'Minecraft Resource Pack',
 
     'curseforge_manual' => [
+        'single_title' => 'CurseForgeファイルに対応が必要です',
+        'single_instructions' => 'CurseForgeから :filename をダウンロードしてください。Filesでサーバーのルートに .mod-manager-curseforge を作成し、:path としてアップロードします。その後、バージョン選択の同じファイルで導入を実行してください。',
         'waiting' => 'CurseForgeの依存Modに対応が必要です',
         'release' => 'プロジェクト :project · ファイル :file',
         'required' => '必須',

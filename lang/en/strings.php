@@ -7,6 +7,8 @@ return [
     'minecraft_resource_packs' => 'Minecraft Resource Packs',
 
     'curseforge_manual' => [
+        'single_title' => 'CurseForge file needs attention',
+        'single_instructions' => 'Download :filename from CurseForge. In Files, create .mod-manager-curseforge at the server root, then upload it as :path. Return to Version Selection and click Install on this same file.',
         'waiting' => 'CurseForge dependencies need attention',
         'release' => 'Project :project · File :file',
         'required' => 'Required',

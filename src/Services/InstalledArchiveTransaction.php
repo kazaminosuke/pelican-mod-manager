@@ -13,6 +13,7 @@ use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use Psr\Http\Message\StreamInterface;
 use Throwable;
 
 /**
@@ -47,6 +48,7 @@ class InstalledArchiveTransaction
         array $primaryFile,
         ?array $installedMod = null,
         ?InstalledMetadataWriteSession $metadataSession = null,
+        ?StreamInterface $verifiedUpload = null,
     ): void {
         if (!$type->usesArchiveMetadata()) {
             throw new Exception('Resource packs must use the dedicated direct URL and SHA-1 transaction.');
@@ -56,7 +58,7 @@ class InstalledArchiveTransaction
         $oldFilename = is_array($installedMod)
             ? $this->safeFilename($this->requiredString($installedMod, 'filename'))
             : null;
-        $url = $this->requiredString($primaryFile, 'url');
+
         $expectedSize = $this->optionalPositiveInt($primaryFile['size'] ?? $primaryFile['filesize'] ?? null);
         $folder = $this->projects->getProjectFolder($server, $fileRepository, $type);
         $source = ProjectSourceKey::tryFrom((string) ($record['source'] ?? ($installedMod['source'] ?? '')))
@@ -82,7 +84,13 @@ class InstalledArchiveTransaction
         $activated = false;
 
         try {
-            $stat = $this->wings->pullForeground($fileRepository, $server, $url, $folder, $tempFilename);
+            if ($verifiedUpload !== null) {
+                $this->wings->putStream($fileRepository, $server, $folder.'/'.$tempFilename, $verifiedUpload);
+                $stat = [];
+            } else {
+                $url = $this->requiredString($primaryFile, 'url');
+                $stat = $this->wings->pullForeground($fileRepository, $server, $url, $folder, $tempFilename);
+            }
             $listed = $this->assertCompletedPull($fileRepository, $server, $folder, $tempFilename, $stat, $expectedSize);
             // A rename keeps the size and mtime, so this is what the next scan
             // lists for the activated file.

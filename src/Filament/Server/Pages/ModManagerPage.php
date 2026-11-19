@@ -53,6 +53,7 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\CurseForgeManualFileException;
 use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
@@ -83,6 +84,7 @@ use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
@@ -1985,6 +1987,11 @@ class ModManagerPage extends Page implements HasTable
             throw new Exception('No compatible versions found');
         }
 
+        if ($source instanceof CurseForgeSource && $type === ProjectType::Mod) {
+            // The latest Mod can require a manual upload. Keep that exact file.
+            return reset($versions);
+        }
+
         $blocked = [];
 
         foreach ($versions as $version) {
@@ -2060,6 +2067,33 @@ class ModManagerPage extends Page implements HasTable
     /**
      * @throws Exception
      */
+    protected function curseForgeModFile(ProjectSourceInterface $source, ProjectType $type, string $projectId, array $version): ?CurseForgeFile
+    {
+        if (!$source instanceof CurseForgeSource || $type !== ProjectType::Mod) {
+            return null;
+        }
+
+        $fileId = (string) ($version['id'] ?? '');
+        if (preg_match('/^[1-9][0-9]{0,9}$/D', $projectId) !== 1 || preg_match('/^[1-9][0-9]{0,9}$/D', $fileId) !== 1) {
+            throw new Exception('Invalid CurseForge project or file ID.');
+        }
+        $dependency = $source->dependencyFiles([['project_id' => (int) $projectId, 'file_id' => (int) $fileId]])["$projectId/$fileId"];
+        if ($dependency->url === null && !$dependency->canUpload()) {
+            throw new CurseForgeManualFileException($dependency, $dependency->reason === 'distribution' ? 'unverifiable' : ($dependency->reason ?? 'metadata_missing'));
+        }
+
+        return $dependency;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function primaryFileForCurseForgeMod(?CurseForgeFile $dependency, array $version): ?array
+    {
+        return $dependency === null ? ProjectPrimaryFile::fromVersion($version) : [
+            'filename' => $dependency->filename, 'size' => $dependency->size, 'hashes' => $dependency->hashes,
+            'url' => $dependency->url,
+        ];
+    }
+
     protected function validateFilename(string $filename): string
     {
         if ($filename === '' || $filename === '.' || str_contains($filename, "\0") || str_contains($filename, '..') || str_contains($filename, '/') || str_contains($filename, '\\')) {
@@ -2170,7 +2204,8 @@ class ModManagerPage extends Page implements HasTable
         array $record,
         array $versionData,
         array $primaryFile,
-        ?array $installedMod = null
+        ?array $installedMod = null,
+        ?CurseForgeFile $manualFile = null,
     ): void {
         $type = static::detectProjectType($server);
         if (!$type) {
@@ -2222,6 +2257,7 @@ class ModManagerPage extends Page implements HasTable
             $versionData,
             $installedMod,
             $primaryFile,
+            $manualFile,
         );
 
         // The install transaction already applied this file to the cached
@@ -3221,19 +3257,22 @@ class ModManagerPage extends Page implements HasTable
                                                 throw new Exception('Source unavailable');
                                             }
 
-                                            $versionData = $this->modalInstallableVersion(
-                                                $source,
-                                                (string) ($record['project_id'] ?? ''),
-                                                $versionData,
-                                                $server,
-                                                $type,
-                                            );
+                                            $dependency = $this->curseForgeModFile($source, $type, (string) $record['project_id'], $versionData);
+                                            if ($dependency === null) {
+                                                $versionData = $this->modalInstallableVersion(
+                                                    $source,
+                                                    (string) ($record['project_id'] ?? ''),
+                                                    $versionData,
+                                                    $server,
+                                                    $type,
+                                                );
+                                            }
 
                                             if (!isset($versionData['id'], $versionData['version_number'])) {
                                                 throw new Exception('Invalid version data structure');
                                             }
 
-                                            $primaryFile = $this->getPrimaryFile($versionData['files'] ?? null);
+                                            $primaryFile = $this->primaryFileForCurseForgeMod($dependency, $versionData);
 
                                             if (!$primaryFile) {
                                                 throw new Exception('No downloadable file found');
@@ -3247,7 +3286,8 @@ class ModManagerPage extends Page implements HasTable
                                                 $sourceEnum,
                                             );
 
-                                            $this->performInstallOrUpdate($server, $fileRepository, $record, $versionData, $primaryFile, $installedMod);
+                                            $this->performInstallOrUpdate($server, $fileRepository, $record, $versionData, $primaryFile, $installedMod,
+                                                $dependency?->url === null ? $dependency : null);
 
                                             $this->forgetInstalledModsMetadata();
                                             $this->forgetVersionCaches();
@@ -3318,7 +3358,8 @@ class ModManagerPage extends Page implements HasTable
                                 throw new Exception('Invalid version data structure');
                             }
 
-                            $primaryFile = $this->getPrimaryFile($latestVersion['files']);
+                            $dependency = $this->curseForgeModFile($source, $type, (string) $record['project_id'], $latestVersion);
+                            $primaryFile = $this->primaryFileForCurseForgeMod($dependency, $latestVersion);
 
                             if (!$primaryFile) {
                                 throw new Exception('No downloadable file found');
@@ -3332,7 +3373,8 @@ class ModManagerPage extends Page implements HasTable
                                 $sourceKey,
                             );
 
-                            $this->performInstallOrUpdate($server, $fileRepository, $record, $latestVersion, $primaryFile, $installedMod);
+                            $this->performInstallOrUpdate($server, $fileRepository, $record, $latestVersion, $primaryFile, $installedMod,
+                                $dependency?->url === null ? $dependency : null);
 
                             $this->forgetInstalledModsMetadata();
                             $this->forgetVersionCaches();
@@ -3434,13 +3476,15 @@ class ModManagerPage extends Page implements HasTable
                                 throw new Exception('Invalid version data structure');
                             }
 
-                            $primaryFile = $this->getPrimaryFile($latestVersion['files']);
+                            $dependency = $this->curseForgeModFile($source, $type, (string) $record['project_id'], $latestVersion);
+                            $primaryFile = $this->primaryFileForCurseForgeMod($dependency, $latestVersion);
 
                             if (!$primaryFile) {
                                 throw new Exception('No downloadable file found');
                             }
 
-                            $this->performInstallOrUpdate($server, $fileRepository, $record, $latestVersion, $primaryFile, $installedMod);
+                            $this->performInstallOrUpdate($server, $fileRepository, $record, $latestVersion, $primaryFile, $installedMod,
+                                $dependency?->url === null ? $dependency : null);
 
                             $this->forgetInstalledModsMetadata();
                             $this->forgetVersionCaches();
@@ -5321,6 +5365,12 @@ class ModManagerPage extends Page implements HasTable
             return;
         }
 
+        if ($exception instanceof CurseForgeManualFileException) {
+            $this->notifyCurseForgeManualFile($exception);
+
+            return;
+        }
+
         if ($exception instanceof DownloadUnavailableException) {
             $bodyKey = match ($exception->reason()) {
                 DownloadUnavailableException::PREMIUM => 'download_unavailable_premium',
@@ -5359,6 +5409,27 @@ class ModManagerPage extends Page implements HasTable
             ->body(trans("pelican-mod-manager::strings.notifications.{$notificationKey}_body"))
             ->danger()
             ->send();
+    }
+
+    private function notifyCurseForgeManualFile(CurseForgeManualFileException $exception): void
+    {
+        $file = $exception->dependency;
+        $prefix = 'pelican-mod-manager::strings.curseforge_manual.';
+        $body = trans($prefix.'release', ['project' => $file->projectId, 'file' => $file->fileId]);
+        $body .= ' '.trans($prefix.'reasons.'.$exception->reason);
+        $actions = [];
+        if ($file->page !== null) {
+            $actions[] = Action::make('curseforge_selected_file')->label(trans($prefix.'open_file'))->url($file->page)->openUrlInNewTab();
+        } elseif ($file->canUpload()) {
+            $search = rawurlencode($file->name ?? (string) $file->projectId);
+            $actions[] = Action::make('curseforge_search')->label(trans($prefix.'find_file'))
+                ->url('https://www.curseforge.com/minecraft/search?class=mc-mods&search='.$search)->openUrlInNewTab();
+        }
+        if ($file->canUpload()) {
+            $body .= ' '.trans($prefix.'single_instructions', ['filename' => $file->filename, 'path' => $file->stagingPath()]);
+            $actions[] = Action::make('curseforge_file_manager')->label(trans($prefix.'open_files'))->url(ListFiles::getUrl())->openUrlInNewTab();
+        }
+        Notification::make()->title(trans($prefix.'single_title'))->body($body)->actions($actions)->warning()->persistent()->send();
     }
 
     /**

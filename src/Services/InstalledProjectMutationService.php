@@ -5,8 +5,10 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 
 /**
@@ -21,6 +23,7 @@ final class InstalledProjectMutationService
         private readonly InstalledArchiveTransaction $archives,
         private readonly InstalledOperationLease $leases,
         private readonly float $leaseWaitSeconds = InstalledOperationLease::FOREGROUND_WAIT_SECONDS,
+        private readonly ?CurseForgeManualFiles $manualFiles = null,
     ) {}
 
     /**
@@ -37,6 +40,7 @@ final class InstalledProjectMutationService
         array $versionData,
         ?array $installedMod = null,
         ?array $primaryFile = null,
+        ?CurseForgeFile $manualFile = null,
     ): string {
         if (!$type->usesArchiveMetadata()) {
             throw new Exception('Resource packs must use the dedicated direct URL and SHA-1 transaction.');
@@ -44,7 +48,14 @@ final class InstalledProjectMutationService
 
         $file = $primaryFile ?? ProjectPrimaryFile::fromVersion($versionData);
 
-        if ($file === null || !ProjectPrimaryFile::isDownloadable($file)) {
+        if ($manualFile !== null && ($type !== ProjectType::Mod
+            || ($record['source'] ?? null) !== ProjectSourceKey::CurseForge->value
+            || (string) ($record['project_id'] ?? '') !== (string) $manualFile->projectId
+            || (string) ($versionData['id'] ?? '') !== (string) $manualFile->fileId
+            || ($file['filename'] ?? null) !== $manualFile->filename)) {
+            throw new Exception('The CurseForge upload does not match the selected file.');
+        }
+        if ($file === null || ($manualFile === null && !ProjectPrimaryFile::isDownloadable($file))) {
             throw new Exception('No downloadable file found');
         }
 
@@ -57,16 +68,17 @@ final class InstalledProjectMutationService
             $serverId,
             $type,
             $operation,
-            function () use ($server, $fileRepository, $type, $record, $versionData, $file, $installedMod): string {
-                $this->archives->installOrUpdate(
-                    $server,
-                    $fileRepository,
-                    $type,
-                    $record,
-                    $versionData,
-                    $file,
-                    $installedMod,
-                );
+            function () use ($server, $fileRepository, $type, $record, $versionData, $file, $installedMod, $manualFile): string {
+                if ($manualFile === null) {
+                    $this->archives->installOrUpdate($server, $fileRepository, $type, $record, $versionData, $file, $installedMod);
+                } else {
+                    $snapshot = ($this->manualFiles ?? app(CurseForgeManualFiles::class))->verifiedSnapshot($server, $fileRepository, $manualFile);
+                    try {
+                        $this->archives->installOrUpdate($server, $fileRepository, $type, $record, $versionData, $file, $installedMod, verifiedUpload: $snapshot);
+                    } finally {
+                        $snapshot->close();
+                    }
+                }
 
                 return (string) $file['filename'];
             },
