@@ -4,6 +4,7 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Filament;
 
 use App\Filament\Admin\Resources\Servers\Pages\CreateServer;
 use App\Models\Server;
+use App\Repositories\Daemon\DaemonFileRepository;
 use App\Services\Servers\ServerCreationService;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Hidden;
@@ -202,6 +203,40 @@ final class ModpackCreationWizardTest extends TestCase
         $state = app(InstalledOperationManager::class)->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
         self::assertSame('modpack_rejected', $state?->error);
         self::assertSame('The server Egg changed after the modpack was queued.', $state?->result['message']);
+    }
+
+    public function test_resuming_a_curseforge_modpack_rejects_different_archive_bytes_before_wings(): void
+    {
+        Http::fake([
+            'https://api.curseforge.com/v1/mods/285109/files/4612979' => Http::response(['data' => [
+                'id' => 4612979, 'modId' => 285109, 'fileName' => 'RLCraft.zip', 'downloadUrl' => 'https://edge.forgecdn.net/selected-pack.zip',
+            ]]),
+            'https://api.curseforge.com/v1/mods/285109/files?*' => Http::response(['data' => []]),
+            'https://edge.forgecdn.net/selected-pack.zip' => Http::response('changed archive bytes'),
+        ]);
+        $repository = Mockery::mock(DaemonFileRepository::class);
+        $repository->shouldNotReceive('setServer');
+        $this->app->instance(DaemonFileRepository::class, $repository);
+        $runner = PluginBackgroundRunner::fake();
+        $this->app->instance(PluginBackgroundRunner::class, $runner);
+        $this->addEgg(7, 'Forge', '5cdecd89-31e8-4ebe-93e7-89272c76aebd', []);
+        DB::table('servers')->insert(['id' => 42, 'egg_id' => 7]);
+        $manager = app(InstalledOperationManager::class);
+        $manager->dispatchModpackInstall(42, ProjectType::Mod, 'curseforge', '285109', '4612979');
+        $manager->pauseCurseForgeModpack(42, $runner->spawned[0]['payload']['lease_token'], '285109', '4612979', [
+            'egg_id' => '7', 'server_pack' => false, 'artifact_id' => '4612979',
+            'archive_sha256' => hash('sha256', 'approved archive bytes'),
+        ], []);
+        $plan = $manager->waitingCurseForgeModpack(42);
+        self::assertTrue($manager->resumeCurseForgeModpack(42, $plan['token']));
+
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[1]['payload']);
+
+        $state = $manager->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        self::assertSame('modpack_rejected', $state?->error);
+        self::assertSame('The downloaded CurseForge archive no longer matches the selected file.', $state?->result['message']);
+        self::assertSame($plan, $manager->waitingCurseForgeModpack(42));
+        Http::assertSentCount(3);
     }
 
     public function test_wizard_requires_confirmation_and_sends_the_generic_egg_the_exact_version(): void
