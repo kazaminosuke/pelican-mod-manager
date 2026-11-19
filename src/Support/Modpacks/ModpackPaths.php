@@ -66,6 +66,31 @@ final class ModpackPaths
         return !str_contains($path, '/') && str_ends_with($path, '.jar');
     }
 
+    /** A managed deployment may only change known pack directories. */
+    public static function isManaged(string $path, string $world): bool
+    {
+        if (self::safeRelative($path) !== $path || preg_match('/[\x00-\x1f\x7f:]/', $path) === 1) {
+            return false;
+        }
+
+        $path = strtolower($path);
+        $world = strtolower($world);
+        $parts = explode('/', $path);
+        if (count($parts) < 2 || self::isProtected($path) || $path === $world || str_starts_with($path, $world.'/')) {
+            return false;
+        }
+        foreach ($parts as $part) {
+            if (str_starts_with($part, '.') || in_array($part, ['level.dat', 'level.dat_old', 'session.lock',
+                'uid.dat', 'playerdata', 'players', 'region', 'entities', 'poi', 'advancements', 'stats', 'dimensions'], true)) {
+                return false;
+            }
+        }
+
+        return in_array($parts[0], ['mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks',
+            'global_packs', 'openloader', 'resourcepacks', 'resources', 'structures'], true)
+            || str_starts_with($path, 'local/kubejs/');
+    }
+
     /** @return array{0: string, 1: string} directory, filename */
     public static function split(string $relativePath): array
     {
