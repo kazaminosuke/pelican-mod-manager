@@ -19,7 +19,7 @@
 | CurseForge・Better MC NeoForge BMC5 v54 | `9359712` | 1.21.1・NeoForge 21.1.234・21想定 | 公開一覧は追加Server Pack 0件。通常ZIPのmanifestを解析 | 実依存Modの一括取得・配置・起動は未検証 |
 | Modrinth・Fabric Server Optimization | `YkG1DyHE` / `vtGmZsbn` | 1.19.3・Fabric 0.14.12・17実測 | 実APIと実 `.mrpack` を解析 | PHPで実Modを取得・配置。隔離起動と停止成功 |
 | Modrinth・Server Optimization | `2wkV8mHp` / `egRNRK9l` | 1.20.1・Fabric 0.14.22・17実測 | 実APIと実 `.mrpack` を解析 | PHPで18件配置。起動失敗。固定版の依存に矛盾があり、TT20はFabric 0.15.11以上を要求します。ローダーは変更していません |
-| Modrinth・Fabulously Optimized 6.5.0 | `1KVo5zza` / `N276l2ON` | 1.21.1・Fabric 0.19.3・21想定 | 公開プロジェクトは `server_side=unsupported`。実ZIP内では50件全て `env.server=required` | Wizardで拒否する回帰テスト成功。サーバー導入の対象外 |
+| Modrinth・Fabulously Optimized 6.5.0 | `1KVo5zza` / `N276l2ON` | 1.21.1・Fabric 0.19.3・21想定 | 公開プロジェクトは `server_side=unsupported`。実ZIP内では50件全て `env.server=required` | 初回監査時はWizardで拒否。現在は警告付きのアーカイブ導入を選択可能。実パックの配置・起動は未検証 |
 | FTB・FTB Vanilla+ 1.1.1 | `18` / `12169` | 1.7.10・Forge 10.13.4.1448・8想定 | 公開メタデータと現行FTB Server Eggの固定ID変数を照合 | 実インストーラーを実行。APIへの接続タイムアウト後もEggの `Finished installing` が表示されることを確認。配置・起動は失敗 |
 | Technic・Tekkit 2 | `tekkit-2` / `v1.2.6` | 1.12.2・Forge 14.23.5.2860・8実測 | 実APIの専用ZIP URLを公式Eggと照合 | 公式Eggの導入スクリプトで取得・配置。隔離起動と停止成功 |
 | Technic・Tekkit Legends | `tekkit-legends` / `1.1.1` | 1.7.10・Forge 10.13.4.1492・8実測 | 実APIの専用ZIP URLと公式Eggの `MODPACK_VERSION` を照合。APIの `minecraft=1.4.7` は実行ログと異なる | 専用ZIP105,513,466バイトのCRC確認、配置、公式Eggの `TekkitLegends.jar` で隔離起動と停止成功 |
@@ -31,7 +31,7 @@
 
 - **ForgeとNeoForge**の変数を公式定義と照合しました。Forgeの `FORGE_VERSION` はMavenの完全表記を使い、NeoForgeの `NEOFORGE_VERSION` は `21.1.266` のようなビルド単体です。JavaはEggのイメージ一覧からMinecraftの要件に合うものを選びます。Javaのパック固有推奨値までは自動適用しません。[Forge](https://github.com/pelican-eggs/minecraft/blob/c6f2262eb351054d1be44d3f6a3a605ae163d682/java/forge/egg-forge-minecraft.yaml#L53-L77) · [NeoForge](https://github.com/pelican-eggs/minecraft/blob/c6f2262eb351054d1be44d3f6a3a605ae163d682/java/neoforge/egg-neo-forge.json#L52-L75)
 - **Fabric**の固定ビルドは `LOADER_VERSION` です。**Quilt**の現行標準Eggには `QUILT_VERSION` がありません。対応するCurseForge Generic Eggが使用可能なケースでは、そのスクリプトがmanifestから固定ビルドを読みます。標準Quilt Eggを使うアーカイブ方式での正確なビルド固定は未対応です。[Fabric](https://github.com/pelican-eggs/minecraft/blob/c6f2262eb351054d1be44d3f6a3a605ae163d682/java/fabric/egg-fabric.yaml) · [Quilt](https://github.com/pelican-eggs/minecraft/blob/c6f2262eb351054d1be44d3f6a3a605ae163d682/java/quilt/egg-quilt.yaml#L33-L95) · [CurseForge Generic](https://github.com/pelican-eggs/minecraft/blob/c6f2262eb351054d1be44d3f6a3a605ae163d682/java/curseforge/egg-curse-forge-generic.yaml#L480-L512)
-- **互換性不明**のCurseForge通常ZIPは、適合するEgg、確認チェック、アーカイブ実行には非同期ジョブを必要とします。ローダー不明の場合はロード可能なMod用Eggを管理者が選びます。ビルド不明の場合は選択Eggが公開する起動変数に入力できます。非対応と明示されたModrinthパック、選択後に変更されたZIP、アクセス拒否や危険なZIPは導入を中断します。
+- **互換性不明**のCurseForge通常ZIPは、適合するEgg、確認チェック、アーカイブ実行には非同期ジョブを必要とします。ローダー不明の場合はロード可能なMod用Eggを管理者が選びます。ビルド不明の場合は選択Eggが公開する起動変数に入力できます。新規作成では、Modrinthが非対応と表示したパックに警告を出し、同意と適合するローダーEggがあればアーカイブ方式を試せます。選択後に変更されたZIP、アクセス拒否や危険なZIPは導入を中断します。
 - **ZIP方式**では専用ZIPのスクリプト、JVM引数、`server.properties`、ワールド等を配置対象から除外しています。ServerPackCreatorの `variables.txt` はMinecraftとローダーのリテラル値の読取りに限ります。RLCraftの `resources/` と `structures/` は保持します。名前だけでクライアント専用と推定しません。Modrinthの `env.server=unsupported` と `client-overrides` を除外します。CurseForgeの通常manifestには依存Modのサーバー対応を完全に判定できる情報がありません。
 - **既存サーバー**ではダウンロードを一時名で保持し、アーカイブ方式の配置失敗時は当該ジョブが移動したファイルを巻き戻します。専用ZIPでは既存ファイルをスキップします。既存サーバーを削除してから導入する方式、ワールド変換、Eggスクリプトの内部処理を巻き戻す機能はありません。サーバー作成時のアーカイブをジョブに固定し、自動起動はファイル配置の前に実行されないようにしています。
 
@@ -53,3 +53,29 @@
 ## ATLauncherの導入経路
 
 公式ランチャーの実装とSevTech: Ages `3.2.3` の実データを照合しました。CDNの `Configs.json` にはForge `14.23.5.2860`、サーバー対象の配布エントリ260件（`server` 259件・`direct` 1件）、`Configs.zip` のサイズ・SHA-1があります。実サーバーには `type=extract`・`extractTo=root` の専用設定アーカイブも必要です。実装する場合は、配布型ごとの明示的な許可ポリシー、制限とハッシュ検証を伴うステージング、既存世界・設定との衝突制御、必須の手動取得がある場合の停止が揃って初めて導入済みと扱えます。現行PRは検索・版選択を提供し、導入は無効にしています。[公式のメタデータURL](https://github.com/ATLauncher/ATLauncher/blob/906066e8cf7c5a4770ec67545ee4303a1c266015/src/main/java/com/atlauncher/data/Pack.java#L294-L305) · [公式のブラウザ取得分岐](https://github.com/ATLauncher/ATLauncher/blob/906066e8cf7c5a4770ec67545ee4303a1c266015/src/main/java/com/atlauncher/workers/InstanceInstaller.java#L3176-L3267) · [公式の設定ZIP検証](https://github.com/ATLauncher/ATLauncher/blob/906066e8cf7c5a4770ec67545ee4303a1c266015/src/main/java/com/atlauncher/workers/InstanceInstaller.java#L3541-L3578)
+
+## 仕上げの追加検証
+
+### Modrinth・Technic・CurseForge
+
+- ModrinthのFabulously Optimized `N276l2ON` を実APIと実 `.mrpack` で再確認しました。プロジェクトの明示的な非対応表示は警告として表示し、新規作成時に管理者の同意と対応ローダーEggが揃った場合に導入を試せます。既存サーバーへ適用する場合は、以前と同じく非対応として扱います。Generic Eggへの委譲は使わず、`env.server=unsupported` と `client-overrides` を除外するアーカイブ処理を使い、自動起動を無効化します。対応Eggが選べない場合や、アーカイブの安全性・依存ファイルの取得条件を満たさない場合は既存の検証で停止します。実パックの配置と起動は未検証です。[Modrinthのプロジェクト](https://api.modrinth.com/v2/project/1KVo5zza) · [選択したリリース](https://api.modrinth.com/v2/version/N276l2ON)
+- Tekkit Legends `1.1.1` のPlatform APIは `minecraft=1.4.7`、同一ビルドの公式Solderと隔離起動ログは `1.7.10` でした。Tekkit 2 `v1.2.6` はSolderと起動ログの両方で `1.12.2` でした。実装は既知Eggと専用ZIPの版を照合し、公式Solderのリリース情報だけをMinecraft版に採用します。照合不可・通信失敗時はMinecraft版を未確定のまま扱い、Eggと `MODPACK_VERSION` は専用ZIPに設定します。[LegendsのPlatform API](https://api.technicpack.net/modpack/tekkit-legends?build=recommended) · [LegendsのSolder](https://solder.technicpack.net/api/modpack/tekkit-legends/1.1.1) · [Tekkit 2のSolder](https://solder.technicpack.net/api/modpack/tekkit-2/1.2.6)
+- CurseForge Core APIの実エンドポイントに、ATM10 `925200` の親 `9620701`、子 `9620727`、子の `/download-url`、プロジェクトのファイル一覧をリクエストしました。4件ともHTTP 403でした。この隔離環境には `MOD_MANAGER_CURSEFORGE_API_KEY` がありません。以前の公開Additional FilesとCDN実ZIPの検証、およびCore APIを模した回帰テストは引き続き有効です。認証付き応答に含まれる親子IDとダウンロードURLの受け渡しは未検証です。[公式Core API Fileスキーマ](https://docs.curseforge.com/rest-api/#tocS_File) · [ATM10の公開Additional Files](https://www.curseforge.com/minecraft/modpacks/all-the-mods-10/files/9620701/additional-files)
+
+### 依存Modと固定ローダーの矛盾
+
+Server Optimization `egRNRK9l` の `.mrpack` はFabric `0.14.22` を指定します。実際のJARから `fabric.mod.json` を読み取ると、c2meは `>=0.14.25`、Fabric APIは `>=0.15.6`、ServerCoreは `>=0.15.2`、TT20は `>=0.15.11` を要求しています。Modrinthのリリース応答と `.mrpack` のファイル一覧で確認できるのは配布ファイルと側の指定までです。単純な `>=` の矛盾はJARを静的に読んで検出できますが、配布元ごとに異なる必須依存、入れ子JAR、複合範囲、Forge/NeoForgeのMaven範囲、Quiltの依存構造まで判定するには、ローダー別の検証が必要です。[Modrinthリリース](https://api.modrinth.com/v2/version/egRNRK9l) · [Fabric Mod JSON仕様](https://wiki.fabricmc.net/documentation:fabric_mod_json_spec)
+
+管理用のWings `/files/contents` はファイル全体を返します。署名付きダウンロードではHTTP Rangeが利用できるため、導入時の警告を実装する場合は、検証済みの配置先JARについて、範囲取得とサイズ制限を使った読み取りが候補です。各Modを丸ごと再取得する検証は追加していません。今回の矛盾は静的に再確認しましたが、製品の自動警告は未実装です。導入フローがパック指定のローダーを上げることはありません。[Wingsの管理用ファイル取得](https://github.com/pelican-dev/wings/blob/cbce59e131e91331800bbaf47dca698bae7e18b5/router/router_server_files.go#L31-L95) · [署名付きダウンロードのRange処理](https://github.com/pelican-dev/wings/blob/cbce59e131e91331800bbaf47dca698bae7e18b5/router/router_download.go#L117-L126)
+
+### Chromium・Panel＋Wingsの再現手順
+
+1. 使い捨ての環境でPanelへPRのプラグインをローカルインストールし、空のDBとユーザーを用意します。公式Fabric Eggをインポートし、ローカルのWingsノードとループバックのテスト用アロケーションを設定します。Wingsとゲーム用ポートを外部へ公開しません。PanelがWingsの応答を待ちながらWingsからのコールバックを受けられるよう、HTTPワーカーを複数起動します。`artisan serve` の場合は `PHP_CLI_SERVER_WORKERS=4` と `--no-reload` を使えます。rootless DockerでWingsをコンテナに入れる場合、Wingsが生成する `passwd`・`group`・`machine-id` とサーバーボリュームのパスをWingsとDockerデーモンで共有します。
+2. Panelにログインしてサーバー作成を開きます。ModpackをONにすると結果が表に出ること、カタログの前後ページ、Technicへ切り替えた際のフィルター表示、Modrinthに戻ってMinecraft `1.19.3`・Fabric・`Fabric Server Optimization` の検索が使えることを確認します。
+3. `vtGmZsbn` を選び、Informationへ進んで戻ります。検索語、フィルター、行とリリースが残ることを確認します。再度進み、名前とテスト用アロケーションを選びます。Egg設定でFabric、`MC_VERSION=1.19.3`、`LOADER_VERSION=0.14.12`、Java 17、インストールスクリプト実行あり、自動起動なしを確認します。
+4. 作成後にWings側のインストールログを確認し、Panelで `php artisan mod-manager:process-jobs` を実行するかSchedulerを稼働させます。Wingsのインストール成功を待ってから、パックの結果、配布由来のModが配置されたこと、実際のリリースID、自動起動されていないことを確認します。隔離サーバーを手動で起動し、`Done` を確認したら `stop` で終了します。
+5. 認証付きCurseForgeの補足試験では、隔離Panelの `MOD_MANAGER_CURSEFORGE_API_KEY` を設定し、ATM10で親 `9620701` を選択します。APIが返した同一プロジェクトの子 `9620727` と公式ダウンロードURLを照合します。APIがURLを提供しない場合は制限として扱います。選択したファイルのIDと固定ビルドを導入結果まで確認します。[ATM10 Additional Files](https://www.curseforge.com/minecraft/modpacks/all-the-mods-10/files/9620701/additional-files)
+
+隔離環境ではPanel `1c3e7b33`、Wings `v1.0.0-rc.2`、公式Fabric Eggを使用しました。Chromiumで手順2・3を実行し、`false` がFilamentの必須ラジオ選択で未入力になる不具合を再現しました。修正後は実ブラウザで作成を完了し、Wingsへの作成要求と、`vtGmZsbn`、`MC_VERSION=1.19.3`、`LOADER_VERSION=0.14.12`、Java 17を持つ永続化ジョブを確認しました。
+
+公式 `ghcr.io/pelican-eggs/yolks:java_17` と `installers:java_11` のDocker pullは展開時のディスク不足で失敗しました。Wingsは `No such image` を返し、Panelは `installing`、導入ジョブは延期状態でした。実Wings経由のMod配置、起動、正常停止と、保留期限到達後の通知は今回未検証です。先の表にある単体隔離起動では、同じModrinthリリースがJava 17で `Done` と正常停止に到達しています。
