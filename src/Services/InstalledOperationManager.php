@@ -919,7 +919,10 @@ final class InstalledOperationManager
         }
 
         $current = $this->operationStateOrActive($serverId, $projectType, self::OPERATION_MODPACK);
-        if ($current?->isActive()) {
+        $resumeToken = $selection['manual_token'] ?? null;
+        // A queued scan holds no lease. An explicit resume can claim the
+        // lease first, and a scan already running still blocks the resume.
+        if ($current?->isActive() && $resumeToken === null) {
             return [
                 'dispatched' => false,
                 'reason' => 'already_active',
@@ -949,7 +952,7 @@ final class InstalledOperationManager
         }
 
         $plan = $this->waitingCurseForgeModpack($serverId);
-        if (($plan['token'] ?? null) !== ($selection['manual_token'] ?? null)) {
+        if (($plan['token'] ?? null) !== $resumeToken) {
             $this->leases->release($serverId, $projectType, $leaseToken);
 
             return ['dispatched' => false, 'reason' => 'manual_pending', 'state' => $current];

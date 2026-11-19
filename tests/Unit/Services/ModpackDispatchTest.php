@@ -103,4 +103,21 @@ final class ModpackDispatchTest extends TestCase
         self::assertNull($manager->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK));
         self::assertTrue($manager->dispatchModpackInstall(42, ProjectType::Mod, 'curseforge', '285109', 'a-new-release')['dispatched']);
     }
+
+    public function test_a_queued_scan_does_not_block_a_waiting_pack_from_resuming(): void
+    {
+        $cache = new Repository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake();
+        $leases = new InstalledOperationLease($cache);
+        $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), $leases, $runner);
+        $manager->dispatchModpackInstall(42, ProjectType::Mod, 'curseforge', '285109', '4612979');
+        $manager->pauseCurseForgeModpack(42, $runner->spawned[0]['payload']['lease_token'], '285109', '4612979', [], []);
+        $token = $manager->waitingCurseForgeModpack(42)['token'];
+        self::assertTrue($manager->dispatchScan(42, ProjectType::Mod, actorUserId: 7)['dispatched']);
+        self::assertFalse($leases->isHeld(42, ProjectType::Mod));
+
+        self::assertTrue($manager->resumeCurseForgeModpack(42, $token));
+        self::assertSame(BackgroundJob::MODPACK, $runner->spawned[2]['type']);
+        self::assertFalse($manager->resumeCurseForgeModpack(42, $token));
+    }
 }
