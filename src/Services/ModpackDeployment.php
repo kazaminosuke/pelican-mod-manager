@@ -323,7 +323,7 @@ final class ModpackDeployment
         }
         $files = [];
         foreach ($metadata['installed_mods'] as $mod) {
-            if (is_string($mod['filename'] ?? null)) {
+            if (($mod['managed_by'] ?? null) === 'catalog' && is_string($mod['filename'] ?? null)) {
                 $files['mods/'.strtolower($mod['filename'])] = true;
             }
         }

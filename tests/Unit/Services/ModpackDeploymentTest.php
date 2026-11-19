@@ -36,6 +36,8 @@ final class ModpackDeploymentTest extends TestCase
             'config/edit.toml' => $this->file('initial'), 'config/default.toml' => $this->file('v1'),
         ], null, false, null, static fn () => null);
         $wings->files['config/edit.toml'] = 'operator changed this';
+        // The scanner identifies installed pack mods by hash, too.
+        $wings->files['mods/.pelican-mod-manager.json'] = '{"installed_mods":[{"filename":"old.bin"}]}';
         $newFiles = [
             'mods/new.bin' => $this->file('replacement'), 'mods/same.bin' => $this->file('stable'),
             'config/edit.toml' => $this->file('new template'), 'config/default.toml' => $this->file('v2'),
@@ -79,6 +81,20 @@ final class ModpackDeploymentTest extends TestCase
         self::assertSame(['mods/unowned.bin'], $conflict['mod_conflicts']);
         self::assertSame('untouched', $wings->files['mods/unowned.bin']);
         self::assertSame(0, $wings->uploads);
+    }
+
+    public function test_explicit_catalog_install_is_protected_even_if_bytes_match_the_pack_inventory(): void
+    {
+        $wings = new DeploymentWings();
+        $store = new DeploymentInventory();
+        $service = new ModpackDeployment($wings, $store);
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $service->run($server, $repo, $this->release('1'), ['mods/same.bin' => $this->file('old')], null, false, null, static fn () => null);
+        $wings->files['mods/.pelican-mod-manager.json'] = '{"installed_mods":[{"filename":"same.bin","managed_by":"catalog"}]}';
+        $plan = $service->run($server, $repo, $this->release('2'), [], null, true, null, static fn () => null);
+        self::assertSame(['mods/same.bin'], $plan['mod_conflicts']);
+        self::assertSame(0, $plan['mods']['delete']);
     }
 
     public function test_later_activation_failure_rolls_back_staged_removals(): void

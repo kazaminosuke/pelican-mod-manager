@@ -641,6 +641,10 @@ class InstalledProjectService
                     'file_signature' => $filesToResolve[$filename]['file_signature'],
                     'hashes' => $hashesByFilename[$filename],
                 ];
+                if (($installedByFilename[strtolower($filename)]['managed_by'] ?? null) === 'catalog') {
+                    $entry['managed_by'] = 'catalog';
+                }
+
                 $author = $this->resolveMatchAuthor($hashSource, $project, $versionData);
 
                 if ($author !== null) {
@@ -1465,6 +1469,9 @@ class InstalledProjectService
             'installed_at' => now()->toIso8601String(),
         ];
 
+        if ($type === ProjectType::Mod) {
+            $entry['managed_by'] = 'catalog';
+        }
         if ($author !== null) {
             $entry['author'] = $author;
         }
