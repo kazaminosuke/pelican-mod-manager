@@ -5,12 +5,18 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Container\Container;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Services\ModpackDeployment;
+use Kazaminosuke\ModManager\Services\ModpackInstaller;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Sources\CurseForgeSource;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\StreamInterface;
+use ZipArchive;
 
 final class ModpackDeploymentTest extends TestCase
 {
@@ -119,6 +125,110 @@ final class ModpackDeploymentTest extends TestCase
         self::assertSame(['mods/old.bin' => 'old'], $wings->files);
     }
 
+    #[DataProvider('formats')]
+    public function test_managed_archive_formats_reconcile_version_two(string $format, bool $manual): void
+    {
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $wings = new DeploymentWings();
+        $store = new DeploymentInventory();
+        $oldContainer = Container::getInstance();
+        $container = new Container();
+        Container::setInstance($container);
+        $container->instance(ModpackDeployment::class, new ModpackDeployment($wings, $store));
+
+        $jar = $this->zip(['fixture/Main.class' => 'test bytes']);
+        $bytes = file_get_contents($jar);
+        unlink($jar);
+        $dependency = $this->createStub(CurseForgeSource::class);
+        $dependency->method('dependencyFiles')->willReturnCallback(function (array $pairs) use ($manual, $bytes): array {
+            $pair = $pairs[0];
+            $id = $pair['file_id'];
+            $name = 'mod-'.$id.'.jar';
+
+            return ["1/$id" => new CurseForgeFile(1, $id, $name, $manual ? null : "https://files.example.test/$name",
+                strlen($bytes), ['sha1' => sha1($bytes)], reason: $manual ? 'distribution' : null)];
+        });
+        $installer = new ModpackInstaller($wings, $dependency);
+        try {
+            foreach ([1, 2] as $number) {
+                $name = "mod-$number.jar";
+                $entries = match ($format) {
+                    'modrinth' => ['modrinth.index.json' => json_encode([
+                        'formatVersion' => 1, 'game' => 'minecraft', 'dependencies' => ['minecraft' => '1.20.1', 'fabric-loader' => '0.15.0'],
+                        'files' => [['path' => "mods/$name", 'downloads' => ["https://files.example.test/$name"],
+                            'fileSize' => strlen($bytes), 'hashes' => ['sha1' => sha1($bytes)]]],
+                    ], JSON_THROW_ON_ERROR)],
+                    'server' => ["wrapped/mods/$name" => $bytes, 'wrapped/config/default.toml' => "value=$number"],
+                    default => ['manifest.json' => json_encode([
+                        'manifestType' => 'minecraftModpack', 'minecraft' => ['version' => '1.20.1', 'modLoaders' => [['id' => 'fabric-0.15.0', 'primary' => true]]],
+                        'files' => [['projectID' => 1, 'fileID' => $number, 'required' => true]],
+                    ], JSON_THROW_ON_ERROR)],
+                };
+                $wings->downloadFiles["https://files.example.test/$name"] = $bytes;
+                if ($manual) {
+                    $wings->files[".mod-manager-curseforge/1-$number.jar"] = $bytes;
+                }
+                $path = $this->zip($entries);
+                $release = [...$this->release((string) $number), 'loader' => 'fabric', 'minecraft_version' => '1.20.1',
+                    'provider' => $format === 'modrinth' ? 'modrinth' : 'curseforge', 'server_pack' => $format === 'server'];
+                try {
+                    $args = [$server, $repo, $path, $release, 'fabric', '1.20.1'];
+                    $preview = $installer->deploy(...[...$args, true, null, null, static fn () => null]);
+                    $result = $installer->deploy(...[...$args, false, $preview['digest'], 'test backup', static fn () => null]);
+                    self::assertSame(1, $result['mods']['add']);
+                    self::assertSame($number - 1, $result['mods']['delete']);
+                    self::assertSame($bytes, $wings->files["mods/$name"]);
+                } finally {
+                    unlink($path);
+                }
+            }
+            self::assertArrayNotHasKey('mods/mod-1.jar', $wings->files);
+            self::assertSame('2', $store->data['inventory']['version_id']);
+            if ($manual || $format === 'curseforge') {
+                self::assertSame('2', $store->data['inventory']['files']['mods/mod-2.jar']['file_id']);
+            }
+        } finally {
+            Container::setInstance($oldContainer);
+        }
+    }
+
+    public static function formats(): array
+    {
+        return [['modrinth', false], ['server', false], ['curseforge', false], ['curseforge', true]];
+    }
+
+    public function test_optional_file_that_could_not_be_resolved_is_not_obsolete(): void
+    {
+        $wings = new DeploymentWings();
+        $store = new DeploymentInventory();
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $service = new ModpackDeployment($wings, $store);
+        $service->run($server, $repo, $this->release('1'), [
+            'mods/optional.bin' => array_replace($this->file('old'), ['project_id' => '32', 'file_id' => '1']),
+        ], null, false, null, static fn () => null);
+        $plan = $service->run($server, $repo, $this->release('2'), [], null, false, 'backup', static fn () => null,
+            ['unavailable:32/2:api_forbidden']);
+        self::assertSame(0, $plan['mods']['delete']);
+        self::assertSame(1, $plan['mods']['preserve']);
+        self::assertSame('old', $wings->files['mods/optional.bin']);
+        self::assertSame('1', $store->data['inventory']['files']['mods/optional.bin']['file_id']);
+    }
+
+    private function zip(array $files): string
+    {
+        $path = tempnam(sys_get_temp_dir(), 'managed-modpack-test');
+        $zip = new ZipArchive();
+        $zip->open($path, ZipArchive::OVERWRITE);
+        foreach ($files as $name => $contents) {
+            $zip->addFromString($name, $contents);
+        }
+        $zip->close();
+
+        return $path;
+    }
+
     private function file(string $contents): array
     {
         $hash = hash('sha256', $contents);
@@ -161,6 +271,16 @@ final class DeploymentInventory extends ModpackInventory
 final class DeploymentWings extends WingsRemoteFilesystem
 {
     public array $files = [];
+
+    public array $downloadFiles = [];
+
+    public function pullForeground(DaemonFileRepository $fileRepository, Server $server, string $url, string $directory, string $filename): array
+    {
+        $bytes = $this->downloadFiles[$url];
+        $this->files[$directory.'/'.$filename] = $bytes;
+
+        return ['name' => $filename, 'size' => strlen($bytes)];
+    }
 
     public int $uploads = 0;
 

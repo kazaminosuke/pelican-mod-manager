@@ -30,7 +30,7 @@ final class ModpackDeployment
      * @param array<string, array{identity: ?string, sha256: ?string, size: ?int, hashes: array, file_id: ?string, project_id: ?string, open: ?callable, url: ?string}> $target
      * @return array<string, mixed>
      */
-    public function run(Server $server, DaemonFileRepository $repo, array $release, array $target, ?string $approval, bool $preview, ?string $backup, callable $guard): array
+    public function run(Server $server, DaemonFileRepository $repo, array $release, array $target, ?string $approval, bool $preview, ?string $backup, callable $guard, array $warnings = []): array
     {
         $this->listings = [];
         $state = $this->inventory->read($server);
@@ -47,10 +47,19 @@ final class ModpackDeployment
                 unset($target[$path], $owned[$path]);
             }
         }
+        $retained = $this->retainUnavailable($owned, $target, $warnings);
+        $owned = array_diff_key($owned, $retained);
         $this->assertDistinctPaths($target);
         $individual = $this->individuallyManaged($server, $repo);
         $plan = $this->plan($server, $repo, $owned, $target, $individual);
         $summary = $this->summary($plan, $protected);
+        foreach (array_keys($retained) as $path) {
+            $summary['counts']['preserve']++;
+            $summary['paths'][$path] = 'preserve';
+            if (str_starts_with($path, 'mods/')) {
+                $summary['mods']['preserve']++;
+            }
+        }
         if (($release['legacy'] ?? false) && ModpackPaths::isManaged('mods/placeholder.jar', $world)) {
             foreach ($this->listing($server, $repo, 'mods') as $entry) {
                 $path = 'mods/'.$entry['name'];
@@ -64,9 +73,9 @@ final class ModpackDeployment
             }
         }
         if ($preview) {
-            return [...$summary, 'digest' => $this->fingerprint($state['revision'], $release, $world, $plan, $target)];
+            return [...$summary, 'digest' => $this->fingerprint($state['revision'], $release, $world, $plan, $target, array_keys($retained))];
         }
-        if ($approval !== null && !hash_equals($approval, $this->fingerprint($state['revision'], $release, $world, $plan, $target))) {
+        if ($approval !== null && !hash_equals($approval, $this->fingerprint($state['revision'], $release, $world, $plan, $target, array_keys($retained)))) {
             throw new ModpackException('The files or ownership changed since the preview. Generate a new preview.');
         }
         if ($summary['mod_conflicts'] !== []) {
@@ -108,7 +117,7 @@ final class ModpackDeployment
             }
             $this->inventory->begin($server, $state['revision'], $token, $backup, $originals);
             $started = true;
-            $next = [];
+            $next = $retained;
             foreach ($plan as $path => $change) {
                 $action = $change['action'];
                 if (in_array($action, ['keep', 'conflict', 'modified'], true) && isset($owned[$path])) {
@@ -200,7 +209,25 @@ final class ModpackDeployment
         $this->inventory->abort($server, $token);
     }
 
-    private function fingerprint(?string $revision, array $release, string $world, array $plan, array $target): string
+    private function retainUnavailable(array $owned, array $target, array $warnings): array
+    {
+        $projects = $paths = [];
+        foreach ($warnings as $warning) {
+            if (preg_match('~^unavailable:([0-9]+)/[0-9]+:~', $warning, $match) === 1) {
+                $projects[$match[1]] = true;
+            }
+            foreach (['no-download:', 'override-too-large:'] as $prefix) {
+                if (str_starts_with($warning, $prefix)) {
+                    $paths[substr($warning, strlen($prefix))] = true;
+                }
+            }
+        }
+
+        return array_filter($owned, static fn (array $file, string $path): bool => !isset($target[$path])
+            && (isset($paths[$path]) || isset($projects[$file['project_id'] ?? ''])), ARRAY_FILTER_USE_BOTH);
+    }
+
+    private function fingerprint(?string $revision, array $release, string $world, array $plan, array $target, array $retained): string
     {
         $identities = [];
         foreach (array_keys($plan) as $path) {
@@ -210,7 +237,7 @@ final class ModpackDeployment
             }
         }
 
-        return hash('sha256', json_encode([$revision, $release, $world, $plan, $identities], JSON_THROW_ON_ERROR));
+        return hash('sha256', json_encode([$revision, $release, $world, $plan, $identities, $retained], JSON_THROW_ON_ERROR));
     }
 
     private function ownership(array $release, array $item, string $sha256): array

@@ -9,7 +9,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('mod_manager_modpacks', function (Blueprint $table): void {
-            $table->foreignId('server_id')->primary()->constrained('servers')->cascadeOnDelete();
+            $table->unsignedInteger('server_id')->primary();
+            $table->foreign('server_id')->references('id')->on('servers')->cascadeOnDelete();
             $table->string('revision', 32)->nullable();
             $table->longText('inventory')->nullable();
             $table->string('mutation', 32)->nullable();

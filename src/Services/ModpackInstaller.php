@@ -281,7 +281,10 @@ final class ModpackInstaller
                     $target[$entry['path']] = $this->managedEntry($hash, $hash, $entry['size'], [], null, null, $open, null);
                 }
             } else {
-                $manifest = ModpackArchive::read($archive);
+                $manifest = ModpackArchive::read($archive, strict: true);
+                if ($manifest->format !== $release['provider']) {
+                    throw new ModpackException('The archive manifest belongs to another provider.');
+                }
                 $this->assertLoaderCompatible($manifest->loader, $loader);
                 $this->assertMinecraftCompatible($manifest->minecraftVersion, $minecraft);
                 if ($runtime !== null && $manifest->loader !== null && $manifest->loaderVersion !== null
@@ -322,7 +325,7 @@ final class ModpackInstaller
                 }
             }
 
-            $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard);
+            $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard, $warnings);
 
             return [...$result, 'warnings' => $warnings];
         } finally {

@@ -16,9 +16,11 @@ final class ModpackArchive
 {
     private const MAX_OVERRIDE_BYTES = 2_000_000;
 
+    private const MAX_MANIFEST_BYTES = 8_388_608;
+
     private const MAX_OVERRIDE_TOTAL_BYTES = 32_000_000;
 
-    public static function read(string $zipPath): ModpackManifest
+    public static function read(string $zipPath, bool $strict = false): ModpackManifest
     {
         if (!class_exists(ZipArchive::class)) {
             throw new ModpackException('PHP ZipArchive is required to read a modpack.');
@@ -31,14 +33,14 @@ final class ModpackArchive
         }
 
         try {
-            $modrinth = $zip->getFromName('modrinth.index.json');
+            $modrinth = $zip->getFromName('modrinth.index.json', self::MAX_MANIFEST_BYTES + 1);
             if (is_string($modrinth) && $modrinth !== '') {
-                return self::fromModrinth($zip, $modrinth);
+                return self::fromModrinth($zip, $modrinth, $strict);
             }
 
-            $curse = $zip->getFromName('manifest.json');
+            $curse = $zip->getFromName('manifest.json', self::MAX_MANIFEST_BYTES + 1);
             if (is_string($curse) && $curse !== '') {
-                return self::fromCurseForge($zip, $curse);
+                return self::fromCurseForge($zip, $curse, $strict);
             }
 
             throw new ModpackException('The archive does not contain a Modrinth or CurseForge modpack manifest.');
@@ -168,10 +170,13 @@ final class ModpackArchive
         }
     }
 
-    private static function fromModrinth(ZipArchive $zip, string $json): ModpackManifest
+    private static function fromModrinth(ZipArchive $zip, string $json, bool $strict): ModpackManifest
     {
         $index = self::decodeObject($json, 'modrinth.index.json');
         self::assertModrinthIndex($index);
+        if ($strict) {
+            self::assertFileList($index);
+        }
 
         $dependencies = is_array($index['dependencies'] ?? null) ? $index['dependencies'] : [];
         [$loader, $loaderVersion] = self::modrinthLoader($dependencies);
@@ -276,13 +281,16 @@ final class ModpackArchive
         return ['minecraft' => $minecraft, 'loader' => $loader, 'build' => $build];
     }
 
-    private static function fromCurseForge(ZipArchive $zip, string $json): ModpackManifest
+    private static function fromCurseForge(ZipArchive $zip, string $json, bool $strict): ModpackManifest
     {
         $manifest = self::decodeObject($json, 'manifest.json');
         if (($manifest['manifestType'] ?? null) !== 'minecraftModpack') {
             throw new ModpackException('The archive manifest is not a Minecraft modpack.');
         }
 
+        if ($strict) {
+            self::assertFileList($manifest);
+        }
         $minecraft = is_array($manifest['minecraft'] ?? null) ? $manifest['minecraft'] : [];
         [$loader, $loaderVersion] = self::curseForgeLoader($minecraft['modLoaders'] ?? null);
         $remoteFiles = [];
@@ -433,9 +441,25 @@ final class ModpackArchive
         return [array_values($overrides), $skipped];
     }
 
+    private static function assertFileList(array $manifest): void
+    {
+        $files = $manifest['files'] ?? null;
+        if (!is_array($files) || !array_is_list($files)) {
+            throw new ModpackException('The archive does not explicitly declare a valid dependency list.');
+        }
+        foreach ($files as $file) {
+            if (!is_array($file)) {
+                throw new ModpackException('The archive contains an invalid dependency record.');
+            }
+        }
+    }
+
     /** @return array<string, mixed> */
     private static function decodeObject(string $json, string $name): array
     {
+        if (strlen($json) > self::MAX_MANIFEST_BYTES) {
+            throw new ModpackException("Modpack manifest [$name] exceeds the size limit.");
+        }
         try {
             $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
