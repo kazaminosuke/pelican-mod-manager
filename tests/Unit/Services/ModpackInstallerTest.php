@@ -295,7 +295,7 @@ final class ModpackInstallerTest extends TestCase
             default => $valid,
         };
         $expected = $kind === 'wrong-version' ? $valid : $upload;
-        $file = new CurseForgeFile(264231, 2693547, 'iceandfire.jar', size: strlen($expected), hashes: $kind === 'no-hash' ? [] : ['sha1' => sha1($expected)], reason: 'distribution');
+        $file = new CurseForgeFile(264231, 2693547, 'iceandfire.jar', size: strlen($expected) + ($kind === 'wrong-size' ? 1 : 0), hashes: $kind === 'no-hash' ? [] : ['sha1' => sha1($expected)], reason: 'distribution');
         $forge = Mockery::mock(CurseForgeSource::class);
         $forge->shouldReceive('dependencyFiles')->once()->andReturn(['264231/2693547' => $file]);
         $wings->files = [$file->stagingPath() => $upload, 'mods/iceandfire.jar' => 'original'];
@@ -313,7 +313,29 @@ final class ModpackInstallerTest extends TestCase
 
     public static function rejectedUploads(): array
     {
-        return [['wrong-version', 'hash_mismatch'], ['html', 'invalid_jar'], ['traversal', 'invalid_jar'], ['no-hash', 'unverifiable']];
+        return [['wrong-version', 'hash_mismatch'], ['html', 'invalid_jar'], ['traversal', 'invalid_jar'], ['wrong-size', 'size_mismatch'], ['no-hash', 'unverifiable']];
+    }
+
+    public function test_an_unavailable_optional_mod_does_not_block_an_automatic_required_mod(): void
+    {
+        $wings = new MemoryModpackWings();
+        $forge = Mockery::mock(CurseForgeSource::class);
+        $forge->shouldReceive('dependencyFiles')->once()->andReturn([
+            '264231/2693547' => new CurseForgeFile(264231, 2693547, 'required.jar', 'https://edge.forgecdn.net/required.jar'),
+            '238222/3043174' => new CurseForgeFile(238222, 3043174, 'optional.jar', reason: 'distribution'),
+        ]);
+        $result = (new ModpackInstaller($wings, $forge))->installFromZip(
+            $this->server(), Mockery::mock(DaemonFileRepository::class), $this->curseForgePack([
+                ['projectID' => 264231, 'fileID' => 2693547, 'required' => true],
+                ['projectID' => 238222, 'fileID' => 3043174, 'required' => false],
+            ]),
+        );
+
+        self::assertSame(2, $result->installed);
+        self::assertSame(1, $result->skipped);
+        self::assertContains('unavailable:238222/3043174:unverifiable', $result->warnings);
+        self::assertArrayHasKey('mods/required.jar', $wings->files);
+        self::assertArrayNotHasKey('mods/optional.jar', $wings->files);
     }
 
     public function test_failure_after_manual_upload_restores_the_original_and_keeps_the_staged_upload(): void
