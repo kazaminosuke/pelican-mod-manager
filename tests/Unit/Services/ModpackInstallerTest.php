@@ -5,11 +5,15 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use GuzzleHttp\Psr7\Utils;
+use Kazaminosuke\ModManager\Exceptions\CurseForgeDependenciesPending;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Services\ModpackInstaller;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\StreamInterface;
 use ZipArchive;
@@ -181,25 +185,16 @@ final class ModpackInstallerTest extends TestCase
         $wings = new MemoryModpackWings();
         $wings->files['config/existing.toml'] = 'keep';
         $curseForge = Mockery::mock(CurseForgeSource::class);
-        $curseForge->shouldReceive('modpackDependencyDownloads')
+        $curseForge->shouldReceive('dependencyFiles')
             ->once()
             ->with([
                 ['project_id' => 10, 'file_id' => 20],
                 ['project_id' => 11, 'file_id' => 21],
             ])
             ->andReturn([
-                '10/20' => [
-                    'path' => 'mods/first.jar',
-                    'url' => 'https://edge.forgecdn.net/files/10/20/first.jar',
-                    'size' => strlen($wings->body),
-                ],
-                '11/21' => [
-                    'path' => 'mods/second.jar',
-                    'url' => 'https://edge.forgecdn.net/files/11/21/second.jar',
-                    'size' => strlen($wings->body),
-                ],
+                '10/20' => new CurseForgeFile(10, 20, 'first.jar', 'https://edge.forgecdn.net/files/10/20/first.jar', strlen($wings->body)),
+                '11/21' => new CurseForgeFile(11, 21, 'second.jar', 'https://edge.forgecdn.net/files/11/21/second.jar', strlen($wings->body)),
             ]);
-        $curseForge->shouldNotReceive('modpackDependencyDownload');
 
         $installer = new ModpackInstaller($wings, $curseForge);
         $zip = $this->pack([
@@ -231,6 +226,131 @@ final class ModpackInstallerTest extends TestCase
         self::assertSame('keep', $wings->files['config/existing.toml']);
         self::assertSame('1', $wings->files['config/one.toml']);
         self::assertSame('2', $wings->files['config/two.toml']);
+    }
+
+    public function test_required_manual_files_are_aggregated_before_writes_and_resume_uses_verified_uploads(): void
+    {
+        $wings = new MemoryModpackWings();
+        $path = $this->pack(['mod/First.class' => 'first']);
+        $first = file_get_contents($path);
+        $second = file_get_contents($this->pack(['mod/Second.class' => 'second']));
+        $one = new CurseForgeFile(264231, 2693547, 'first.jar', size: strlen($first), hashes: ['sha1' => sha1($first)], reason: 'distribution');
+        $two = new CurseForgeFile(238222, 3043174, 'second.jar', size: strlen($second), hashes: ['sha1' => sha1($second)], reason: 'distribution');
+        $optional = new CurseForgeFile(229060, 2801262, 'optional.jar', reason: 'distribution');
+        $curseForge = Mockery::mock(CurseForgeSource::class);
+        $curseForge->shouldReceive('dependencyFiles')->andReturn([
+            '264231/2693547' => $one, '238222/3043174' => $two, '229060/2801262' => $optional,
+        ]);
+        $installer = new ModpackInstaller($wings, $curseForge);
+        $server = $this->server();
+        $repo = Mockery::mock(DaemonFileRepository::class);
+        $pack = $this->curseForgePack([
+            ['projectID' => 264231, 'fileID' => 2693547, 'required' => true],
+            ['projectID' => 238222, 'fileID' => 3043174, 'required' => true],
+            ['projectID' => 238222, 'fileID' => 3043174, 'required' => true],
+            ['projectID' => 229060, 'fileID' => 2801262, 'required' => false],
+        ]);
+        $wings->files['world/level.dat'] = 'preserve';
+        $wings->files['config/keep.txt'] = 'preserve';
+
+        try {
+            $installer->installFromZip($server, $repo, $pack);
+            self::fail('The required uploads were absent.');
+        } catch (CurseForgeDependenciesPending $exception) {
+            self::assertSame([2693547, 3043174, 2801262], array_column($exception->files, 'file_id'));
+            self::assertSame([true, true, false], array_column($exception->files, 'required'));
+            self::assertSame(['missing_upload', 'missing_upload', 'unverifiable'], array_column($exception->files, 'reason'));
+            self::assertSame(['world/level.dat', 'config/keep.txt'], array_keys($wings->files));
+        }
+
+        $wings->files[$one->stagingPath()] = $first;
+        try {
+            $installer->installFromZip($server, $repo, $pack);
+            self::fail('The second upload was absent.');
+        } catch (CurseForgeDependenciesPending $exception) {
+            self::assertSame([3043174, 2801262], array_column($exception->files, 'file_id'));
+            self::assertArrayNotHasKey('mods/first.jar', $wings->files);
+        }
+        $wings->files[$two->stagingPath()] = $second;
+        $result = $installer->installFromZip($server, $repo, $pack);
+        self::assertSame(2, $result->installed);
+        self::assertSame($first, $wings->files['mods/first.jar']);
+        self::assertSame($second, $wings->files['mods/second.jar']);
+        self::assertSame('preserve', $wings->files['world/level.dat']);
+        self::assertSame('preserve', $wings->files['config/keep.txt']);
+        self::assertSame($first, $wings->files[$one->stagingPath()]);
+        self::assertSame(2, count(array_filter(array_keys($wings->files), fn (string $name) => str_starts_with($name, 'mods/'))));
+        self::assertContains('unavailable:229060/2801262:unverifiable', $result->warnings);
+    }
+
+    #[DataProvider('rejectedUploads')]
+    public function test_bad_required_uploads_leave_the_server_unchanged(string $kind, string $reason): void
+    {
+        $wings = new MemoryModpackWings();
+        $valid = file_get_contents($this->pack(['mods/Main.class' => 'one']));
+        $upload = match ($kind) {
+            'html' => '<html>download failed</html>',
+            'traversal' => file_get_contents($this->pack(['../Main.class' => 'one'])),
+            'wrong-version' => file_get_contents($this->pack(['mods/Main.class' => 'two'])),
+            default => $valid,
+        };
+        $expected = $kind === 'wrong-version' ? $valid : $upload;
+        $file = new CurseForgeFile(264231, 2693547, 'iceandfire.jar', size: strlen($expected), hashes: $kind === 'no-hash' ? [] : ['sha1' => sha1($expected)], reason: 'distribution');
+        $forge = Mockery::mock(CurseForgeSource::class);
+        $forge->shouldReceive('dependencyFiles')->once()->andReturn(['264231/2693547' => $file]);
+        $wings->files = [$file->stagingPath() => $upload, 'mods/iceandfire.jar' => 'original'];
+        $before = $wings->files;
+        try {
+            (new ModpackInstaller($wings, $forge))->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $this->curseForgePack([
+                ['projectID' => 264231, 'fileID' => 2693547, 'required' => true],
+            ]));
+            self::fail('The upload should have been rejected.');
+        } catch (CurseForgeDependenciesPending $exception) {
+            self::assertSame($reason, $exception->files[0]['reason']);
+            self::assertSame($before, $wings->files);
+        }
+    }
+
+    public static function rejectedUploads(): array
+    {
+        return [['wrong-version', 'hash_mismatch'], ['html', 'invalid_jar'], ['traversal', 'invalid_jar'], ['no-hash', 'unverifiable']];
+    }
+
+    public function test_failure_after_manual_upload_restores_the_original_and_keeps_the_staged_upload(): void
+    {
+        $wings = new MemoryModpackWings();
+        $jar = file_get_contents($this->pack(['mod/Main.class' => 'verified']));
+        $manual = new CurseForgeFile(264231, 2693547, 'first.jar', hashes: ['sha1' => sha1($jar)], reason: 'distribution');
+        $later = new CurseForgeFile(238222, 3043174, 'second.jar', 'https://edge.forgecdn.net/error.jar');
+        $forge = Mockery::mock(CurseForgeSource::class);
+        $forge->shouldReceive('dependencyFiles')->once()->andReturn(['264231/2693547' => $manual, '238222/3043174' => $later]);
+        $wings->files = ['mods/first.jar' => 'old', $manual->stagingPath() => $jar];
+        $wings->failUrls = [$later->url];
+        $pack = $this->curseForgePack([
+            ['projectID' => 264231, 'fileID' => 2693547, 'required' => true],
+            ['projectID' => 238222, 'fileID' => 3043174, 'required' => true],
+        ]);
+        $this->expectException(ModpackException::class);
+        try {
+            (new ModpackInstaller($wings, $forge))->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $pack);
+        } finally {
+            self::assertSame('old', $wings->files['mods/first.jar']);
+            self::assertSame($jar, $wings->files[$manual->stagingPath()]);
+            self::assertCount(2, $wings->files);
+        }
+    }
+
+    private function curseForgePack(array $files): string
+    {
+        return $this->pack([
+            'manifest.json' => json_encode([
+                'manifestType' => 'minecraftModpack', 'manifestVersion' => 1,
+                'name' => 'Dependency tests', 'version' => '2.9.3',
+                'minecraft' => ['version' => '1.12.2', 'modLoaders' => [['id' => 'forge-14.23.5.2860', 'primary' => true]]],
+                'files' => $files, 'overrides' => 'overrides',
+            ], JSON_THROW_ON_ERROR),
+            'overrides/config/keep.txt' => 'do not replace existing file',
+        ]);
     }
 
     /** @param array<string, string> $entries */
@@ -370,6 +490,11 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
         int $bytes = 4,
     ): string {
         return substr($this->files[$this->path($directory, $filename)] ?? '', 0, $bytes);
+    }
+
+    public function readStream(DaemonFileRepository $fileRepository, Server $server, string $path): StreamInterface
+    {
+        return Utils::streamFor($this->files[$path]);
     }
 
     public function listDirectory(

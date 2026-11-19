@@ -160,14 +160,7 @@ class WingsRemoteFilesystem
     ): string {
         $directory = trim($directory, '/');
         $path = $directory === '' ? $filename : $directory.'/'.$filename;
-        $response = $fileRepository
-            ->setServer($server)
-            ->getHttpClient()
-            ->withOptions(['stream' => true])
-            ->get("/api/servers/{$server->uuid}/files/contents", ['file' => $path]);
-        $response->throw();
-
-        $body = $response->toPsrResponse()->getBody();
+        $body = $this->readStream($fileRepository, $server, $path);
         try {
             $prefix = $body->read(max(1, $bytes));
         } finally {
@@ -175,6 +168,18 @@ class WingsRemoteFilesystem
         }
 
         return is_string($prefix) ? $prefix : '';
+    }
+
+    public function readStream(DaemonFileRepository $fileRepository, Server $server, string $path): StreamInterface
+    {
+        $response = $fileRepository
+            ->setServer($server)
+            ->getHttpClient()
+            ->withOptions(['stream' => true])
+            ->get("/api/servers/{$server->uuid}/files/contents", ['file' => $path]);
+        $response->throw();
+
+        return $response->toPsrResponse()->getBody();
     }
 
     public function put(

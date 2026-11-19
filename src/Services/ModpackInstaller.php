@@ -5,6 +5,8 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use GuzzleHttp\Psr7\Utils;
+use Kazaminosuke\ModManager\Exceptions\CurseForgeDependenciesPending;
+use Kazaminosuke\ModManager\Exceptions\CurseForgeManualFileException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Support\ArchiveSignature;
@@ -15,6 +17,7 @@ use Kazaminosuke\ModManager\Support\Modpacks\ModpackOverrideFile;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackRemoteFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use Psr\Http\Message\StreamInterface;
 use Throwable;
 use ZipArchive;
 
@@ -33,10 +36,14 @@ final class ModpackInstaller
     /** @var array<string, array<string, true>> */
     private array $overrideDirectoryListings = [];
 
+    private readonly CurseForgeManualFiles $manualFiles;
+
     public function __construct(
         private readonly WingsRemoteFilesystem $wings,
         private readonly CurseForgeSource $curseForge,
-    ) {}
+    ) {
+        $this->manualFiles = new CurseForgeManualFiles($wings);
+    }
 
     /**
      * @param  callable(int, int): void|null  $progress
@@ -64,15 +71,16 @@ final class ModpackInstaller
             $warnings[] = 'minecraft-version:'.$manifest->minecraftVersion;
         }
 
-        $remoteFiles = $this->resolveDownloads($manifest, $warnings);
-        $steps = count($remoteFiles) + count($manifest->overrides);
+        $staged = [];
         $installed = 0;
-        $skipped = 0;
         $completed = 0;
 
         try {
+            $remoteFiles = $this->resolveDownloads($server, $fileRepository, $manifest, $warnings, $staged);
+            $steps = count($remoteFiles) + count($manifest->overrides);
+            $skipped = count($manifest->remoteFiles) - count($remoteFiles);
             foreach ($remoteFiles as $file) {
-                if ($this->placeRemoteFile($server, $fileRepository, $file)) {
+                if ($this->placeRemoteFile($server, $fileRepository, $file, $staged[$file->path] ?? null)) {
                     $installed++;
                 } else {
                     $skipped++;
@@ -98,6 +106,10 @@ final class ModpackInstaller
             $this->rollback($server, $fileRepository);
 
             throw $exception;
+        } finally {
+            foreach ($staged as $stream) {
+                $stream->close();
+            }
         }
 
         $this->discardBackups($server, $fileRepository);
@@ -217,35 +229,35 @@ final class ModpackInstaller
     }
 
     /**
-     * @param  list<string>  $warnings
+     * @param list<string> $warnings
+     * @param array<string, StreamInterface> $staged
      * @return list<ModpackRemoteFile>
      */
-    private function resolveDownloads(ModpackManifest $manifest, array &$warnings): array
+    private function resolveDownloads(Server $server, DaemonFileRepository $repository, ModpackManifest $manifest, array &$warnings, array &$staged): array
     {
         if (count($manifest->remoteFiles) > 2000) {
             throw new ModpackException('This modpack lists more files than can be installed safely.');
         }
 
-        $curseForgePairs = [];
+        $pairs = [];
         foreach ($manifest->remoteFiles as $file) {
-            if (!is_string($file->url) || !is_string($file->path)) {
+            if ($file->url === null || $file->path === null) {
                 if ($file->projectId === null || $file->fileId === null) {
                     throw new ModpackException('A modpack file is missing its download.');
                 }
-                $curseForgePairs[] = [
-                    'project_id' => $file->projectId,
-                    'file_id' => $file->fileId,
-                ];
+                $key = "{$file->projectId}/{$file->fileId}";
+                $pairs[$key] = ['project_id' => $file->projectId, 'file_id' => $file->fileId];
             }
         }
 
-        $batchDownloads = count($curseForgePairs) > 1
-            ? $this->curseForge->modpackDependencyDownloads($curseForgePairs)
-            : [];
-
+        $dependencies = $pairs === [] ? [] : $this->curseForge->dependencyFiles(array_values($pairs));
         $resolved = [];
+        $missing = [];
+        $requiredMissing = false;
+        $remainingBytes = CurseForgeManualFiles::MAX_BATCH_BYTES;
+        $targets = [];
         foreach ($manifest->remoteFiles as $file) {
-            if (is_string($file->url) && is_string($file->path)) {
+            if ($file->url !== null && $file->path !== null) {
                 $this->assertHttps($file->url);
                 $resolved[] = $file;
 
@@ -253,21 +265,43 @@ final class ModpackInstaller
             }
 
             $key = "{$file->projectId}/{$file->fileId}";
-            $download = $batchDownloads[$key] ?? (
-                count($curseForgePairs) === 1
-                    ? $this->curseForge->modpackDependencyDownload((int) $file->projectId, (int) $file->fileId)
-                    : null
-            );
-            if ($download === null) {
-                if ($file->required) {
-                    throw new ModpackException("CurseForge file [{$file->projectId}/{$file->fileId}] cannot be downloaded.");
+            $dependency = $dependencies[$key];
+            $path = $dependency->filename === null ? null : 'mods/'.$dependency->filename;
+            if ($path !== null) {
+                $target = strtolower($path);
+                if (isset($targets[$target])) {
+                    if ($targets[$target] === $key && !isset($missing[$key])) {
+                        continue;
+                    }
+                    if ($targets[$target] !== $key) {
+                        throw new ModpackException("CurseForge dependencies target the same file [$path].");
+                    }
                 }
-                $warnings[] = "unavailable:{$file->projectId}/{$file->fileId}";
+                $targets[$target] = $key;
+            }
+            if ($dependency->url !== null && $path !== null) {
+                $resolved[] = $file->withDownload($path, $dependency->url, $dependency->size);
 
                 continue;
             }
 
-            $resolved[] = $file->withDownload($download['path'], $download['url'], $download['size']);
+            try {
+                if ($path === null) {
+                    throw new CurseForgeManualFileException($dependency, $dependency->reason ?? 'metadata_missing');
+                }
+                $snapshot = $this->manualFiles->verifiedSnapshot($server, $repository, $dependency, $remainingBytes);
+                $staged[$path] = $snapshot;
+                $remainingBytes -= $snapshot->getSize() ?? 0;
+                $resolved[] = $file->withPath($path, $snapshot->getSize());
+            } catch (CurseForgeManualFileException $exception) {
+                $missing[$key] = $dependency->details($file->required || ($missing[$key]['required'] ?? false), $exception->reason);
+                $requiredMissing = $requiredMissing || $file->required;
+                $warnings[] = "unavailable:$key:{$exception->reason}";
+            }
+        }
+
+        if ($requiredMissing) {
+            throw new CurseForgeDependenciesPending(array_values($missing));
         }
 
         return $resolved;
@@ -277,10 +311,11 @@ final class ModpackInstaller
         Server $server,
         DaemonFileRepository $fileRepository,
         ModpackRemoteFile $file,
+        ?StreamInterface $snapshot = null,
     ): bool {
         $path = $file->path;
         $url = $file->url;
-        if (!is_string($path) || !is_string($url)) {
+        if (!is_string($path) || ($snapshot === null && !is_string($url))) {
             throw new ModpackException('A modpack download is incomplete.');
         }
 
@@ -288,14 +323,18 @@ final class ModpackInstaller
             return false;
         }
 
-        $this->assertHttps($url);
         [$directory, $filename] = ModpackPaths::split($path);
         $temp = '.mod-manager-pull-'.bin2hex(random_bytes(8));
         $backup = null;
         $activated = false;
 
         try {
-            $this->wings->pullForeground($fileRepository, $server, $url, $directory, $temp);
+            if ($snapshot !== null) {
+                $this->wings->putStream($fileRepository, $server, $directory.'/'.$temp, $snapshot);
+            } else {
+                $this->assertHttps($url);
+                $this->wings->pullForeground($fileRepository, $server, $url, $directory, $temp);
+            }
             $listed = $this->wings->findListedFile($fileRepository, $server, $directory, $temp);
             if ($listed === null) {
                 throw new ModpackException("Downloaded file [{$path}] was not stored.");

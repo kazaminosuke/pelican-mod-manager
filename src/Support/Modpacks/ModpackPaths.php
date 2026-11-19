@@ -42,7 +42,7 @@ final class ModpackPaths
         $path = strtolower($relativePath);
         $base = basename($path);
 
-        if (in_array($base, [
+        if (str_starts_with($path, '.mod-manager-curseforge/') || in_array($base, [
             '.pelican-mod-manager.json',
             '.pelican-mod-manager-resource-pack.json',
             'server.properties',

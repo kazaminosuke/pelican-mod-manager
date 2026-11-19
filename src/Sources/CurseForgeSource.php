@@ -544,7 +544,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     private function dependencyFile(array $file, array $project): CurseForgeFile
     {
         $filename = ModpackPaths::safeRelative((string) ($file['fileName'] ?? ''));
-        if ($filename !== null && ($filename !== ($file['fileName'] ?? null) || str_contains($filename, '/'))) {
+        if ($filename !== null && ($filename !== ($file['fileName'] ?? null) || preg_match('~[/\x00-\x1f\x7f:]~', $filename) === 1)) {
             $filename = null;
         }
         $url = $file['downloadUrl'] ?? null;
@@ -584,108 +584,6 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             page: $page,
             reason: $reason,
         );
-    }
-
-    /**
-     * Resolve one manifest dependency to a mods/ path and HTTPS URL.
-     *
-     * @return array{path: string, url: string, size: ?int}|null
-     */
-    public function modpackDependencyDownload(int $projectId, int $fileId): ?array
-    {
-        if (!$this->isConfigured() || $projectId < 1 || $fileId < 1) {
-            return null;
-        }
-
-        $file = $this->modpackFile($projectId, $fileId);
-
-        return $file !== null ? $this->normalizeModpackDependencyFile($file) : null;
-    }
-
-    /**
-     * Resolve several manifest dependencies in bulk via POST /v1/mods/files,
-     * falling back to individual lookups only when a file is omitted from the
-     * bulk response.
-     *
-     * @param  list<array{project_id: int, file_id: int}>  $dependencies
-     * @return array<string, array{path: string, url: string, size: ?int}> keyed by "projectId/fileId"
-     */
-    public function modpackDependencyDownloads(array $dependencies): array
-    {
-        if (!$this->isConfigured() || $dependencies === []) {
-            return [];
-        }
-
-        $valid = [];
-        $fileIds = [];
-        foreach ($dependencies as $dependency) {
-            $projectId = (int) ($dependency['project_id'] ?? 0);
-            $fileId = (int) ($dependency['file_id'] ?? 0);
-            if ($projectId < 1 || $fileId < 1) {
-                continue;
-            }
-
-            $key = "{$projectId}/{$fileId}";
-            $valid[$key] = ['project_id' => $projectId, 'file_id' => $fileId];
-            $fileIds[$fileId] = (string) $fileId;
-        }
-
-        if ($valid === []) {
-            return [];
-        }
-
-        $filesById = [];
-        try {
-            $bulk = $this->getBulkFiles(array_values($fileIds), 30.0);
-            foreach (is_array($bulk['data'] ?? null) ? $bulk['data'] : [] as $file) {
-                if (is_array($file) && isset($file['id'])) {
-                    $filesById[(int) $file['id']] = $file;
-                }
-            }
-        } catch (Throwable $exception) {
-            report($exception);
-        }
-
-        $resolved = [];
-        foreach ($valid as $key => $pair) {
-            $file = $filesById[$pair['file_id']] ?? null;
-            if (!is_array($file)) {
-                try {
-                    $file = $this->modpackFile($pair['project_id'], $pair['file_id']);
-                } catch (Throwable $exception) {
-                    report($exception);
-                    $file = null;
-                }
-            }
-
-            if (is_array($file)) {
-                $download = $this->normalizeModpackDependencyFile($file);
-                if ($download !== null) {
-                    $resolved[$key] = $download;
-                }
-            }
-        }
-
-        return $resolved;
-    }
-
-    /**
-     * @param  array<string, mixed>  $file
-     * @return array{path: string, url: string, size: ?int}|null
-     */
-    private function normalizeModpackDependencyFile(array $file): ?array
-    {
-        $filename = ModpackPaths::safeRelative((string) ($file['fileName'] ?? ''));
-        $url = $file['downloadUrl'] ?? null;
-        if ($filename === null || str_contains($filename, '/') || !ModpackPaths::isSafeHttpsDownloadUrl($url)) {
-            return null;
-        }
-
-        return [
-            'path' => 'mods/'.$filename,
-            'url' => $url,
-            'size' => is_numeric($file['fileLength'] ?? null) ? (int) $file['fileLength'] : null,
-        ];
     }
 
     /** @param array<string, mixed> $filters */
