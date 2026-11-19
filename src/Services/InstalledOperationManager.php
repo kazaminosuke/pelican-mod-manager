@@ -839,6 +839,19 @@ final class InstalledOperationManager
         $this->leases->release($serverId, $type, $leaseToken);
     }
 
+    public function awaitModpackReview(Server $server, string $lease): void
+    {
+        $id = $this->serverId($server);
+        $type = ProjectType::Mod;
+        if (!$this->leases->owns($id, $type, $lease)) {
+            return;
+        }
+        $state = $this->state($id, $type, self::OPERATION_MODPACK)
+            ?? InstalledOperationState::queued(self::OPERATION_MODPACK, $id, $type);
+        $this->put($state->waitingForFiles(InstalledOperationState::STATUS_WAITING_REVIEW));
+        $this->leases->release($id, $type, $lease);
+    }
+
     public function modpackPhase(int $serverId, string $phase): void
     {
         $state = $this->state($serverId, ProjectType::Mod, self::OPERATION_MODPACK);
@@ -922,7 +935,7 @@ final class InstalledOperationManager
         $resumeToken = $selection['manual_token'] ?? null;
         // A queued scan holds no lease. An explicit resume can claim the
         // lease first, and a scan already running still blocks the resume.
-        if ($current?->isActive() && $resumeToken === null) {
+        if ($current?->isActive() && $resumeToken === null && !isset($selection['review_token'])) {
             return [
                 'dispatched' => false,
                 'reason' => 'already_active',

@@ -14,6 +14,8 @@ final class InstalledOperationState
 
     public const STATUS_WAITING_FILES = 'waiting_files';
 
+    public const STATUS_WAITING_REVIEW = 'waiting_review';
+
     public const STATUS_COMPLETED = 'completed';
 
     public const STATUS_FAILED = 'failed';
@@ -31,6 +33,7 @@ final class InstalledOperationState
         self::STATUS_QUEUED,
         self::STATUS_RUNNING,
         self::STATUS_WAITING_FILES,
+        self::STATUS_WAITING_REVIEW,
         self::STATUS_COMPLETED,
         self::STATUS_FAILED,
     ];
@@ -153,10 +156,10 @@ final class InstalledOperationState
         );
     }
 
-    public function waitingForFiles(): self
+    public function waitingForFiles(string $status = self::STATUS_WAITING_FILES): self
     {
         return new self(
-            status: self::STATUS_WAITING_FILES,
+            status: $status,
             operation: $this->operation,
             serverId: $this->serverId,
             projectType: $this->projectType,

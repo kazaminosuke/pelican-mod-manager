@@ -2,8 +2,11 @@
 
 namespace Kazaminosuke\ModManager\Jobs;
 
+use App\Enums\SubuserPermission;
 use App\Models\Server;
+use App\Models\User;
 use App\Repositories\Daemon\DaemonFileRepository;
+use App\Repositories\Daemon\DaemonServerRepository;
 use Illuminate\Container\Container;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -16,7 +19,10 @@ use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackInstaller;
+use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
+use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Throwable;
@@ -153,43 +159,98 @@ final class InstallModpack
                 $operations->modpackPhase($this->serverId, 'verifying');
             }
 
-            $progress = function (int $progress, int $total) use ($operations, $leases, $server, $type, &$leaseRefreshedAt): void {
-                if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
-                    $leases->refresh($this->serverId, $type, $this->leaseToken);
-                    $leaseRefreshedAt = microtime(true);
-                }
-
-                $operations->progress(
-                    $server,
-                    $type,
-                    InstalledOperationManager::OPERATION_MODPACK,
-                    $progress,
-                    $total,
-                );
-            };
+            $phase = $this->selection['managed_phase'] ?? ($this->selection !== null
+                && ($this->selection['strict_minecraft'] ?? true) ? 'initial' : 'preview');
+            $workflow = app(ModpackUpdateWorkflow::class);
+            $review = $phase === 'apply' ? $workflow->requiredReview($server, $this->selection['review_token']) : null;
+            $backup = $review === null ? null : $workflow->requireBackup($server, $review);
+            $current = app(ModpackInventory::class)->read($server);
+            if ($phase === 'initial' && $current['inventory'] !== null) {
+                throw new ModpackException('This server already has a modpack. Generate an update preview.');
+            }
+            $archiveHash ??= hash_file('sha256', $temp);
+            if (!is_string($archiveHash)) {
+                throw new ModpackException('The modpack archive could not be verified.');
+            }
+            if ($review !== null && !hash_equals($review['release']['archive_sha256'], $archiveHash)) {
+                throw new ModpackException('The archive differs from the reviewed release.');
+            }
+            $previous = $current['inventory'] ?? ($phase === 'initial' ? null : app(ModpackInventory::class)->legacy($server, $fileRepository));
+            $release = [
+                'provider' => $this->source, 'pack_id' => $this->projectId, 'version_id' => $file['version_id'],
+                'version_name' => $file['version_number'], 'title' => $this->selection['title'] ?? $this->projectId,
+                'artifact_id' => $file['artifact_id'] ?? $file['version_id'],
+                'server_pack' => (bool) ($file['server_pack'] ?? false),
+                'minecraft_version' => $this->selection['minecraft'] ?? $file['minecraft'] ?? null,
+                'loader' => $this->selection['loader'] ?? $file['loader'] ?? null,
+                'loader_version' => $this->selection['loader_version'] ?? null,
+                'egg' => $server->egg?->name, 'image' => $server->image,
+                'java' => JavaRuntimeImage::preferredLabel($this->selection['minecraft'] ?? $file['minecraft'] ?? null),
+                'archive_sha256' => $archiveHash,
+                'legacy' => $phase !== 'initial' && $current['inventory'] === null,
+                'switch' => $previous !== null && ($previous['provider'] !== $this->source || $previous['pack_id'] !== $this->projectId),
+            ];
             $loader = MinecraftLoader::fromServer($server)?->value;
             $minecraft = MinecraftVersionResolver::resolve($server);
-            $result = ($file['server_pack'] ?? false)
-                ? $installer->installServerPack(
-                    $server,
-                    $fileRepository,
-                    $temp,
-                    $this->projectId,
-                    $file['version_number'],
-                    $file['loader'] ?? null,
-                    $file['minecraft'] ?? null,
-                    $loader,
-                    $minecraft,
-                    $progress,
-                )
-                : $installer->installFromZip(
-                    $server, $fileRepository, $temp,
-                    $loader ?? ($this->selection['loader'] ?? null),
-                    $this->selection['minecraft'] ?? $minecraft,
-                    $progress,
-                    strictMinecraftVersion: $this->selection !== null && ($this->selection['strict_minecraft'] ?? true),
-                    prepared: $isCurseForge ? fn () => $operations->modpackPhase($this->serverId, 'installing') : null,
-                );
+            if ($phase !== 'initial' && ($loader === null || $minecraft === null || ($release['minecraft_version'] !== null && $minecraft !== $release['minecraft_version'])
+                || JavaRuntimeImage::isTooOld($server->image, $release['minecraft_version']))) {
+                throw new ModpackException('The current Minecraft, loader or Java runtime cannot be verified for this update.');
+            }
+            $lastCheck = 0.0;
+            $guard = function (bool $force = true) use ($server, $type, $leases, $workflow, &$lastCheck, $backup, $review): void {
+                if (!$force && microtime(true) - $lastCheck < 5) {
+                    return;
+                }
+                if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
+                    throw new ModpackException('The server operation lease expired.');
+                }
+                $workflow->assertStopped($server);
+                if ($force) {
+                    $this->validateSelection($server->fresh() ?? $server);
+                    if ($review !== null && $workflow->requireBackup($server, $review)->getKey() !== $backup?->getKey()) {
+                        throw new ModpackException('The approved Pelican backup changed.');
+                    }
+                }
+                $lastCheck = microtime(true);
+            };
+            $operations->modpackPhase($this->serverId, $phase === 'preview' ? 'verifying' : 'installing');
+            $result = $installer->deploy(
+                $server, $fileRepository, $temp, $release, $loader ?? ($this->selection['loader'] ?? null),
+                $this->selection['minecraft'] ?? $minecraft, $phase === 'preview',
+                $review['summary']['digest'] ?? null, $backup?->uuid, $guard,
+                $phase === 'initial' ? null : ($this->selection['variables'] ?? app(InstalledEggCatalog::class)->variableValues($server)),
+            );
+            if ($phase === 'preview') {
+                if ($resume !== null) {
+                    $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
+                }
+                $workflow->publish($server, $this->leaseToken, $release, $this->selection ?? [
+                    'egg_id' => (string) $server->egg_id, 'image' => $server->image,
+                ], $result);
+
+                return null;
+            }
+
+            if ($phase === 'apply') {
+                $workflow->done($server);
+                $startId = $this->selection['start_user'] ?? null;
+                if (is_int($startId)) {
+                    try {
+                        $actor = User::query()->find($startId);
+                        if ($actor === null || !$actor->can(SubuserPermission::ControlStart, $server)) {
+                            throw new ModpackException('The requested automatic start is no longer authorized.');
+                        }
+                        app(DaemonServerRepository::class)->setServer($server)->power('start')->throw();
+                    } catch (Throwable $startError) {
+                        report($startError);
+                        $result['warnings'][] = 'power-start-failed';
+                    }
+                }
+            }
+            $result = [...$result, 'name' => $release['title'], 'version' => $release['version_name'],
+                'installed' => $result['counts']['add'] + $result['counts']['replace'],
+                'skipped' => $result['counts']['keep'] + $result['counts']['preserve'] + count($result['protected']),
+                'backup' => $backup?->uuid];
 
             // The Installed list is a cached directory scan. Drop it so the
             // next view queues a scan instead of showing the pre-install files.
@@ -198,14 +259,14 @@ final class InstallModpack
             if ($resume !== null) {
                 $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
             }
+            $this->rememberPack($server, $fileRepository, $file);
             $operations->complete(
                 $server,
                 $type,
                 InstalledOperationManager::OPERATION_MODPACK,
-                $result->toArray(),
+                $result,
                 $this->leaseToken,
             );
-            $this->rememberPack($server, $fileRepository, $file);
         } catch (CurseForgeDependenciesPending $pending) {
             if (!$isCurseForge || $file === null || !is_string($archiveHash) || $file['version_id'] === '') {
                 $operations->fail($server, $type, InstalledOperationManager::OPERATION_MODPACK, 'modpack_rejected', leaseToken: $this->leaseToken);
@@ -217,6 +278,7 @@ final class InstallModpack
                 'image' => $server->image,
                 'variables' => app(InstalledEggCatalog::class)->variableValues($server),
                 'strict_minecraft' => false,
+                'managed_phase' => 'preview',
             ];
             $selection['archive_sha256'] = $archiveHash;
             $selection['server_pack'] = false;

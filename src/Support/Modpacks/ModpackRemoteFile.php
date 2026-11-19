@@ -25,8 +25,8 @@ final class ModpackRemoteFile
         return new self($path, null, $this->projectId, $this->fileId, $this->required, $size, $this->hashes);
     }
 
-    public function withDownload(string $path, string $url, ?int $size): self
+    public function withDownload(string $path, string $url, ?int $size, array $hashes = []): self
     {
-        return new self($path, $url, $this->projectId, $this->fileId, $this->required, $size ?? $this->size, $this->hashes);
+        return new self($path, $url, $this->projectId, $this->fileId, $this->required, $size ?? $this->size, $hashes + $this->hashes);
     }
 }

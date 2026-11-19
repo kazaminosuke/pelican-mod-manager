@@ -12,6 +12,7 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Support\ArchiveSignature;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackInstallResult;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackManifest;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackOverrideFile;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
@@ -224,6 +225,127 @@ final class ModpackInstaller
         }
     }
 
+    /**
+     * Build the same target for preview and apply. The shared parser and
+     * dependency resolver preserve the manual CurseForge workflow.
+     *
+     * @return array<string, mixed>
+     */
+    public function deploy(
+        Server $server,
+        DaemonFileRepository $repo,
+        string $archive,
+        array $release,
+        ?string $loader,
+        ?string $minecraft,
+        bool $preview,
+        ?string $approved,
+        ?string $backup,
+        callable $guard,
+        ?array $runtime = null,
+    ): array {
+        $snapshots = [];
+        $zip = null;
+        $target = $warnings = [];
+        try {
+            if ($release['server_pack']) {
+                $this->assertLoaderCompatible($release['loader'], $loader);
+                $this->assertMinecraftCompatible($release['minecraft_version'], $minecraft);
+                $zip = new ZipArchive();
+                if ($zip->open($archive, ZipArchive::RDONLY) !== true) {
+                    $zip = null;
+                    throw new ModpackException('The server pack could not be opened.');
+                }
+                foreach (ModpackArchive::serverFiles($zip) as $entry) {
+                    $open = static function () use ($zip, $entry): StreamInterface {
+                        $stream = $zip->getStreamIndex($entry['index']);
+                        if ($stream === false) {
+                            throw new ModpackException('A server pack entry could not be opened.');
+                        }
+
+                        return Utils::streamFor($stream, ['size' => $entry['size']]);
+                    };
+                    $ctx = hash_init('sha256');
+                    $stream = $zip->getStreamIndex($entry['index']);
+                    if ($stream === false) {
+                        throw new ModpackException('A server pack entry could not be read.');
+                    }
+                    try {
+                        if (hash_update_stream($ctx, $stream) !== $entry['size']) {
+                            throw new ModpackException('A server pack entry is truncated.');
+                        }
+                    } finally {
+                        fclose($stream);
+                    }
+                    $hash = hash_final($ctx);
+                    $target[$entry['path']] = $this->managedEntry($hash, $hash, $entry['size'], [], null, null, $open, null);
+                }
+            } else {
+                $manifest = ModpackArchive::read($archive);
+                $this->assertLoaderCompatible($manifest->loader, $loader);
+                $this->assertMinecraftCompatible($manifest->minecraftVersion, $minecraft);
+                if ($runtime !== null && $manifest->loader !== null && $manifest->loaderVersion !== null
+                    && !ModpackLoader::hasBuild($manifest->loader, $manifest->loaderVersion, $manifest->minecraftVersion, $runtime)) {
+                    throw new ModpackException("The archive requires {$manifest->loader} {$manifest->loaderVersion}. Verify the existing runtime before updating.");
+                }
+                $warnings = $manifest->skipped;
+                $files = $this->resolveDownloads($server, $repo, $manifest, $warnings, $snapshots);
+                foreach ($files as $file) {
+                    $path = $file->path;
+                    if ($path === null || isset($target[$path])) {
+                        throw new ModpackException('A modpack dependency is missing its path or maps to a duplicate path.');
+                    }
+                    $hashes = array_filter($file->hashes, static fn ($hash, $algorithm) => is_string($hash)
+                        && strlen($hash) === (['sha256' => 64, 'sha512' => 128, 'sha1' => 40, 'md5' => 32][$algorithm] ?? 0)
+                        && ctype_xdigit($hash), ARRAY_FILTER_USE_BOTH);
+                    ksort($hashes);
+                    $identity = $file->fileId === null ? null : "curseforge:{$file->projectId}/{$file->fileId}";
+                    if ($hashes !== []) {
+                        $identity = hash('sha256', json_encode([$identity, $hashes], JSON_THROW_ON_ERROR));
+                    }
+                    $snapshot = $snapshots[$path] ?? null;
+                    $open = $snapshot === null ? null : static function () use ($snapshot): StreamInterface {
+                        $snapshot->rewind();
+
+                        return $snapshot;
+                    };
+                    $target[$path] = $this->managedEntry($identity, $hashes['sha256'] ?? null, $file->size, $hashes,
+                        $file->fileId === null ? null : (string) $file->fileId, $file->projectId === null ? null : (string) $file->projectId, $open, $file->url);
+                }
+                foreach ($manifest->overrides as $override) {
+                    if (isset($target[$override->path])) {
+                        throw new ModpackException("An override collides with a dependency [{$override->path}].");
+                    }
+                    $hash = hash('sha256', $override->contents);
+                    $target[$override->path] = $this->managedEntry($hash, $hash, strlen($override->contents), [], null, null,
+                        static fn () => Utils::streamFor($override->contents), null);
+                }
+            }
+
+            $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard);
+
+            return [...$result, 'warnings' => $warnings];
+        } finally {
+            foreach ($snapshots as $snapshot) {
+                $snapshot->close();
+            }
+            $zip?->close();
+        }
+    }
+
+    private function managedEntry(?string $identity, ?string $sha256, ?int $size, array $hashes, ?string $fileId, ?string $projectId, ?callable $open, ?string $url): array
+    {
+        return ['identity' => $identity, 'sha256' => $sha256, 'size' => $size, 'hashes' => $hashes, 'file_id' => $fileId,
+            'project_id' => $projectId, 'open' => $open, 'url' => $url];
+    }
+
+    private function assertMinecraftCompatible(?string $required, ?string $actual): void
+    {
+        if ($required !== null && $actual !== null && $required !== $actual) {
+            throw new ModpackException("The modpack requires Minecraft [$required], but the server uses [$actual].");
+        }
+    }
+
     private function assertLoaderCompatible(?string $packLoader, ?string $serverLoader): void
     {
         if ($serverLoader === null || $packLoader === null || $serverLoader === $packLoader) {
@@ -285,7 +407,7 @@ final class ModpackInstaller
                 $targets[$target] = $key;
             }
             if ($dependency->url !== null && $path !== null) {
-                $resolved[] = $file->withDownload($path, $dependency->url, $dependency->size);
+                $resolved[] = $file->withDownload($path, $dependency->url, $dependency->size, $dependency->hashes);
 
                 continue;
             }

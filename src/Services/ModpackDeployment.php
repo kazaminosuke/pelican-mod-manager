@@ -51,6 +51,18 @@ final class ModpackDeployment
         $individual = $this->individuallyManaged($server, $repo);
         $plan = $this->plan($server, $repo, $owned, $target, $individual);
         $summary = $this->summary($plan, $protected);
+        if (($release['legacy'] ?? false) && ModpackPaths::isManaged('mods/placeholder.jar', $world)) {
+            foreach ($this->listing($server, $repo, 'mods') as $entry) {
+                $path = 'mods/'.$entry['name'];
+                if (str_ends_with(strtolower($path), '.jar')
+                    && !isset($individual[strtolower($path)]) && !isset($plan[$path])) {
+                    $summary['mod_conflicts'][] = $path;
+                    $summary['conflicts'][] = $path;
+                    $summary['mods']['conflict']++;
+                    $summary['counts']['conflict']++;
+                }
+            }
+        }
         if ($preview) {
             return [...$summary, 'digest' => $this->fingerprint($state['revision'], $release, $world, $plan, $target)];
         }
@@ -125,7 +137,13 @@ final class ModpackDeployment
             $this->inventory->finish($server, $token, [...$release, 'files' => $next]);
         } catch (Throwable $error) {
             if ($started) {
-                $recovered = $this->rollback($server, $repo, $applied);
+                try {
+                    $guard();
+                    $recovered = $this->rollback($server, $repo, $applied);
+                } catch (Throwable $rollbackError) {
+                    report($rollbackError);
+                    $recovered = false;
+                }
                 if ($recovered) {
                     $this->inventory->abort($server, $token);
                 }

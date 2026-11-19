@@ -20,4 +20,26 @@ final class ModpackLoader
             default => null,
         };
     }
+
+    /** Check the existing Egg's pinned startup variable against the selected release. */
+    public static function hasBuild(string $loader, string $build, ?string $minecraft, array $variables): bool
+    {
+        $variable = $loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($loader).'_VERSION';
+        $actual = (string) ($variables[$variable] ?? '');
+        if ($actual === $build) {
+            return true;
+        }
+        if ($loader !== 'forge' || $minecraft === null) {
+            return false;
+        }
+        $normalizeForge = static function (string $value) use ($minecraft): string {
+            if (str_starts_with($value, $minecraft.'-')) {
+                $value = substr($value, strlen($minecraft) + 1);
+            }
+
+            return str_ends_with($value, '-'.$minecraft) ? substr($value, 0, -strlen($minecraft) - 1) : $value;
+        };
+
+        return $normalizeForge($actual) === $normalizeForge($build);
+    }
 }

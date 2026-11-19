@@ -3,9 +3,12 @@
 namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
+use App\Repositories\Daemon\DaemonFileRepository;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
+use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 
 class ModpackInventory
 {
@@ -47,6 +50,27 @@ class ModpackInventory
     public function abort(Server $server, string $token): void
     {
         $this->row($server)->where('mutation', $token)->update(['mutation' => null, 'recovery' => null]);
+    }
+
+    public function legacy(Server $server, DaemonFileRepository $repo): ?array
+    {
+        return Cache::remember('modpack-legacy:'.$server->uuid, 300, function () use ($server, $repo) {
+            $wings = app(WingsRemoteFilesystem::class);
+            $path = '.mod-manager-modpack.json';
+            $entry = $wings->findListedFile($repo, $server, '', $path);
+            if ($entry === null || ($entry['symlink'] ?? true) !== false || ($wings->listedFileSize($entry) ?? PHP_INT_MAX) > 8192) {
+                return [];
+            }
+            $stream = $wings->readStream($repo, $server, $path);
+            try {
+                $value = json_decode($stream->read(8193), true);
+
+                return is_array($value) && is_string($value['provider'] ?? null) && is_string($value['pack_id'] ?? null)
+                    ? $value : [];
+            } finally {
+                $stream->close();
+            }
+        }) ?: null;
     }
 
     private function row(Server $server): Builder
