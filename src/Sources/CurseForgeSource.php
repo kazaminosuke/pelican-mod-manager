@@ -189,7 +189,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
      * Newest installable pack zip. A server pack is preferred over the
      * client installer when CurseForge publishes one.
      *
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string, artifact_id: string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, manifest_url: ?string, artifact_id: string}|null
      */
     public function latestModpackDownload(Server $server, string $projectId): ?array
     {
@@ -272,7 +272,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     }
 
     /**
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string, artifact_id: string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, manifest_url: ?string, artifact_id: string}|null
      */
     public function modpackDownloadById(string $projectId, string $fileId): ?array
     {
@@ -289,10 +289,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         if (($file['isServerPack'] ?? false) === true) {
             $parent = $this->findModpackFile($projectId, (int) ($file['parentProjectFileId'] ?? 0));
 
-            return $this->modpackReleaseDownload(
-                $projectId, $parent ?? $file, $file, true,
-                $parent !== null ? $this->serverPackEggVersion($parent, $file) : null,
-            );
+            return $this->modpackReleaseDownload($projectId, $parent ?? $file, $file, true);
         }
         if (ModpackFileSelector::isCurseForgeAdditionalFile($file)) {
             return null;
@@ -304,7 +301,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     /**
      * @param  array<string, mixed>  $release
      * @param  list<array<string, mixed>>|null  $listedFiles
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string, artifact_id: string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, manifest_url: ?string, artifact_id: string}|null
      */
     private function resolveModpackRelease(string $projectId, array $release, ?array $listedFiles = null): ?array
     {
@@ -312,7 +309,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $linked = $this->findModpackFile($projectId, $linkedId);
         $hasServerPack = $linkedId > 0;
         if ($linked !== null && ModpackFileSelector::isCurseForgeServerPackFor($release, $linked)) {
-            $download = $this->modpackReleaseDownload($projectId, $release, $linked, true, $this->serverPackEggVersion($release, $linked));
+            $download = $this->modpackReleaseDownload($projectId, $release, $linked, true);
             if ($download !== null) {
                 return $download;
             }
@@ -336,38 +333,23 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             }
 
             $hasServerPack = true;
-            $download = $this->modpackReleaseDownload($projectId, $release, $candidate, true, $this->serverPackEggVersion($release, $candidate));
+            $download = $this->modpackReleaseDownload($projectId, $release, $candidate, true);
             if ($download !== null) {
                 return $download;
             }
         }
 
-        $download = $this->modpackReleaseDownload($projectId, $release, $release, false, $linkedId === 0 ? (string) $release['id'] : null);
+        $download = $this->modpackReleaseDownload($projectId, $release, $release, false);
 
         return $download === null ? null : array_replace($download, ['has_server_pack' => $hasServerPack]);
     }
 
     /**
      * @param array<string, mixed> $release
-     * @param array<string, mixed> $serverPack
-     */
-    private function serverPackEggVersion(array $release, array $serverPack): ?string
-    {
-        // Pelican's generic egg resolves the client manifest from the
-        // server file's parentProjectFileId.
-        return ($serverPack['isServerPack'] ?? false) === true
-            && (int) ($serverPack['parentProjectFileId'] ?? 0) === (int) $release['id']
-            && $this->modpackZipDownload($release) !== null
-            ? (string) $serverPack['id']
-            : null;
-    }
-
-    /**
-     * @param array<string, mixed> $release
      * @param array<string, mixed> $file
-     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, egg_version_id: ?string, manifest_url: ?string, artifact_id: string}|null
+     * @return array{version_id: string, version_number: string, filename: string, url: string, minecraft: ?string, loader: ?string, server_pack: bool, has_server_pack: bool, manifest_url: ?string, artifact_id: string}|null
      */
-    private function modpackReleaseDownload(string $projectId, array $release, array $file, bool $serverPack, ?string $eggVersion): ?array
+    private function modpackReleaseDownload(string $projectId, array $release, array $file, bool $serverPack): ?array
     {
         $download = $this->modpackZipDownload($file, $projectId);
         if ($download === null) {
@@ -384,7 +366,6 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             'loader' => $loader ?? $fileLoader,
             'server_pack' => $serverPack,
             'has_server_pack' => $serverPack,
-            'egg_version_id' => $eggVersion,
             'artifact_id' => $download['version_id'],
             'manifest_url' => ModpackFileSelector::isCurseForgeAdditionalFile($release)
                 ? null : ($serverPack ? ($this->modpackZipDownload($release)['url'] ?? null) : $download['url']),

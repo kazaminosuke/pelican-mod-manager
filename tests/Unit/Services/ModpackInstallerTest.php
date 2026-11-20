@@ -6,8 +6,10 @@ use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Container\Container;
 use Kazaminosuke\ModManager\Exceptions\CurseForgeDependenciesPending;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
+use Kazaminosuke\ModManager\Services\ModpackDeployment;
 use Kazaminosuke\ModManager\Services\ModpackInstaller;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
@@ -17,6 +19,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\StreamInterface;
 use ZipArchive;
+
+require_once __DIR__.'/ModpackDeploymentTest.php';
 
 final class ModpackInstallerTest extends TestCase
 {
@@ -51,16 +55,16 @@ final class ModpackInstallerTest extends TestCase
             'overrides/world/level.dat' => 'world',
         ]);
 
-        $result = $installer->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'fabric', '1.21.1');
+        $result = $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'fabric', '1.20.1');
 
-        self::assertSame(2, $result->installed);
-        self::assertSame(3, $result->skipped);
-        self::assertSame("PK\x03\x04example", $wings->files['mods/example.jar']);
+        self::assertSame(2, $result['counts']['add'] + $result['counts']['replace']);
+        self::assertSame(3, $result['counts']['conflict'] + count($result['protected']) + count($result['warnings']));
+        self::assertSame($wings->body, $wings->files['mods/example.jar']);
         self::assertSame('local', $wings->files['config/example.toml']);
         self::assertSame('new', $wings->files['config/new.toml']);
         self::assertArrayNotHasKey('server.properties', $wings->files);
         self::assertArrayNotHasKey('world/level.dat', $wings->files);
-        self::assertContains('minecraft-version:1.20.1', $result->warnings);
+        self::assertSame([], $result['warnings']);
     }
 
     public function test_creation_job_rejects_a_manifest_for_the_wrong_minecraft_version(): void
@@ -69,7 +73,7 @@ final class ModpackInstallerTest extends TestCase
         $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
         $zip = $this->pack([
             'modrinth.index.json' => json_encode([
-                'formatVersion' => 1, 'game' => 'minecraft', 'dependencies' => ['minecraft' => '1.20.1'],
+                'formatVersion' => 1, 'game' => 'minecraft', 'dependencies' => ['minecraft' => '1.20.1'], 'files' => [],
             ], JSON_THROW_ON_ERROR),
             'overrides/config/new.toml' => 'new',
         ]);
@@ -77,9 +81,9 @@ final class ModpackInstallerTest extends TestCase
         $this->expectException(ModpackException::class);
         $this->expectExceptionMessage('requires Minecraft [1.20.1]');
         try {
-            $installer->installFromZip(
+            $this->deploy($installer, $wings,
                 $this->server(), Mockery::mock(DaemonFileRepository::class), $zip,
-                serverMinecraftVersion: '1.21.1', strictMinecraftVersion: true,
+                serverMinecraftVersion: '1.21.1',
             );
         } finally {
             self::assertSame([], $wings->files);
@@ -105,7 +109,7 @@ final class ModpackInstallerTest extends TestCase
         ]);
 
         try {
-            $installer->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'fabric', '1.20.1');
+            $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'fabric', '1.20.1');
             self::fail('A forge pack must not be installed on a fabric server.');
         } catch (ModpackException $exception) {
             self::assertStringContainsString('forge', $exception->getMessage());
@@ -140,7 +144,7 @@ final class ModpackInstallerTest extends TestCase
         ]);
 
         try {
-            $installer->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $zip, null, null);
+            $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, owned: ['mods/old.jar']);
             self::fail('The second download should fail the install.');
         } catch (ModpackException) {
             self::assertSame('PK..old', $wings->files['mods/old.jar']);
@@ -171,10 +175,10 @@ final class ModpackInstallerTest extends TestCase
         ]);
 
         $this->expectException(ModpackException::class);
-        $this->expectExceptionMessage('not a valid ZIP or JAR');
+        $this->expectExceptionMessage('is not an archive');
 
         try {
-            $installer->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $zip);
+            $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, owned: ['mods/example.jar']);
         } finally {
             self::assertSame('PK..real', $wings->files['mods/example.jar']);
         }
@@ -218,11 +222,11 @@ final class ModpackInstallerTest extends TestCase
             'overrides/config/two.toml' => '2',
         ]);
 
-        $result = $installer->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'forge', '1.20.1');
+        $result = $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'forge', '1.20.1');
 
-        self::assertSame(4, $result->installed);
-        self::assertSame(1, $result->skipped);
-        self::assertSame(1, $wings->listDirectoryCalls['config'] ?? 0);
+        self::assertSame(4, $result['counts']['add'] + $result['counts']['replace']);
+        self::assertSame(1, $result['counts']['conflict'] + count($result['protected']) + count($result['warnings']));
+        self::assertSame(2, $wings->listDirectoryCalls['config'] ?? 0);
         self::assertSame('keep', $wings->files['config/existing.toml']);
         self::assertSame('1', $wings->files['config/one.toml']);
         self::assertSame('2', $wings->files['config/two.toml']);
@@ -254,7 +258,7 @@ final class ModpackInstallerTest extends TestCase
         $wings->files['config/keep.txt'] = 'preserve';
 
         try {
-            $installer->installFromZip($server, $repo, $pack);
+            $this->deploy($installer, $wings, $server, $repo, $pack);
             self::fail('The required uploads were absent.');
         } catch (CurseForgeDependenciesPending $exception) {
             self::assertSame([2693547, 3043174, 2801262], array_column($exception->files, 'file_id'));
@@ -265,22 +269,23 @@ final class ModpackInstallerTest extends TestCase
 
         $wings->files[$one->stagingPath()] = $first;
         try {
-            $installer->installFromZip($server, $repo, $pack);
+            $this->deploy($installer, $wings, $server, $repo, $pack);
             self::fail('The second upload was absent.');
         } catch (CurseForgeDependenciesPending $exception) {
             self::assertSame([3043174, 2801262], array_column($exception->files, 'file_id'));
             self::assertArrayNotHasKey('mods/first.jar', $wings->files);
         }
         $wings->files[$two->stagingPath()] = $second;
-        $result = $installer->installFromZip($server, $repo, $pack);
-        self::assertSame(2, $result->installed);
+        $result = $this->deploy($installer, $wings, $server, $repo, $pack);
+        self::assertSame(2, $result['counts']['add'] + $result['counts']['replace']);
         self::assertSame($first, $wings->files['mods/first.jar']);
         self::assertSame($second, $wings->files['mods/second.jar']);
         self::assertSame('preserve', $wings->files['world/level.dat']);
         self::assertSame('preserve', $wings->files['config/keep.txt']);
         self::assertSame($first, $wings->files[$one->stagingPath()]);
+        self::assertSame(3, $wings->listDirectoryCalls['.mod-manager-curseforge']);
         self::assertSame(2, count(array_filter(array_keys($wings->files), fn (string $name) => str_starts_with($name, 'mods/'))));
-        self::assertContains('unavailable:229060/2801262:unverifiable', $result->warnings);
+        self::assertContains('unavailable:229060/2801262:unverifiable', $result['warnings']);
     }
 
     #[DataProvider('rejectedUploads')]
@@ -301,7 +306,7 @@ final class ModpackInstallerTest extends TestCase
         $wings->files = [$file->stagingPath() => $upload, 'mods/iceandfire.jar' => 'original'];
         $before = $wings->files;
         try {
-            (new ModpackInstaller($wings, $forge))->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $this->curseForgePack([
+            $this->deploy(new ModpackInstaller($wings, $forge), $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $this->curseForgePack([
                 ['projectID' => 264231, 'fileID' => 2693547, 'required' => true],
             ]));
             self::fail('The upload should have been rejected.');
@@ -324,16 +329,16 @@ final class ModpackInstallerTest extends TestCase
             '264231/2693547' => new CurseForgeFile(264231, 2693547, 'required.jar', 'https://edge.forgecdn.net/required.jar'),
             '238222/3043174' => new CurseForgeFile(238222, 3043174, 'optional.jar', reason: 'distribution'),
         ]);
-        $result = (new ModpackInstaller($wings, $forge))->installFromZip(
+        $result = $this->deploy(new ModpackInstaller($wings, $forge), $wings,
             $this->server(), Mockery::mock(DaemonFileRepository::class), $this->curseForgePack([
                 ['projectID' => 264231, 'fileID' => 2693547, 'required' => true],
                 ['projectID' => 238222, 'fileID' => 3043174, 'required' => false],
             ]),
         );
 
-        self::assertSame(2, $result->installed);
-        self::assertSame(1, $result->skipped);
-        self::assertContains('unavailable:238222/3043174:unverifiable', $result->warnings);
+        self::assertSame(2, $result['counts']['add'] + $result['counts']['replace']);
+        self::assertSame(1, $result['counts']['conflict'] + count($result['protected']) + count($result['warnings']));
+        self::assertContains('unavailable:238222/3043174:unverifiable', $result['warnings']);
         self::assertArrayHasKey('mods/required.jar', $wings->files);
         self::assertArrayNotHasKey('mods/optional.jar', $wings->files);
     }
@@ -354,7 +359,7 @@ final class ModpackInstallerTest extends TestCase
         ]);
         $this->expectException(ModpackException::class);
         try {
-            (new ModpackInstaller($wings, $forge))->installFromZip($this->server(), Mockery::mock(DaemonFileRepository::class), $pack);
+            $this->deploy(new ModpackInstaller($wings, $forge), $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $pack, owned: ['mods/first.jar']);
         } finally {
             self::assertSame('old', $wings->files['mods/first.jar']);
             self::assertSame($jar, $wings->files[$manual->stagingPath()]);
@@ -399,7 +404,7 @@ final class ModpackInstallerTest extends TestCase
         $wings = new MemoryModpackWings();
         $wings->files['config/keep.toml'] = 'local';
         $zip = $this->pack([
-            'ServerFiles/mods/example.jar' => "PK\x03\x04jar",
+            'ServerFiles/mods/example.jar' => $wings->body,
             'ServerFiles/local/kubejs/dev.json' => '{}',
             'ServerFiles/mods/README.txt' => 'notes',
             'ServerFiles/config/keep.toml' => 'pack',
@@ -410,16 +415,13 @@ final class ModpackInstallerTest extends TestCase
             'ServerFiles/server.jar' => 'bundled launcher',
         ]);
         $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
-        $result = $installer->installServerPack(
-            $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'ATM10', '8.6',
-            'neoforge', '1.21.1', 'neoforge', '1.21.1', static function (): void {},
-        );
+        $result = $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'neoforge', '1.21.1', serverPack: true);
 
-        self::assertSame(3, $result->installed);
-        self::assertSame(1, $result->skipped);
-        self::assertSame([
+        self::assertSame(3, $result['counts']['add'] + $result['counts']['replace']);
+        self::assertSame(1, $result['counts']['conflict'] + count($result['protected']) + count($result['warnings']));
+        self::assertEquals([
             'config/keep.toml' => 'local',
-            'mods/example.jar' => "PK\x03\x04jar",
+            'mods/example.jar' => $wings->body,
             'local/kubejs/dev.json' => '{}',
             'defaultconfigs/new.toml' => 'new',
         ], $wings->files);
@@ -430,18 +432,15 @@ final class ModpackInstallerTest extends TestCase
         $wings = new MemoryModpackWings();
         $wings->files['mods/local.jar'] = 'existing';
         $zip = $this->pack([
-            'mods/example.jar' => "PK\x03\x04jar",
+            'mods/example.jar' => $wings->body,
             'mods/bad.jar' => '<html>not a JAR</html>',
         ]);
         $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
 
         $this->expectException(ModpackException::class);
-        $this->expectExceptionMessage('not a valid JAR');
+        $this->expectExceptionMessage('is not an archive');
         try {
-            $installer->installServerPack(
-                $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'Bad', '1',
-                'neoforge', '1.21.1', 'neoforge', '1.21.1', static function (): void {},
-            );
+            $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'neoforge', '1.21.1', serverPack: true);
         } finally {
             self::assertSame(['mods/local.jar' => 'existing'], $wings->files);
         }
@@ -450,18 +449,43 @@ final class ModpackInstallerTest extends TestCase
     public function test_bundled_server_pack_rejects_unsafe_paths_before_writing(): void
     {
         $wings = new MemoryModpackWings();
-        $zip = $this->pack(['mods/example.jar' => "PK\x03\x04jar", 'config/../../bad.toml' => 'unsafe']);
+        $zip = $this->pack(['mods/example.jar' => $wings->body, 'config/../../bad.toml' => 'unsafe']);
         $installer = new ModpackInstaller($wings, Mockery::mock(CurseForgeSource::class));
 
         $this->expectException(ModpackException::class);
         $this->expectExceptionMessage('unsafe file path');
         try {
-            $installer->installServerPack(
-                $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'Bad', '1',
-                'forge', null, 'forge', null, static function (): void {},
-            );
+            $this->deploy($installer, $wings, $this->server(), Mockery::mock(DaemonFileRepository::class), $zip, 'forge', null, serverPack: true);
         } finally {
             self::assertSame([], $wings->files);
+        }
+    }
+
+    private function deploy(
+        ModpackInstaller $installer, MemoryModpackWings $wings, Server $server, DaemonFileRepository $repo,
+        string $zip, ?string $loader = null, ?string $serverMinecraftVersion = null, bool $serverPack = false,
+        array $owned = [],
+    ): array {
+        $oldContainer = Container::getInstance();
+        $container = new Container();
+        $inventory = new DeploymentInventory();
+        foreach ($owned as $path) {
+            $inventory->data['inventory']['files'][$path] = ['sha256' => hash('sha256', $wings->files[$path]), 'identity' => null];
+        }
+        $container->instance(ModpackDeployment::class, new ModpackDeployment($wings, $inventory));
+        Container::setInstance($container);
+        try {
+            $archive = new ZipArchive();
+            $archive->open($zip, ZipArchive::RDONLY);
+            $provider = $archive->locateName('modrinth.index.json') !== false ? 'modrinth' : 'curseforge';
+            $archive->close();
+
+            return $installer->deploy($server, $repo, $zip, [
+                'provider' => $provider, 'pack_id' => 'test', 'version_id' => '2', 'server_pack' => $serverPack,
+                'loader' => $loader, 'minecraft_version' => $serverMinecraftVersion,
+            ], $loader, $serverMinecraftVersion, false, null, null, static fn () => null);
+        } finally {
+            Container::setInstance($oldContainer);
         }
     }
 
@@ -485,7 +509,19 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
     /** @var list<string> */
     public array $failUrls = [];
 
-    public string $body = "PK\x03\x04example";
+    public string $body;
+
+    public function __construct()
+    {
+        $temp = tmpfile();
+        $name = stream_get_meta_data($temp)['uri'];
+        $zip = new ZipArchive();
+        $zip->open($name, ZipArchive::OVERWRITE);
+        $zip->addFromString('mod/Main.class', 'test');
+        $zip->close();
+        $this->body = file_get_contents($name);
+        fclose($temp);
+    }
 
     public function pullForeground(
         DaemonFileRepository $fileRepository,
@@ -495,7 +531,7 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
         string $filename,
     ): array {
         if (in_array($url, $this->failUrls, true)) {
-            throw new Exception('download failed');
+            throw new ModpackException('download failed');
         }
 
         $path = $this->path($directory, $filename);
@@ -534,17 +570,17 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
                 continue;
             }
             $relative = $prefix === '' ? $path : substr($path, strlen($prefix));
-            if ($relative === '' || str_contains($relative, '/')) {
+            [$name, $nested] = array_pad(explode('/', $relative, 2), 2, null);
+            if ($name === '') {
                 continue;
             }
-            $items[] = [
-                'name' => $relative,
-                'size' => strlen($contents),
-                'directory' => false,
+            $items[$name] = [
+                'name' => $name, 'size' => strlen($contents), 'directory' => $nested !== null,
+                'file' => $nested === null, 'symlink' => false,
             ];
         }
 
-        return $items;
+        return array_values($items);
     }
 
     public function findListedFile(
@@ -584,6 +620,13 @@ final class MemoryModpackWings extends WingsRemoteFilesystem
         string $filename,
     ): void {
         unset($this->files[$this->path($directory, $filename)]);
+    }
+
+    public function deleteManyQuietly(DaemonFileRepository $fileRepository, Server $server, string $directory, array $filenames): void
+    {
+        foreach ($filenames as $filename) {
+            $this->delete($fileRepository, $server, $directory, $filename);
+        }
     }
 
     public function deleteQuietly(

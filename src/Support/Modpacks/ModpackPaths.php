@@ -91,6 +91,11 @@ final class ModpackPaths
             || str_starts_with($path, 'local/kubejs/');
     }
 
+    public static function isExecutablePackContent(string $path): bool
+    {
+        return preg_match('~^(?:mods|scripts|datapacks|global_packs|openloader|(?:local/)?kubejs/(?:server_scripts|startup_scripts|data))/~i', $path) === 1;
+    }
+
     /** @return array{0: string, 1: string} directory, filename */
     public static function split(string $relativePath): array
     {

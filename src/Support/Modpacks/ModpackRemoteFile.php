@@ -20,9 +20,9 @@ final class ModpackRemoteFile
         public readonly array $hashes = [],
     ) {}
 
-    public function withPath(string $path, ?int $size): self
+    public function withPath(string $path, ?int $size, array $hashes): self
     {
-        return new self($path, null, $this->projectId, $this->fileId, $this->required, $size, $this->hashes);
+        return new self($path, null, $this->projectId, $this->fileId, $this->required, $size, $hashes);
     }
 
     public function withDownload(string $path, string $url, ?int $size, array $hashes = []): self

@@ -268,9 +268,9 @@ final class DeploymentInventory extends ModpackInventory
         return $this->data;
     }
 
-    public function begin(Server $server, ?string $revision, string $token, ?string $backup, array $originals = []): void
+    public function begin(Server $server, ?string $revision, string $token, ?string $backup, array $originals = [], bool $unlockBackup = false): void
     {
-        $this->data['recovery'] = ['backup' => $backup, 'transaction' => $token, 'originals' => $originals];
+        $this->data['recovery'] = ['backup' => $backup, 'transaction' => $token, 'originals' => $originals, 'unlock_backup' => $unlockBackup];
     }
 
     public function finish(Server $server, string $token, array $inventory): void
@@ -350,6 +350,13 @@ final class DeploymentWings extends WingsRemoteFilesystem
     public function delete(DaemonFileRepository $fileRepository, Server $server, string $directory, string $filename): void
     {
         unset($this->files[$directory.'/'.$filename]);
+    }
+
+    public function deleteManyQuietly(DaemonFileRepository $fileRepository, Server $server, string $directory, array $filenames): void
+    {
+        foreach ($filenames as $filename) {
+            $this->delete($fileRepository, $server, $directory, $filename);
+        }
     }
 
     public function deleteQuietly(DaemonFileRepository $fileRepository, Server $server, string $directory, string $filename): void

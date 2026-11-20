@@ -30,7 +30,7 @@ final class ModpackDeployment
      * @param array<string, array{identity: ?string, sha256: ?string, size: ?int, hashes: array, file_id: ?string, project_id: ?string, open: ?callable, url: ?string}> $target
      * @return array<string, mixed>
      */
-    public function run(Server $server, DaemonFileRepository $repo, array $release, array $target, ?string $approval, bool $preview, ?string $backup, callable $guard, array $warnings = []): array
+    public function run(Server $server, DaemonFileRepository $repo, array $release, array $target, ?string $approval, bool $preview, ?string $backup, callable $guard, array $warnings = [], bool $unlockBackup = false): array
     {
         $this->listings = [];
         $state = $this->inventory->read($server);
@@ -41,8 +41,12 @@ final class ModpackDeployment
         $world = $this->world($server, $repo);
         $owned = $state['inventory']['files'] ?? [];
         $protected = [];
+        $switch = (bool) ($release['switch'] ?? false);
         foreach (array_unique([...array_keys($target), ...array_keys($owned)]) as $path) {
             if (!ModpackPaths::isManaged($path, $world)) {
+                if ($target[$path]['required'] ?? false) {
+                    throw new ModpackException("Required modpack file [$path] cannot be placed in a protected directory.");
+                }
                 $protected[] = $path;
                 unset($target[$path], $owned[$path]);
             }
@@ -51,9 +55,21 @@ final class ModpackDeployment
         $owned = array_diff_key($owned, $retained);
         $this->assertDistinctPaths($target);
         $individual = $this->individuallyManaged($server, $repo);
-        $plan = $this->plan($server, $repo, $owned, $target, $individual);
-        $summary = $this->summary($plan, $protected);
+        $plan = $this->plan($server, $repo, $owned, $target, $individual, $switch);
+        $summary = $this->summary($plan, $protected, $switch);
         foreach (array_keys($retained) as $path) {
+            if ($switch && ModpackPaths::isExecutablePackContent($path)) {
+                $summary['blocking_conflicts'][] = $path;
+                $summary['conflicts'][] = $path;
+                $summary['paths'][$path] = 'conflict';
+                $summary['counts']['conflict']++;
+                if (str_starts_with(strtolower($path), 'mods/')) {
+                    $summary['mod_conflicts'][] = $path;
+                    $summary['mods']['conflict']++;
+                }
+
+                continue;
+            }
             $summary['counts']['preserve']++;
             $summary['paths'][$path] = 'preserve';
             if (str_starts_with($path, 'mods/')) {
@@ -66,6 +82,7 @@ final class ModpackDeployment
                 if (str_ends_with(strtolower($path), '.jar')
                     && !isset($individual[strtolower($path)]) && !isset($plan[$path])) {
                     $summary['mod_conflicts'][] = $path;
+                    $summary['blocking_conflicts'][] = $path;
                     $summary['conflicts'][] = $path;
                     $summary['mods']['conflict']++;
                     $summary['counts']['conflict']++;
@@ -78,14 +95,15 @@ final class ModpackDeployment
         if ($approval !== null && !hash_equals($approval, $this->fingerprint($state['revision'], $release, $world, $plan, $target, array_keys($retained)))) {
             throw new ModpackException('The files or ownership changed since the preview. Generate a new preview.');
         }
-        if ($summary['mod_conflicts'] !== []) {
-            throw new ModpackException('Conflicting mods were preserved. Resolve the conflicts in the update preview before updating.');
+        if ($summary['blocking_conflicts'] !== []) {
+            throw new ModpackException('Conflicting active files were preserved. Resolve the conflicts in the update preview before updating.');
         }
 
         $guard();
         $token = bin2hex(random_bytes(8));
         $staged = [];
         $applied = [];
+        $previousFiles = [];
         $started = false;
         $recovered = true;
         try {
@@ -104,7 +122,7 @@ final class ModpackDeployment
             if ($staged !== [] || $summary['counts']['delete'] > 0) {
                 $this->listings = [];
                 if ($world !== $this->world($server, $repo)
-                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo))) {
+                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo), $switch)) {
                     throw new ModpackException('Server files changed during staging. No modpack files were applied.');
                 }
                 $guard();
@@ -115,7 +133,7 @@ final class ModpackDeployment
                     $originals[$path] = $change['observed'];
                 }
             }
-            $this->inventory->begin($server, $state['revision'], $token, $backup, $originals);
+            $this->inventory->begin($server, $state['revision'], $token, $backup, $originals, $unlockBackup);
             $started = true;
             $next = $retained;
             foreach ($plan as $path => $change) {
@@ -131,6 +149,7 @@ final class ModpackDeployment
                 $previous = $action === 'add' ? null : '.mod-manager-prev-'.$token.'-'.count($applied);
                 $applied[$path] = ['previous' => $previous, 'original' => $change['observed'], 'new' => $staged[$path]['sha256'] ?? null];
                 if ($previous !== null) {
+                    $previousFiles[$directory][] = $previous;
                     $this->wings->move($repo, $server, $directory, $filename, $previous);
                     if ($this->digest($server, $repo, $directory.'/'.$previous) !== $change['observed']) {
                         throw new ModpackException("The backup move of [$path] did not preserve its content.");
@@ -148,6 +167,7 @@ final class ModpackDeployment
                     : $this->digest($server, $repo, $path) !== $change['new']) {
                     throw new ModpackException("Wings did not apply [$path] with its verified content.");
                 }
+                unset($staged[$path]);
             }
 
             $guard();
@@ -171,14 +191,16 @@ final class ModpackDeployment
 
             throw $error;
         } finally {
+            $remaining = [];
             foreach ($staged as $path => $stage) {
-                $this->wings->deleteQuietly($repo, $server, ModpackPaths::split($path)[0], $stage['temp']);
+                $remaining[ModpackPaths::split($path)[0]][] = $stage['temp'];
+            }
+            foreach ($remaining as $directory => $names) {
+                $this->wings->deleteManyQuietly($repo, $server, $directory, $names);
             }
         }
-        foreach ($applied as $path => $change) {
-            if ($change['previous'] !== null) {
-                $this->wings->deleteQuietly($repo, $server, ModpackPaths::split($path)[0], $change['previous']);
-            }
+        foreach ($previousFiles as $directory => $names) {
+            $this->wings->deleteManyQuietly($repo, $server, $directory, $names);
         }
 
         return $summary;
@@ -247,7 +269,7 @@ final class ModpackDeployment
             'size' => $item['size']];
     }
 
-    private function plan(Server $server, DaemonFileRepository $repo, array $owned, array $target, array $individual): array
+    private function plan(Server $server, DaemonFileRepository $repo, array $owned, array $target, array $individual, bool $switch): array
     {
         return ModpackDelta::plan($owned, $target, function (string $path, bool $tracked) use ($server, $repo, $individual) {
             $entry = $this->entry($server, $repo, $path);
@@ -259,14 +281,14 @@ final class ModpackDeployment
             }
 
             return $this->digest($server, $repo, $path);
-        });
+        }, $switch);
     }
 
-    private function summary(array $plan, array $protected): array
+    private function summary(array $plan, array $protected, bool $switch): array
     {
         $counts = array_fill_keys(['add', 'replace', 'delete', 'keep', 'conflict', 'modified', 'preserve'], 0);
         $mods = $counts;
-        $conflicts = $modConflicts = $paths = [];
+        $conflicts = $modConflicts = $blocking = $paths = [];
         $bytes = $unknown = 0;
         foreach ($plan as $path => $entry) {
             $action = $entry['action'];
@@ -280,6 +302,9 @@ final class ModpackDeployment
                 if ($isMod) {
                     $modConflicts[] = $path;
                 }
+                if ($isMod || ($switch && ModpackPaths::isExecutablePackContent($path))) {
+                    $blocking[] = $path;
+                }
             }
             if (in_array($action, ['add', 'replace'], true)) {
                 $bytes += $entry['size'] ?? 0;
@@ -291,7 +316,7 @@ final class ModpackDeployment
         }
 
         return ['counts' => $counts, 'mods' => $mods, 'conflicts' => $conflicts, 'mod_conflicts' => $modConflicts,
-            'paths' => $paths, 'protected' => $protected, 'stage_bytes' => $bytes, 'unknown_sizes' => $unknown];
+            'blocking_conflicts' => $blocking, 'paths' => $paths, 'protected' => $protected, 'stage_bytes' => $bytes, 'unknown_sizes' => $unknown];
     }
 
     private function assertDistinctPaths(array $target): void

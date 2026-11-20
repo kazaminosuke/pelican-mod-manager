@@ -52,6 +52,7 @@ use Illuminate\Support\Str;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
+use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
@@ -4241,14 +4242,29 @@ class ModManagerPage extends Page implements HasTable
                 ->modalDescription(trans('pelican-mod-manager::strings.modpack_updates.setup_warning'))
                 ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.modpack_updates.preview'))
                 ->schema([
+                    Select::make('provider')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.source'))
+                        ->options(fn (): array => app(ModpackCatalog::class)->archiveProviders())
+                        ->default(fn (): string => str_starts_with($this->currentModpackSelection($server) ?? '', 'curseforge:')
+                            && array_key_exists('curseforge', app(ModpackCatalog::class)->archiveProviders()) ? 'curseforge' : 'modrinth')
+                        ->selectablePlaceholder(false)
+                        ->required()
+                        ->live()
+                        ->afterStateUpdated(function (Set $set): void {
+                            $set('project', null);
+                            $set('version', null);
+                            $set('confirm_server_compatibility', false);
+                        }),
                     Select::make('project')
                         ->label(trans('pelican-mod-manager::strings.actions.install_modpack_project'))
                         ->searchable()
                         ->default(fn () => $this->currentModpackSelection($server))
                         ->required()
                         ->live()
-                        ->getSearchResultsUsing(function (string $search) use ($server): array {
-                            return app(ModpackCatalog::class)->searchOptions($server, $search);
+                        ->getSearchResultsUsing(function (Get $get, string $search) use ($server): array {
+                            $provider = ModpackProvider::tryFrom((string) $get('provider'));
+
+                            return $provider === null ? [] : app(ModpackCatalog::class)->searchOptions($server, $provider, $search);
                         })
                         ->getOptionLabelUsing(fn ($value): ?string => is_string($value) ? $value : null)
                         ->afterStateUpdated(function (Set $set): void {
@@ -4313,7 +4329,7 @@ class ModManagerPage extends Page implements HasTable
                     }
                 })
                 ->visible(fn () => $type === ProjectType::Mod
-                    && $this->canManageProjectOperation($server, ProjectOperation::Install)),
+                    && $this->canManageModpackChange($server)),
             Action::make('open_folder')
                 ->label(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->tooltip(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
@@ -4526,8 +4542,11 @@ class ModManagerPage extends Page implements HasTable
             'review' => $review,
             'backup' => $review === null ? null : $workflow->backup($server, $review),
             'canBackup' => user()->can(SubuserPermission::BackupCreate, $server),
+            'canViewBackups' => user()->can(SubuserPermission::BackupRead, $server),
             'canStart' => user()->can(SubuserPermission::ControlStart, $server),
-            'canRecover' => $this->canManageModpackChange($server) && user()->can(SubuserPermission::BackupRestore, $server),
+            'canRecover' => $this->canManageModpackChange($server) && (
+                ($current['recovery']['backup'] ?? null) === null || user()->can(SubuserPermission::BackupRestore, $server)
+            ),
         ];
     }
 
@@ -4559,7 +4578,9 @@ class ModManagerPage extends Page implements HasTable
         /** @var Server $server */
         $server = Filament::getTenant();
         $this->authorizeModpackChange($server);
-        abort_unless(user()->can(SubuserPermission::BackupRestore, $server), 403);
+        if (($this->currentModpack($server)['recovery']['backup'] ?? null) !== null) {
+            abort_unless(user()->can(SubuserPermission::BackupRestore, $server), 403);
+        }
         $this->runModpackUpdateAction(fn () => app(ModpackUpdateWorkflow::class)->confirmRestored(
             $server, $token, app(ModpackDeployment::class), app(DaemonFileRepository::class),
         ));
@@ -5164,15 +5185,17 @@ class ModManagerPage extends Page implements HasTable
         // A catalog-triggered scan must not hide a user-requested modpack
         // result or the transition back to waiting after file validation.
         if ($modpackState !== null && ($modpackState->isActive()
-            || in_array($modpackState->status, [InstalledOperationState::STATUS_WAITING_FILES, InstalledOperationState::STATUS_WAITING_REVIEW], true)
             || ($modpackState->isFinished() && $this->shouldPollInstalledOperation($modpackState)))) {
             $this->setInstalledOperationState($modpackState);
 
             return $modpackState;
         }
 
-        // Scan and bulk update are mutually exclusive. The common active
-        // scan path therefore needs only the already-fetched scan state.
+        // Waiting Modpack actions have their own panels and do not drive polling.
+        if ($modpackState !== null && !$modpackState->isActive() && !$modpackState->isFinished()) {
+            $modpackState = null;
+        }
+        // Scan and bulk update are mutually exclusive.
         if ($scanState?->isActive()) {
             $this->setInstalledOperationState($scanState);
 

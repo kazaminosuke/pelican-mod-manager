@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Services;
 
 use App\Enums\ContainerStatus;
+use App\Exceptions\Service\Backup\TooManyBackupsException;
 use App\Models\Backup;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
@@ -35,7 +36,7 @@ final class ModpackUpdateWorkflow
         return is_array($review) ? $review : null;
     }
 
-    public function publish(Server $server, string $lease, array $release, array $selection, array $summary): void
+    public function publish(Server $server, string $lease, array $release, array $selection, array $summary, ?array $artifact = null): void
     {
         if (!$this->leases->owns((int) $server->getKey(), ProjectType::Mod, $lease)) {
             throw new ModpackException('The modpack operation no longer owns the server lease.');
@@ -44,7 +45,7 @@ final class ModpackUpdateWorkflow
         unset($selection['manual_token']);
         $this->cache->put($this->key($server), [
             'token' => bin2hex(random_bytes(16)), 'release' => $release, 'selection' => $selection,
-            'summary' => $summary, 'created_at' => time(), 'backup_id' => null,
+            'summary' => $summary, 'artifact' => $artifact, 'created_at' => time(), 'backup_id' => null,
         ], self::TTL);
         $this->operations->awaitModpackReview($server, $lease);
     }
@@ -58,7 +59,14 @@ final class ModpackUpdateWorkflow
             if ($existing !== null && (!$existing->completed_at || $existing->is_successful)) {
                 return;
             }
-            $backup = $backups->setIgnoredFiles(self::FULL_BACKUP)->setIsLocked(true)->handle($server, 'Modpack update');
+            if (($review['summary']['blocking_conflicts'] ?? $review['summary']['mod_conflicts']) !== []) {
+                throw new ModpackException('Resolve the blocking files and generate a new preview before creating a backup.');
+            }
+            try {
+                $backup = $backups->setIgnoredFiles(self::FULL_BACKUP)->setIsLocked(false)->handle($server, 'Modpack update');
+            } catch (TooManyBackupsException $exception) {
+                throw new ModpackException(trans('pelican-mod-manager::strings.modpack_updates.backup_capacity'), 0, $exception);
+            }
             $review['backup_id'] = (int) $backup->getKey();
             $this->cache->put($this->key($server), $review, self::TTL);
         });
@@ -86,13 +94,23 @@ final class ModpackUpdateWorkflow
         return $backup;
     }
 
+    public function lockForApply(Server $server, Backup $backup): bool
+    {
+        return $server->backups()->whereKey($backup->getKey())->where('is_locked', false)->update(['is_locked' => true]) === 1;
+    }
+
+    public function unlockAfterApply(Server $server, string $uuid): void
+    {
+        $server->backups()->where('uuid', $uuid)->update(['is_locked' => false]);
+    }
+
     public function approve(Server $server, string $token, bool $switch, ?int $startUser): void
     {
         $review = $this->requiredReview($server, $token);
         $this->assertStopped($server);
         $this->requireBackup($server, $review);
-        if ($review['summary']['mod_conflicts'] !== []) {
-            throw new ModpackException('Resolve conflicting mods and generate a new preview.');
+        if (($review['summary']['blocking_conflicts'] ?? $review['summary']['mod_conflicts']) !== []) {
+            throw new ModpackException('Resolve the blocking files and generate a new preview.');
         }
         if ($review['release']['switch'] && !$switch) {
             throw new ModpackException('Explicit confirmation is required to switch to a different modpack.');
@@ -130,7 +148,11 @@ final class ModpackUpdateWorkflow
     {
         $this->leases->run((int) $server->getKey(), ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK, function () use ($server, $token, $deployment, $repo): void {
             $this->assertStopped($server);
+            $recovery = app(ModpackInventory::class)->read($server)['recovery'];
             $deployment->confirmRestored($server, $repo, $token);
+            if (($recovery['unlock_backup'] ?? false) && is_string($recovery['backup'])) {
+                $this->unlockAfterApply($server, $recovery['backup']);
+            }
             $this->done($server);
             $this->operations->forget($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
         });

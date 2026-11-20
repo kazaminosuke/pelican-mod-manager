@@ -200,7 +200,7 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('9620701', $runner->spawned[0]['payload']['version_id']);
         self::assertSame('925200', $runner->spawned[0]['payload']['project_id']);
         self::assertSame([
-            'egg_id' => '7', 'image' => 'ghcr.io/pelican-eggs/yolks:java_21', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
+            'egg_id' => '7', 'image' => 'ghcr.io/pelican-eggs/yolks:java_21', 'startup' => 'java -jar server.jar', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
             'artifact_id' => '9620727',
             'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => '21.1.266'],
         ], $runner->spawned[0]['payload']['selection']);
@@ -250,11 +250,16 @@ final class ModpackCreationWizardTest extends TestCase
 
     public static function existingUpdateDependencies(): array
     {
-        return ['without manual files' => [false], 'after manual upload' => [true]];
+        return [
+            'update without manual files' => [false],
+            'update after manual upload' => [true],
+            'new server with loader' => [false, true],
+            'new server with incomplete loader' => [false, true, true],
+        ];
     }
 
     #[DataProvider('existingUpdateDependencies')]
-    public function test_existing_update_runs_preview_backup_and_apply_through_the_background_entry_point(bool $manual): void
+    public function test_archive_job_verifies_runtime_and_updates_through_the_background_entry_point(bool $manual, bool $initial = false, bool $missingRuntime = false): void
     {
         require_once __DIR__.'/../Services/ModpackDeploymentTest.php';
         $this->addEgg(7, 'Fabric', '10000000-b803-4f34-82cf-2d6518c6351a', ['MC_VERSION' => '1.20.1', 'LOADER_VERSION' => '0.15.0']);
@@ -276,6 +281,7 @@ final class ModpackCreationWizardTest extends TestCase
             $table->string('uuid');
             $table->json('ignored_files');
             $table->boolean('is_successful');
+            $table->boolean('is_locked')->default(false);
             $table->timestamp('completed_at')->nullable();
             $table->timestamps();
         });
@@ -296,14 +302,31 @@ final class ModpackCreationWizardTest extends TestCase
         $this->app->instance(DaemonFileRepository::class, $repo);
         $this->app->instance(DaemonServerRepository::class, $daemon);
         $wings = new DeploymentWings();
-        $wings->files = ['config/old.toml' => 'default-v1', 'mods/old.bin' => 'original'];
+        $runtimeJar = tempnam(sys_get_temp_dir(), 'fabric-launcher');
+        $launcher = new ZipArchive();
+        $launcher->open($runtimeJar, ZipArchive::OVERWRITE);
+        $fabricLoader = 'libraries/net/fabricmc/fabric-loader/0.15.0/fabric-loader-0.15.0.jar';
+        $intermediary = 'libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar';
+        $launcher->addFromString('META-INF/MANIFEST.MF',
+            "Manifest-Version: 1.0\r\nMain-Class: net.fabricmc.loader.impl.launch.server.FabricServerLauncher\r\nClass-Path: $fabricLoader\r\n  $intermediary\r\n");
+        $launcher->close();
+        $wings->files = ['server.jar' => file_get_contents($runtimeJar), $fabricLoader => "PK\x03\x04", $intermediary => "PK\x03\x04",
+            'minecraft-server.jar' => "PK\x03\x04"];
+        unlink($runtimeJar);
         $this->app->instance(WingsRemoteFilesystem::class, $wings);
         $inventory = app(ModpackInventory::class);
-        $inventory->begin($server, null, 'initial', null);
-        $inventory->finish($server, 'initial', ['provider' => 'curseforge', 'pack_id' => '285109', 'version_id' => 'old', 'files' => [
-            'config/old.toml' => ['identity' => hash('sha256', 'default-v1'), 'sha256' => hash('sha256', 'default-v1')],
-            'mods/old.bin' => ['identity' => 'old', 'sha256' => hash('sha256', 'original')],
-        ]]);
+        if ($missingRuntime) {
+            unset($wings->files[$fabricLoader]);
+        }
+
+        if (!$initial) {
+            $wings->files += ['config/old.toml' => 'default-v1', 'mods/old.bin' => 'original'];
+            $inventory->begin($server, null, 'initial', null);
+            $inventory->finish($server, 'initial', ['provider' => 'curseforge', 'pack_id' => '285109', 'version_id' => 'old', 'files' => [
+                'config/old.toml' => ['identity' => hash('sha256', 'default-v1'), 'sha256' => hash('sha256', 'default-v1')],
+                'mods/old.bin' => ['identity' => 'old', 'sha256' => hash('sha256', 'original')],
+            ]]);
+        }
 
         $zip = new ZipArchive();
         $jar = tempnam(sys_get_temp_dir(), 'managed-update-jar');
@@ -338,10 +361,23 @@ final class ModpackCreationWizardTest extends TestCase
 
         $operations = app(InstalledOperationManager::class);
         $workflow = app(ModpackUpdateWorkflow::class);
-        $selection = ['managed_phase' => 'preview', 'egg_id' => '7', 'image' => $server->image, 'variables' => app(InstalledEggCatalog::class)->variableValues($server),
+        $selection = ['managed_phase' => $initial ? 'initial' : 'preview', 'egg_id' => '7', 'image' => $server->image, 'variables' => app(InstalledEggCatalog::class)->variableValues($server),
             'minecraft' => '1.20.1', 'loader' => 'fabric', 'loader_version' => '0.15.0', 'server_pack' => false, 'artifact_id' => '4612979'];
         self::assertTrue($operations->dispatchModpackInstall($server, ProjectType::Mod, 'curseforge', '285109', '4612979', selection: $selection)['dispatched']);
         BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
+        if ($initial) {
+            $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+            self::assertSame($missingRuntime ? 'failed' : 'completed', $state?->status, (string) ($state?->result['message'] ?? ''));
+            if ($missingRuntime) {
+                self::assertNull($inventory->read($server)['inventory']);
+                self::assertArrayNotHasKey('config/old.toml', $wings->files);
+            } else {
+                self::assertSame('4612979', $inventory->read($server)['inventory']['version_id']);
+                self::assertSame('default-v2', $wings->files['config/old.toml']);
+            }
+
+            return;
+        }
         if ($manual) {
             $pending = $operations->waitingCurseForgeModpack($server);
             self::assertSame('4612979', $pending['version_id']);
@@ -359,7 +395,7 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('original', $wings->files['mods/old.bin']);
         $backup = Mockery::mock(InitiateBackupService::class);
         $backup->shouldReceive('setIgnoredFiles')->with(['# Full modpack update backup'])->andReturnSelf();
-        $backup->shouldReceive('setIsLocked')->with(true)->andReturnSelf();
+        $backup->shouldReceive('setIsLocked')->with(false)->andReturnSelf();
         $backup->shouldReceive('handle')->once()->andReturnUsing(function (): Backup {
             $id = DB::table('backups')->insertGetId(['server_id' => 42, 'uuid' => 'backup-42', 'is_successful' => true,
                 'ignored_files' => json_encode(['# Full modpack update backup'], JSON_THROW_ON_ERROR), 'completed_at' => now(), 'created_at' => now()]);
@@ -372,6 +408,8 @@ final class ModpackCreationWizardTest extends TestCase
         $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
         self::assertSame('completed', $state?->status, (string) ($state?->result['message'] ?? ''));
         self::assertSame('backup-42', $state->result['backup']);
+        self::assertFalse(Backup::query()->where('uuid', 'backup-42')->firstOrFail()->is_locked);
+        self::assertCount($manual ? 2 : 1, Http::recorded(fn ($request) => $request->url() === 'https://edge.forgecdn.net/job-pack.zip'));
         self::assertSame('default-v2', $wings->files['config/old.toml']);
         self::assertArrayNotHasKey('mods/old.bin', $wings->files);
         self::assertNull($workflow->review($server));
@@ -382,11 +420,13 @@ final class ModpackCreationWizardTest extends TestCase
         }
     }
 
-    public function test_wizard_requires_confirmation_and_sends_the_generic_egg_the_exact_version(): void
+    public function test_wizard_requires_confirmation_and_uses_archive_even_with_curseforge_generic_installed(): void
     {
+        $this->app->instance(PluginBackgroundRunner::class, PluginBackgroundRunner::fake());
         $this->addEgg(8, 'CurseForge Generic', '019bbf16-a3f3-470a-9c0b-f3995b5e032a', [
             'PROJECT_ID' => '', 'VERSION_ID' => 'latest', 'API_KEY' => '',
         ]);
+        $this->addEgg(7, 'Forge', 'ed072427-f209-4603-875c-f540c6dd5a65', ['MC_VERSION' => 'latest', 'FORGE_VERSION' => 'latest']);
         Http::fake([
             'api.modrinth.com/v2/tag/game_version' => Http::response([]),
             'api.curseforge.com/v1/mods/search*' => Http::response([
@@ -403,10 +443,11 @@ final class ModpackCreationWizardTest extends TestCase
         ]);
         $service = Mockery::mock(ServerCreationService::class);
         $service->shouldReceive('handle')->once()->withArgs(function (array $data): bool {
-            self::assertSame(8, $data['egg_id']);
-            self::assertSame('123', $data['environment']['PROJECT_ID']);
-            self::assertSame('456', $data['environment']['VERSION_ID']);
-            self::assertSame('test-curseforge-credential', $data['environment']['API_KEY']);
+            self::assertSame(7, $data['egg_id']);
+            self::assertSame('1.20.1', $data['environment']['MC_VERSION']);
+            self::assertSame('archive', $data['mm_install_plan']['mode']);
+            self::assertSame('456', $data['mm_install_plan']['version_id']);
+            self::assertArrayNotHasKey('API_KEY', $data['environment']);
 
             return true;
         })->andReturn((new Server())->forceFill(['id' => 43]));
@@ -418,7 +459,7 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_project', 'curseforge:123')
             ->set('data.mm_version', '456')
             ->assertDontSee('test-curseforge-credential')
-            ->assertSet('data.environment.API_KEY', '********')
+            ->assertSet('data.egg_id', 7)
             ->call('create')
             ->assertHasErrors('data.mm_confirm_compatibility')
             ->set('data.mm_confirm_compatibility', true)
@@ -474,6 +515,20 @@ final class ModpackCreationWizardTest extends TestCase
         ]);
 
         $service = Mockery::mock(ServerCreationService::class);
+        if ($provider === 'ftb') {
+            $service->shouldNotReceive('handle');
+            $this->app->instance(ServerCreationService::class, $service);
+            Livewire::test(ModpackCreationWizardHarness::class)
+                ->set('data.mm_provider', 'ftb')
+                ->set('data.mm_query', 'Vanilla')
+                ->set('data.mm_modpack', true)
+                ->set('data.mm_project', 'ftb:18')
+                ->set('data.mm_version', '12169')
+                ->assertSee('This wizard can browse FTB releases.')
+                ->call('create')->assertHasErrors();
+
+            return;
+        }
         $service->shouldReceive('handle')->once()->withArgs(function (array $data) use ($provider, $project, $version, $variables): bool {
             self::assertSame(9, $data['egg_id']);
             self::assertSame($variables, $data['environment']);
@@ -492,15 +547,6 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_modpack', true)
             ->set('data.mm_project', $provider.':'.$project)
             ->set('data.mm_version', $version);
-        if ($provider === 'ftb') {
-            $wizard->assertSee('The FTB Egg can report completion after an installer failure.')
-                ->assertSet('data.start_on_completion', '0')
-                ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
-                ->set('data.mm_confirm_compatibility', true)
-                ->set('data.start_on_completion', '1')
-                ->call('create')->assertHasErrors('data.mm_project')
-                ->set('data.start_on_completion', '0');
-        }
         $wizard->call('create')->assertHasNoErrors();
     }
 
@@ -600,6 +646,7 @@ final class ModpackCreationWizardTest extends TestCase
     public function test_modrinth_manifest_pins_the_fabric_loader_for_archive_creation(): void
     {
         $this->app->instance(PluginBackgroundRunner::class, PluginBackgroundRunner::fake());
+        $this->addEgg(8, 'Modrinth Generic', '04befa18-37cf-41e9-b04d-89b3578bba6d', ['PROJECT_ID' => '', 'VERSION_ID' => '']);
         $this->addEgg(9, 'Fabric', '78b02ebb-fec8-49c5-943c-ca4aa117b693', [
             'MC_VERSION' => 'latest', 'LOADER_VERSION' => 'latest', 'FABRIC_VERSION' => 'latest',
         ]);
@@ -610,7 +657,7 @@ final class ModpackCreationWizardTest extends TestCase
         $zip->addFromString('modrinth.index.json', json_encode([
             'formatVersion' => 1, 'game' => 'minecraft',
             'dependencies' => ['minecraft' => '1.19.3', 'fabric-loader' => '0.14.12'],
-            'files' => [['path' => 'mods/krypton.jar', 'downloads' => ['https://cdn.modrinth.com/krypton.jar']]],
+            'files' => [['path' => 'mods/krypton.jar', 'downloads' => ['https://cdn.modrinth.com/krypton.jar'], 'env' => ['server' => 'required']]],
         ], JSON_THROW_ON_ERROR));
         $zip->close();
         $bytes = file_get_contents($archive);

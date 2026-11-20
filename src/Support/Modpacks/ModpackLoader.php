@@ -24,8 +24,16 @@ final class ModpackLoader
     /** Check the existing Egg's pinned startup variable against the selected release. */
     public static function hasBuild(string $loader, string $build, ?string $minecraft, array $variables): bool
     {
-        $variable = $loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($loader).'_VERSION';
-        $actual = (string) ($variables[$variable] ?? '');
+        return self::matchesBuild($loader, $build, (string) ($variables[self::buildVariable($loader)] ?? ''), $minecraft);
+    }
+
+    public static function buildVariable(string $loader): string
+    {
+        return $loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($loader).'_VERSION';
+    }
+
+    public static function matchesBuild(string $loader, string $build, string $actual, ?string $minecraft): bool
+    {
         if ($actual === $build) {
             return true;
         }

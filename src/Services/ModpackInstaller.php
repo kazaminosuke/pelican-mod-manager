@@ -9,34 +9,20 @@ use Kazaminosuke\ModManager\Exceptions\CurseForgeDependenciesPending;
 use Kazaminosuke\ModManager\Exceptions\CurseForgeManualFileException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
-use Kazaminosuke\ModManager\Support\ArchiveSignature;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
-use Kazaminosuke\ModManager\Support\Modpacks\ModpackInstallResult;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackManifest;
-use Kazaminosuke\ModManager\Support\Modpacks\ModpackOverrideFile;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackRemoteFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Psr\Http\Message\StreamInterface;
-use Throwable;
 use ZipArchive;
 
 /**
- * Installs a modpack onto an existing server without deleting worlds or
- * replacing files the operator already has in override paths.
- *
- * Downloaded mods are swapped through a backup and restored if a later file
- * fails. Config overrides are written only when that relative path is absent.
+ * Resolves one selected archive into the target consumed by ModpackDeployment.
  */
 final class ModpackInstaller
 {
-    /** @var list<array{directory: string, filename: string, backup: ?string}> */
-    private array $placed = [];
-
-    /** @var array<string, array<string, true>> */
-    private array $overrideDirectoryListings = [];
-
     private readonly CurseForgeManualFiles $manualFiles;
 
     public function __construct(
@@ -44,185 +30,6 @@ final class ModpackInstaller
         private readonly CurseForgeSource $curseForge,
     ) {
         $this->manualFiles = new CurseForgeManualFiles($wings);
-    }
-
-    /**
-     * @param  callable(int, int): void|null  $progress
-     * @param  callable(): void|null  $prepared
-     */
-    public function installFromZip(
-        Server $server,
-        DaemonFileRepository $fileRepository,
-        string $zipPath,
-        ?string $serverLoader = null,
-        ?string $serverMinecraftVersion = null,
-        ?callable $progress = null,
-        bool $strictMinecraftVersion = false,
-        ?callable $prepared = null,
-    ): ModpackInstallResult {
-        $this->placed = [];
-        $this->overrideDirectoryListings = [];
-        $manifest = ModpackArchive::read($zipPath);
-        $this->assertLoaderCompatible($manifest->loader, $serverLoader);
-        $warnings = $manifest->skipped;
-        if ($manifest->minecraftVersion !== null
-            && $serverMinecraftVersion !== null
-            && $manifest->minecraftVersion !== $serverMinecraftVersion) {
-            if ($strictMinecraftVersion) {
-                throw new ModpackException("This modpack requires Minecraft [{$manifest->minecraftVersion}] but the server uses [{$serverMinecraftVersion}].");
-            }
-            $warnings[] = 'minecraft-version:'.$manifest->minecraftVersion;
-        }
-
-        $staged = [];
-        $installed = 0;
-        $completed = 0;
-
-        try {
-            $remoteFiles = $this->resolveDownloads($server, $fileRepository, $manifest, $warnings, $staged);
-            if ($prepared !== null) {
-                $prepared();
-            }
-            $steps = count($remoteFiles) + count($manifest->overrides);
-            $skipped = count($manifest->remoteFiles) - count($remoteFiles);
-            foreach ($remoteFiles as $file) {
-                if ($this->placeRemoteFile($server, $fileRepository, $file, $staged[$file->path] ?? null)) {
-                    $installed++;
-                } else {
-                    $skipped++;
-                }
-                $completed++;
-                if ($progress !== null) {
-                    $progress($completed, $steps);
-                }
-            }
-
-            foreach ($manifest->overrides as $override) {
-                if ($this->placeOverride($server, $fileRepository, $override)) {
-                    $installed++;
-                } else {
-                    $skipped++;
-                }
-                $completed++;
-                if ($progress !== null) {
-                    $progress($completed, $steps);
-                }
-            }
-        } catch (Throwable $exception) {
-            $this->rollback($server, $fileRepository);
-
-            throw $exception;
-        } finally {
-            foreach ($staged as $stream) {
-                $stream->close();
-            }
-        }
-
-        $this->discardBackups($server, $fileRepository);
-
-        return new ModpackInstallResult(
-            name: $manifest->name,
-            version: $manifest->version,
-            installed: $installed,
-            skipped: $skipped,
-            warnings: $warnings,
-        );
-    }
-
-    /**
-     * @param  callable(int, int): void  $progress
-     */
-    public function installServerPack(
-        Server $server,
-        DaemonFileRepository $fileRepository,
-        string $zipPath,
-        string $name,
-        string $version,
-        ?string $loader,
-        ?string $minecraftVersion,
-        ?string $serverLoader,
-        ?string $serverMinecraftVersion,
-        callable $progress,
-    ): ModpackInstallResult {
-        $this->placed = [];
-        $this->overrideDirectoryListings = [];
-        $zip = new ZipArchive();
-        if ($zip->open($zipPath) !== true) {
-            throw new ModpackException('The CurseForge server pack could not be opened.');
-        }
-
-        $installed = 0;
-        $warnings = [];
-        try {
-            $this->assertLoaderCompatible($loader, $serverLoader);
-            if ($minecraftVersion !== null && $serverMinecraftVersion !== null && $minecraftVersion !== $serverMinecraftVersion) {
-                $warnings[] = 'minecraft-version:'.$minecraftVersion;
-            }
-
-            $files = ModpackArchive::serverFiles($zip);
-            foreach ($files as $i => $file) {
-                $path = $file['path'];
-                [$directory, $filename] = ModpackPaths::split($path);
-                if (!$this->overrideExists($server, $fileRepository, $directory, $filename)) {
-                    $this->placeServerPackFile($server, $fileRepository, $zip, $file);
-                    $this->overrideDirectoryListings[$directory][strtolower($filename)] = true;
-                    $this->placed[] = ['directory' => $directory, 'filename' => $filename, 'backup' => null];
-                    $installed++;
-                }
-                $progress($i + 1, count($files));
-            }
-        } catch (Throwable $exception) {
-            $this->rollback($server, $fileRepository);
-
-            throw $exception;
-        } finally {
-            $zip->close();
-        }
-
-        return new ModpackInstallResult($name, $version, $installed, count($files) - $installed, $warnings);
-    }
-
-    /** @param array{path: string, index: int, size: int} $file */
-    private function placeServerPackFile(Server $server, DaemonFileRepository $fileRepository, ZipArchive $zip, array $file): void
-    {
-        [$directory, $filename] = ModpackPaths::split($file['path']);
-        $resource = $zip->getStreamIndex($file['index']);
-        if ($resource === false) {
-            throw new ModpackException("Server pack entry [{$file['path']}] could not be opened.");
-        }
-
-        $temp = '.mod-manager-'.bin2hex(random_bytes(8)).'.tmp';
-        try {
-            if (str_starts_with($file['path'], 'mods/')) {
-                // The stream is forward-only. Reopen it after checking the
-                // signature so the upload includes the complete JAR.
-                $signature = fread($resource, 4);
-                if (!is_string($signature) || !ArchiveSignature::isZip($signature)) {
-                    throw new ModpackException("Server pack mod [{$file['path']}] is not a valid JAR.");
-                }
-                fclose($resource);
-                $resource = $zip->getStreamIndex($file['index']);
-                if ($resource === false) {
-                    throw new ModpackException("Server pack entry [{$file['path']}] could not be reopened.");
-                }
-            }
-
-            $stream = Utils::streamFor($resource, ['size' => $file['size']]);
-            try {
-                $this->wings->putStream($fileRepository, $server, $directory.'/'.$temp, $stream);
-                $this->wings->move($fileRepository, $server, $directory, $temp, $filename);
-            } finally {
-                $stream->close();
-            }
-        } catch (Throwable $exception) {
-            $this->wings->deleteQuietly($fileRepository, $server, $directory, $temp);
-
-            throw $exception;
-        } finally {
-            if (is_resource($resource)) {
-                fclose($resource);
-            }
-        }
     }
 
     /**
@@ -243,6 +50,8 @@ final class ModpackInstaller
         ?string $backup,
         callable $guard,
         ?array $runtime = null,
+        bool $verifyInstalledRuntime = false,
+        bool $unlockBackup = false,
     ): array {
         $snapshots = [];
         $zip = null;
@@ -256,7 +65,24 @@ final class ModpackInstaller
                     $zip = null;
                     throw new ModpackException('The server pack could not be opened.');
                 }
-                foreach (ModpackArchive::serverFiles($zip) as $entry) {
+                $entries = ModpackArchive::serverFiles($zip);
+                $metadata = ModpackArchive::serverPackRuntime($zip, $entries[0]);
+                if ($metadata !== null) {
+                    $this->assertLoaderCompatible($metadata['loader'], $loader);
+                    $this->assertMinecraftCompatible($metadata['minecraft'], $minecraft);
+                    $this->assertBuild($metadata['loader'], $metadata['build'], $metadata['minecraft'], $runtime);
+                    $selectedBuild = $release['loader_version'] ?? null;
+                    if ($selectedBuild !== null && !ModpackLoader::matchesBuild($metadata['loader'], $metadata['build'], $selectedBuild, $metadata['minecraft'])) {
+                        throw new ModpackException('The server ZIP requires a different loader build from the selected release.');
+                    }
+                } else {
+                    $this->assertBuild($release['loader'], $release['loader_version'] ?? null, $release['minecraft_version'], $runtime);
+                }
+                $verifiedBuild = $metadata['build'] ?? $release['loader_version'] ?? null;
+                if ($verifyInstalledRuntime) {
+                    $this->assertInstalledRuntime($server, $repo, $loader, $minecraft, $verifiedBuild, $runtime);
+                }
+                foreach ($entries as $entry) {
                     $open = static function () use ($zip, $entry): StreamInterface {
                         $stream = $zip->getStreamIndex($entry['index']);
                         if ($stream === false) {
@@ -287,9 +113,10 @@ final class ModpackInstaller
                 }
                 $this->assertLoaderCompatible($manifest->loader, $loader);
                 $this->assertMinecraftCompatible($manifest->minecraftVersion, $minecraft);
-                if ($runtime !== null && $manifest->loader !== null && $manifest->loaderVersion !== null
-                    && !ModpackLoader::hasBuild($manifest->loader, $manifest->loaderVersion, $manifest->minecraftVersion, $runtime)) {
-                    throw new ModpackException("The archive requires {$manifest->loader} {$manifest->loaderVersion}. Verify the existing runtime before updating.");
+                $this->assertBuild($manifest->loader, $manifest->loaderVersion, $manifest->minecraftVersion, $runtime);
+                $verifiedBuild = $manifest->loaderVersion ?? $release['loader_version'] ?? null;
+                if ($verifyInstalledRuntime) {
+                    $this->assertInstalledRuntime($server, $repo, $loader, $minecraft, $verifiedBuild, $runtime);
                 }
                 $warnings = $manifest->skipped;
                 $files = $this->resolveDownloads($server, $repo, $manifest, $warnings, $snapshots);
@@ -313,7 +140,7 @@ final class ModpackInstaller
                         return $snapshot;
                     };
                     $target[$path] = $this->managedEntry($identity, $hashes['sha256'] ?? null, $file->size, $hashes,
-                        $file->fileId === null ? null : (string) $file->fileId, $file->projectId === null ? null : (string) $file->projectId, $open, $file->url);
+                        $file->fileId === null ? null : (string) $file->fileId, $file->projectId === null ? null : (string) $file->projectId, $open, $file->url, $file->required);
                 }
                 foreach ($manifest->overrides as $override) {
                     if (isset($target[$override->path])) {
@@ -325,9 +152,10 @@ final class ModpackInstaller
                 }
             }
 
-            $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard, $warnings);
+            $release['loader_version'] = $verifiedBuild;
+            $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard, $warnings, $unlockBackup);
 
-            return [...$result, 'warnings' => $warnings];
+            return [...$result, 'warnings' => $warnings, 'runtime_build' => $verifiedBuild];
         } finally {
             foreach ($snapshots as $snapshot) {
                 $snapshot->close();
@@ -336,10 +164,25 @@ final class ModpackInstaller
         }
     }
 
-    private function managedEntry(?string $identity, ?string $sha256, ?int $size, array $hashes, ?string $fileId, ?string $projectId, ?callable $open, ?string $url): array
+    private function managedEntry(?string $identity, ?string $sha256, ?int $size, array $hashes, ?string $fileId, ?string $projectId, ?callable $open, ?string $url, bool $required = false): array
     {
         return ['identity' => $identity, 'sha256' => $sha256, 'size' => $size, 'hashes' => $hashes, 'file_id' => $fileId,
-            'project_id' => $projectId, 'open' => $open, 'url' => $url];
+            'project_id' => $projectId, 'open' => $open, 'url' => $url, 'required' => $required];
+    }
+
+    private function assertInstalledRuntime(Server $server, DaemonFileRepository $repo, ?string $loader, ?string $minecraft, ?string $build, ?array $runtime): void
+    {
+        if ($loader === null || $minecraft === null || $runtime === null) {
+            throw new ModpackException('The loader installation cannot be verified.');
+        }
+        (new ModpackRuntime($this->wings))->assertInstalled($server, $repo, $loader, $minecraft, $build, $runtime);
+    }
+
+    private function assertBuild(?string $loader, ?string $build, ?string $minecraft, ?array $runtime): void
+    {
+        if ($runtime !== null && $loader !== null && $build !== null && !ModpackLoader::hasBuild($loader, $build, $minecraft, $runtime)) {
+            throw new ModpackException("The archive requires $loader $build. Verify the installed loader and its configured build.");
+        }
     }
 
     private function assertMinecraftCompatible(?string $required, ?string $actual): void
@@ -385,6 +228,7 @@ final class ModpackInstaller
         $missing = [];
         $requiredMissing = false;
         $remainingBytes = CurseForgeManualFiles::MAX_BATCH_BYTES;
+        $uploads = null;
         $targets = [];
         foreach ($manifest->remoteFiles as $file) {
             if ($file->url !== null && $file->path !== null) {
@@ -419,10 +263,13 @@ final class ModpackInstaller
                 if ($path === null) {
                     throw new CurseForgeManualFileException($dependency, $dependency->reason ?? 'metadata_missing');
                 }
-                $snapshot = $this->manualFiles->verifiedSnapshot($server, $repository, $dependency, $remainingBytes);
+                if ($dependency->canUpload()) {
+                    $uploads ??= $this->manualFiles->uploads($server, $repository);
+                }
+                $snapshot = $this->manualFiles->verifiedSnapshot($server, $repository, $dependency, $remainingBytes, $uploads);
                 $staged[$path] = $snapshot;
                 $remainingBytes -= $snapshot->getSize() ?? 0;
-                $resolved[] = $file->withPath($path, $snapshot->getSize());
+                $resolved[] = $file->withPath($path, $snapshot->getSize(), $dependency->hashes);
             } catch (CurseForgeManualFileException $exception) {
                 $missing[$key] = $dependency->details($file->required || ($missing[$key]['required'] ?? false), $exception->reason);
                 $requiredMissing = $requiredMissing || $file->required;
@@ -435,175 +282,6 @@ final class ModpackInstaller
         }
 
         return $resolved;
-    }
-
-    private function placeRemoteFile(
-        Server $server,
-        DaemonFileRepository $fileRepository,
-        ModpackRemoteFile $file,
-        ?StreamInterface $snapshot = null,
-    ): bool {
-        $path = $file->path;
-        $url = $file->url;
-        if (!is_string($path) || ($snapshot === null && !is_string($url))) {
-            throw new ModpackException('A modpack download is incomplete.');
-        }
-
-        if (ModpackPaths::isProtected($path)) {
-            return false;
-        }
-
-        [$directory, $filename] = ModpackPaths::split($path);
-        $temp = '.mod-manager-pull-'.bin2hex(random_bytes(8));
-        $backup = null;
-        $activated = false;
-
-        try {
-            if ($snapshot !== null) {
-                $this->wings->putStream($fileRepository, $server, $directory.'/'.$temp, $snapshot);
-            } else {
-                $this->assertHttps($url);
-                $this->wings->pullForeground($fileRepository, $server, $url, $directory, $temp);
-            }
-            $listed = $this->wings->findListedFile($fileRepository, $server, $directory, $temp);
-            if ($listed === null) {
-                throw new ModpackException("Downloaded file [{$path}] was not stored.");
-            }
-
-            $size = $this->wings->listedFileSize($listed);
-            if ($size === null || $size <= 0) {
-                throw new ModpackException("Downloaded file [{$path}] is empty.");
-            }
-            if ($file->size !== null && $size !== $file->size) {
-                throw new ModpackException("Downloaded file [{$path}] size [{$size}] does not match expected size [{$file->size}].");
-            }
-
-            if ($this->requiresZip($filename)) {
-                $header = $this->wings->readPrefix($fileRepository, $server, $directory, $temp);
-                if (!ArchiveSignature::isZip($header)) {
-                    throw new ModpackException("Downloaded file [{$path}] is not a valid ZIP or JAR.");
-                }
-            }
-
-            $exists = $this->wings->findListedFile($fileRepository, $server, $directory, $filename) !== null;
-            if ($exists) {
-                $backup = '.mod-manager-prev-'.bin2hex(random_bytes(8));
-                $this->wings->move($fileRepository, $server, $directory, $filename, $backup);
-            }
-
-            $this->wings->move($fileRepository, $server, $directory, $temp, $filename);
-            $activated = true;
-            // Keep the previous file until every later file succeeds.
-            $this->placed[] = ['directory' => $directory, 'filename' => $filename, 'backup' => $backup];
-
-            return true;
-        } catch (Throwable $exception) {
-            $this->wings->deleteQuietly($fileRepository, $server, $directory, $temp);
-            if (!$activated && $backup !== null) {
-                try {
-                    $this->wings->move($fileRepository, $server, $directory, $backup, $filename);
-                } catch (Throwable $restore) {
-                    report($restore);
-                }
-            }
-
-            if ($exception instanceof ModpackException) {
-                throw $exception;
-            }
-
-            throw new ModpackException("Failed to install [{$path}]: {$exception->getMessage()}", 0, $exception);
-        }
-    }
-
-    private function placeOverride(
-        Server $server,
-        DaemonFileRepository $fileRepository,
-        ModpackOverrideFile $override,
-    ): bool {
-        if (ModpackPaths::isProtected($override->path)) {
-            return false;
-        }
-
-        [$directory, $filename] = ModpackPaths::split($override->path);
-        if ($this->overrideExists($server, $fileRepository, $directory, $filename)) {
-            return false;
-        }
-
-        $this->wings->put($fileRepository, $server, $override->path, $override->contents);
-        $this->overrideDirectoryListings[$directory][strtolower($filename)] = true;
-        $this->placed[] = ['directory' => $directory, 'filename' => $filename, 'backup' => null];
-
-        return true;
-    }
-
-    private function overrideExists(
-        Server $server,
-        DaemonFileRepository $fileRepository,
-        string $directory,
-        string $filename,
-    ): bool {
-        $target = strtolower($filename);
-        if (array_key_exists($directory, $this->overrideDirectoryListings)) {
-            return isset($this->overrideDirectoryListings[$directory][$target]);
-        }
-
-        try {
-            $listing = $this->wings->listDirectory($fileRepository, $server, $directory);
-            $names = [];
-            foreach ($listing as $item) {
-                if (is_array($item) && is_string($item['name'] ?? null) && ($item['directory'] ?? false) !== true) {
-                    $names[strtolower($item['name'])] = true;
-                }
-            }
-            $this->overrideDirectoryListings[$directory] = $names;
-
-            return isset($names[$target]);
-        } catch (Throwable) {
-            // Fall back to findListedFile when listDirectory is overridden by a test double.
-            try {
-                return $this->wings->findListedFile($fileRepository, $server, $directory, $filename) !== null;
-            } catch (Throwable) {
-                return false;
-            }
-        }
-    }
-
-    private function discardBackups(Server $server, DaemonFileRepository $fileRepository): void
-    {
-        foreach ($this->placed as $placed) {
-            if ($placed['backup'] !== null) {
-                $this->wings->deleteQuietly($fileRepository, $server, $placed['directory'], $placed['backup']);
-            }
-        }
-    }
-
-    private function rollback(Server $server, DaemonFileRepository $fileRepository): void
-    {
-        foreach (array_reverse($this->placed) as $placed) {
-            $this->wings->deleteQuietly($fileRepository, $server, $placed['directory'], $placed['filename']);
-            if ($placed['backup'] !== null) {
-                try {
-                    $this->wings->move(
-                        $fileRepository,
-                        $server,
-                        $placed['directory'],
-                        $placed['backup'],
-                        $placed['filename'],
-                    );
-                } catch (Throwable $exception) {
-                    report($exception);
-                }
-            }
-        }
-
-        $this->placed = [];
-    }
-
-    private function requiresZip(string $filename): bool
-    {
-        $filename = strtolower($filename);
-
-        return str_ends_with($filename, '.jar') || str_ends_with($filename, '.zip');
     }
 
     private function assertHttps(string $url): void

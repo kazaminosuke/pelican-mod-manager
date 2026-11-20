@@ -38,8 +38,6 @@ final class ModpackCreationStep
         'skip_scripts', 'start_on_completion', 'server_variables', 'environment',
     ];
 
-    private const MASKED_API_KEY = '********';
-
     public static function step(): Step
     {
         return Step::make('modpack')
@@ -180,7 +178,7 @@ final class ModpackCreationStep
                         return $warning !== null ? trans('pelican-mod-manager::strings.modpacks.'.$warning) : '';
                     })
                     ->visible(fn (Get $get): bool => self::result($get, $get('mm_egg'))?->compatibilityWarning !== null)
-                    ->accepted()
+                    ->accepted(fn (Get $get): bool => self::result($get, $get('mm_egg'))?->compatibilityWarning !== null)
                     ->dehydrated(false),
                 Hidden::make('mm_guard')
                     ->default(true)
@@ -303,33 +301,18 @@ final class ModpackCreationStep
         }
 
         $environment = (array) $get('environment');
-        $usesApiKey = self::usesCurseForgeApiKey($result);
+        if ($result->mode === ProvisioningMode::Archive && $result->minecraftVersion !== null
+            && !array_key_exists('MC_VERSION', $environment) && !array_key_exists('MINECRAFT_VERSION', $environment)) {
+            throw self::startupValidationError($component);
+        }
         foreach ($result->variables as $name => $value) {
-            if ($usesApiKey && $name === 'API_KEY') {
-                continue;
-            }
-            if ($result->mode === ProvisioningMode::Archive && !array_key_exists($name, $environment)) {
+            if ($result->mode === ProvisioningMode::Archive && in_array($name, ['MC_VERSION', 'MINECRAFT_VERSION'], true)
+                && !array_key_exists($name, $environment)) {
                 continue;
             }
             if ((string) ($environment[$name] ?? '') !== $value) {
                 throw self::startupValidationError($component);
             }
-        }
-
-        if ($usesApiKey) {
-            $environmentField = $component->getRootContainer()->getComponentByStatePath(
-                $component->resolveRelativeStatePath('environment'),
-                withHidden: true,
-                withAbsoluteStatePath: true,
-            );
-            if (!$environmentField instanceof Hidden || !array_key_exists('API_KEY', $environment)) {
-                throw self::startupValidationError($component);
-            }
-            // The Panel service receives the real credential. Livewire's
-            // state and the startup editor only ever display the placeholder.
-            $environmentField->dehydrateStateUsing(
-                fn (mixed $state): array => array_replace((array) $state, ['API_KEY' => $result->variables['API_KEY']]),
-            );
         }
 
         [$source, $project] = explode(':', (string) $get('mm_project'), 2);
@@ -342,13 +325,14 @@ final class ModpackCreationStep
             'selection' => [
                 'egg_id' => (string) $result->selected?->id,
                 'image' => $image,
+                'startup' => (string) $get('startup'),
                 'minecraft' => $result->minecraftVersion,
                 'loader' => $result->loader ?? $result->selected?->loader,
                 'server_pack' => $result->serverFileStatus === 'server_pack_selected',
                 'artifact_id' => $result->artifactId,
                 'variables' => $result->mode === ProvisioningMode::Archive ? array_intersect_key(
                     $environment,
-                    array_flip(['MINECRAFT_VERSION', 'MC_VERSION', 'LOADER_VERSION', 'FORGE_VERSION', 'NEOFORGE_VERSION', 'QUILT_VERSION']),
+                    array_flip(['MINECRAFT_VERSION', 'MC_VERSION', 'LOADER_VERSION', 'FORGE_VERSION', 'NEOFORGE_VERSION', 'QUILT_VERSION', 'SERVER_JARFILE']),
                 ) : [],
             ],
         ];
@@ -363,13 +347,7 @@ final class ModpackCreationStep
 
     private static function requiresManualStart(CompatibilityResult $result): bool
     {
-        return $result->mode === ProvisioningMode::Archive || $result->provider === ModpackProvider::Ftb->value;
-    }
-
-    private static function usesCurseForgeApiKey(CompatibilityResult $result): bool
-    {
-        return $result->provider === ModpackProvider::CurseForge->value && $result->mode === ProvisioningMode::EggInstall
-            && isset($result->variables['API_KEY']);
+        return $result->mode === ProvisioningMode::Archive;
     }
 
     private static function restore(Set $set, Get $get): void
@@ -427,9 +405,7 @@ final class ModpackCreationStep
         $environment = [];
         foreach ($egg->variables->sortBy('sort')->values() as $variable) {
             $name = (string) $variable->env_variable;
-            $value = ($name === 'API_KEY' && self::usesCurseForgeApiKey($result))
-                ? self::MASKED_API_KEY
-                : ($result->variables[$name] ?? (string) $variable->default_value);
+            $value = $result->variables[$name] ?? (string) $variable->default_value;
             $row = $variable->toArray();
             $row['variable_value'] = $value;
             $row['variable_id'] = $variable->getKey();
@@ -467,8 +443,6 @@ final class ModpackCreationStep
                 return null;
             }
 
-            $keyValue = config('pelican-mod-manager.curseforge_api_key');
-
             $result = app(ModpackProvisioningPlanner::class)->select(
                 $descriptor,
                 app(InstalledEggCatalog::class)->all(),
@@ -477,7 +451,6 @@ final class ModpackCreationStep
                 [],
                 $explicit,
                 $explicit === null,
-                is_string($keyValue) ? $keyValue : null,
             );
             $attributes->set($key, $result);
 

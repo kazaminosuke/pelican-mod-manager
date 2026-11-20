@@ -86,6 +86,7 @@ final class EggCompatibilityEngine
             matchSource: $source,
             confidence: $confidence,
             contradicts: $contradicts,
+            variableNames: $variableNames,
         );
     }
 
@@ -118,9 +119,10 @@ final class EggCompatibilityEngine
             return $requirement->provisioningProfileId !== null
                 && $egg->profileId === $requirement->provisioningProfileId;
         });
-        $loaders = $this->candidates($eggs, function (ClassifiedEgg $egg) use ($requirement): bool {
+        $loaders = $this->candidates($eggs, function (ClassifiedEgg $egg) use ($requirement, $context): bool {
             return $requirement->archiveAllowed
                 && $this->canUsePackLoader($requirement, $egg)
+                && ($context !== self::CONTEXT_CREATE || $this->canPinArchiveRuntime($requirement, $egg))
                 && $egg->projectType === 'mod'
                 && ($requirement->loaderProfileIds === []
                     || in_array((string) $egg->profileId, $requirement->loaderProfileIds, true)
@@ -200,7 +202,7 @@ final class EggCompatibilityEngine
         if ($pool === []) {
             $detail = $requirement->provisioningProfileId !== null
                 ? 'No installed egg matches the '.$requirement->provisioningProfileId.' provisioning profile.'
-                : 'No installed egg matches this modpack loader.';
+                : 'No installed egg matches this modpack loader and its fixed runtime variables.';
 
             return $this->result(
                 $requirement,
@@ -247,6 +249,19 @@ final class EggCompatibilityEngine
                 default => 'The matching egg is not confident enough to select automatically.',
             },
         );
+    }
+
+    private function canPinArchiveRuntime(PackRequirement $requirement, ClassifiedEgg $egg): bool
+    {
+        if ($egg->variableNames === null) {
+            return true;
+        }
+
+        $minecraftVariables = ['MC_VERSION', 'MINECRAFT_VERSION'];
+        $buildVariables = array_diff(array_keys($requirement->archiveVariables), $minecraftVariables);
+
+        return ($requirement->minecraftVersion === null || array_intersect($minecraftVariables, $egg->variableNames) !== [])
+            && array_diff($buildVariables, $egg->variableNames) === [];
     }
 
     private function canUsePackLoader(PackRequirement $requirement, ClassifiedEgg $egg): bool

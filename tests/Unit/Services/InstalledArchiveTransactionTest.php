@@ -643,6 +643,15 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
         unset($this->listed[$filename]);
     }
 
+    public function listDirectory(DaemonFileRepository $fileRepository, Server $server, string $directory): array
+    {
+        $this->events[] = 'list';
+
+        return array_values(array_map(static fn (string $path, string $contents): array => [
+            'name' => basename($path), 'size' => strlen($contents), 'file' => true, 'symlink' => false,
+        ], array_keys($this->manualUploads), $this->manualUploads));
+    }
+
     public function findListedFile(
         DaemonFileRepository $fileRepository,
         Server $server,

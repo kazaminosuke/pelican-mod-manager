@@ -44,7 +44,6 @@ final class ModpackInstallCoordinator
             $this->eggs->variableValues($server),
             $explicitEggId,
             $explicitEggId === null || $explicitEggId === '',
-            $this->curseForgeKey(),
         );
 
         return ['descriptor' => $descriptor, 'result' => $result];
@@ -80,7 +79,7 @@ final class ModpackInstallCoordinator
         }
         $selection = [
             'managed_phase' => 'preview', 'egg_id' => (string) $server->egg_id, 'image' => $server->image,
-            'variables' => $variables, 'minecraft' => $descriptor->minecraftVersion,
+            'variables' => $variables, 'startup' => (string) $server->startup, 'minecraft' => $descriptor->minecraftVersion,
             'loader' => $descriptor->loader, 'loader_version' => $descriptor->loaderVersion,
             'server_pack' => $descriptor->usesServerPack, 'artifact_id' => $descriptor->artifactId,
             'title' => $descriptor->title,
@@ -90,13 +89,6 @@ final class ModpackInstallCoordinator
         if (!$dispatch['dispatched']) {
             throw new ModpackException('The modpack preview could not be queued.');
         }
-    }
-
-    private function curseForgeKey(): ?string
-    {
-        $key = config('pelican-mod-manager.curseforge_api_key');
-
-        return is_string($key) && trim($key) !== '' && strlen(trim($key)) <= 60 ? trim($key) : null;
     }
 
     /** @return array{0: string, 1: string} */

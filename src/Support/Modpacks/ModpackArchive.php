@@ -117,7 +117,28 @@ final class ModpackArchive
         return $files;
     }
 
-    /** @return array{minecraft: ?string, loader: ?string, loader_version: ?string, generic_egg: bool} */
+    /** @return array{minecraft: string, loader: string, build: string}|null */
+    public static function serverPackRuntime(ZipArchive $zip, array $firstFile): ?array
+    {
+        $name = str_replace('\\', '/', (string) $zip->getNameIndex($firstFile['index']));
+        $root = substr($name, 0, strlen($name) - strlen($firstFile['path']));
+        $runtime = null;
+        foreach (array_unique([$root.'variables.txt', 'variables.txt']) as $path) {
+            if ($zip->locateName($path) === false) {
+                continue;
+            }
+            $contents = $zip->getFromName($path, 65537);
+            $metadata = is_string($contents) && strlen($contents) <= 65536 ? self::curseForgeServerPackMetadata($contents) : null;
+            if ($metadata === null || ($runtime !== null && $runtime !== $metadata)) {
+                throw new ModpackException('The server ZIP has invalid or conflicting runtime metadata.');
+            }
+            $runtime = $metadata;
+        }
+
+        return $runtime;
+    }
+
+    /** @return array{minecraft: ?string, loader: ?string, loader_version: ?string} */
     public static function modrinthInstallMetadata(string $zipPath): array
     {
         $zip = new ZipArchive();
@@ -134,28 +155,11 @@ final class ModpackArchive
             self::assertModrinthIndex($index);
             $dependencies = (array) ($index['dependencies'] ?? []);
             [$loader, $loaderVersion] = self::modrinthLoader($dependencies);
-            $compatible = $loader !== null;
-            foreach ((array) ($index['files'] ?? []) as $file) {
-                $server = $file['env']['server'] ?? null;
-                if (in_array($server, ['optional', 'unsupported'], true)) {
-                    continue;
-                }
-
-                // The official generic Egg selects explicitly required
-                // files and saves them by download basename under mods/.
-                $url = self::firstHttpsUrl($file['downloads'] ?? null);
-                $path = $url === null ? '' : rawurldecode((string) parse_url($url, PHP_URL_PATH));
-                if ($server !== 'required' || $path === '' || ($file['path'] ?? '') !== 'mods/'.basename($path)) {
-                    $compatible = false;
-                    break;
-                }
-            }
 
             return [
                 'minecraft' => self::nullableString($dependencies['minecraft'] ?? null),
                 'loader' => $loader,
                 'loader_version' => $loaderVersion,
-                'generic_egg' => $compatible,
             ];
         } finally {
             $zip->close();
@@ -267,7 +271,11 @@ final class ModpackArchive
             if (isset($fields[$matches[1]])) {
                 return null;
             }
-            $fields[$matches[1]] = trim($matches[2]);
+            $value = trim($matches[2]);
+            if (strlen($value) >= 2 && in_array($value[0], ["'", '"'], true) && $value[0] === $value[-1]) {
+                $value = substr($value, 1, -1);
+            }
+            $fields[$matches[1]] = $value;
         }
 
         $minecraft = $fields['MINECRAFT_VERSION'] ?? '';
@@ -396,6 +404,7 @@ final class ModpackArchive
     private static function overrides(ZipArchive $zip, string ...$prefixes): array
     {
         $overrides = [];
+        $seen = [];
         $skipped = [];
         $total = 0;
         // Prefixes are ordered from most to least specific.
@@ -416,13 +425,22 @@ final class ModpackArchive
                     throw new ModpackException('The modpack contains an unsafe override path.');
                 }
 
-                if (isset($overrides[$relative])) {
+                $key = strtolower($relative);
+                if (isset($seen[$key])) {
+                    if ($seen[$key] === $prefix) {
+                        throw new ModpackException("Duplicate override [$relative].");
+                    }
+
                     continue;
                 }
+                $seen[$key] = $prefix;
 
                 $stat = $zip->statIndex($index);
                 $size = is_array($stat) ? (int) ($stat['size'] ?? 0) : 0;
                 if ($size > self::MAX_OVERRIDE_BYTES || $total + $size > self::MAX_OVERRIDE_TOTAL_BYTES) {
+                    if ($prefix === 'server-overrides/' && !ModpackPaths::isProtected($relative)) {
+                        throw new ModpackException("Server override [$relative] exceeds the placement size limit.");
+                    }
                     $skipped[] = 'override-too-large:'.$relative;
 
                     continue;

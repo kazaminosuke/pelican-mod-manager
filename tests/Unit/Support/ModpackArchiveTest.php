@@ -70,7 +70,7 @@ final class ModpackArchiveTest extends TestCase
         self::assertSame(['client-only:mods/client.jar'], $manifest->skipped);
     }
 
-    public function test_generic_egg_requires_explicit_server_files_at_the_paths_it_can_install(): void
+    public function test_runtime_metadata_is_independent_of_file_download_paths(): void
     {
         $index = [
             'formatVersion' => 1,
@@ -80,16 +80,16 @@ final class ModpackArchiveTest extends TestCase
         ];
         $missingEnv = $this->zip(['modrinth.index.json' => json_encode($index, JSON_THROW_ON_ERROR)]);
         self::assertSame([
-            'minecraft' => '1.19.3', 'loader' => 'fabric', 'loader_version' => '0.14.12', 'generic_egg' => false,
+            'minecraft' => '1.19.3', 'loader' => 'fabric', 'loader_version' => '0.14.12',
         ], ModpackArchive::modrinthInstallMetadata($missingEnv));
 
         $index['files'][0]['env'] = ['server' => 'required'];
         $required = $this->zip(['modrinth.index.json' => json_encode($index, JSON_THROW_ON_ERROR)]);
-        self::assertTrue(ModpackArchive::modrinthInstallMetadata($required)['generic_egg']);
+        self::assertSame(ModpackArchive::modrinthInstallMetadata($missingEnv), ModpackArchive::modrinthInstallMetadata($required));
 
         $index['files'][0]['path'] = 'config/krypton.jar';
         $otherPath = $this->zip(['modrinth.index.json' => json_encode($index, JSON_THROW_ON_ERROR)]);
-        self::assertFalse(ModpackArchive::modrinthInstallMetadata($otherPath)['generic_egg']);
+        self::assertSame(ModpackArchive::modrinthInstallMetadata($required), ModpackArchive::modrinthInstallMetadata($otherPath));
     }
 
     public function test_server_zip_with_a_root_local_kubejs_directory_has_a_single_pack_root(): void

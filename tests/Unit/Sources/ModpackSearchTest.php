@@ -260,7 +260,6 @@ final class ModpackSearchTest extends TestCase
         $download = $source->modpackDownloadById('925200', '9620701');
 
         self::assertSame('9620701', $download['version_id']);
-        self::assertSame('9620727', $download['egg_version_id']);
         self::assertSame('9620727', $download['artifact_id']);
         self::assertSame('https://edge.forgecdn.net/server.zip', $download['url']);
         self::assertSame('1.21.1', $download['minecraft']);
@@ -293,7 +292,6 @@ final class ModpackSearchTest extends TestCase
         self::assertSame('https://edge.forgecdn.net/client.zip', $download['url']);
         self::assertTrue($download['has_server_pack']);
         self::assertFalse($download['server_pack']);
-        self::assertNull($download['egg_version_id']);
         self::assertNull($source->modpackDownloadById('10', '6'));
     }
 

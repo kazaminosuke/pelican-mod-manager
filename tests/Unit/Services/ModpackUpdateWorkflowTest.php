@@ -47,7 +47,7 @@ final class ModpackUpdateWorkflowTest extends TestCase
         $server->backups = [9 => $backup, 10 => $replacement];
         $panel = Mockery::mock(InitiateBackupService::class);
         $panel->shouldReceive('setIgnoredFiles')->with(self::FULL_BACKUP)->twice()->andReturnSelf();
-        $panel->shouldReceive('setIsLocked')->with(true)->twice()->andReturnSelf();
+        $panel->shouldReceive('setIsLocked')->with(false)->twice()->andReturnSelf();
         $panel->shouldReceive('handle')->with($server, 'Modpack update')->twice()->andReturn($backup, $replacement);
         $workflow->createBackup($server, $token, $panel);
 
@@ -101,7 +101,7 @@ final class ModpackUpdateWorkflowTest extends TestCase
         $server->backups = [9 => $backup];
         $panel = Mockery::mock(InitiateBackupService::class);
         $panel->shouldReceive('setIgnoredFiles')->with(self::FULL_BACKUP)->once()->andReturnSelf();
-        $panel->shouldReceive('setIsLocked')->with(true)->once()->andReturnSelf();
+        $panel->shouldReceive('setIsLocked')->with(false)->once()->andReturnSelf();
         $panel->shouldReceive('handle')->with($server, 'Modpack update')->once()->andReturn($backup);
         $workflow->createBackup($server, $token, $panel);
         $backup->ignored_files = [];

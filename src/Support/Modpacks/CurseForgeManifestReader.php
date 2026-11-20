@@ -10,7 +10,7 @@ final class CurseForgeManifestReader
     private const LIMIT = 1048576;
 
     /** Read one root metadata file from the authorized download URL. */
-    public function read(string $url, string $entryName = 'manifest.json'): ?string
+    public function read(string $url, string $entryName = 'manifest.json', bool $allowWrapper = false): ?string
     {
         if (!ModpackPaths::isSafeHttpsDownloadUrl($url)
             || !in_array(parse_url($url, PHP_URL_HOST), ['edge.forgecdn.net', 'mediafilez.forgecdn.net', 'media.forgecdn.net'], true)
@@ -54,11 +54,11 @@ final class CurseForgeManifestReader
                 $file = unpack('vflags/vmethod/x4/Vcrc/Vcompressed/Vuncompressed/vname/vextra/vcomment/vdisk/x6/Voffset', $directory, $offset + 8);
                 $name = substr($directory, $offset + 46, $file['name']);
                 $offset += 46 + $file['name'] + $file['extra'] + $file['comment'];
-                if ($name === $entryName) {
+                if ($name === $entryName || ($allowWrapper && substr_count($name, '/') === 1 && basename($name) === $entryName)) {
                     if ($manifest !== null) {
                         return null;
                     }
-                    $manifest = $file;
+                    $manifest = [...$file, 'path' => $name];
                 }
             }
 
@@ -76,7 +76,7 @@ final class CurseForgeManifestReader
 
             $header = unpack('vname/vextra', $local, 26);
             $compressed = substr($local, 30 + $header['name'] + $header['extra'], $manifest['compressed']);
-            if (substr($local, 30, $header['name']) !== $entryName || strlen($compressed) !== $manifest['compressed']) {
+            if (substr($local, 30, $header['name']) !== $manifest['path'] || strlen($compressed) !== $manifest['compressed']) {
                 return null;
             }
 

@@ -64,9 +64,22 @@ final class EggCompatibilityEngineTest extends TestCase
         self::assertCount(2, $result->alternatives);
     }
 
+    public function test_quilt_egg_without_fixed_loader_variable_is_unavailable(): void
+    {
+        $egg = $this->engine->classify(1, 'Quilt', null, null, ['MC_VERSION', 'SERVER_JARFILE']);
+        $pack = new ModpackDescriptor(
+            provider: 'modrinth', id: 'pack', title: 'Quilt Pack', versionId: 'version', versionName: '1',
+            minecraftVersion: '1.20.1', loader: 'quilt', loaderVersion: '0.20.2', iconUrl: null,
+            provisioningProfileId: null, variables: [], archiveAllowed: true, unsupportedReason: null,
+        );
+
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        self::assertSame(CompatibilityDisposition::Unsupported, $planner->select($pack, [$egg], EggCompatibilityEngine::CONTEXT_CREATE)->disposition);
+    }
+
     public function test_unknown_curseforge_compatibility_allows_an_explicit_loader_with_a_warning(): void
     {
-        $fabric = $this->engine->classify(1, 'Fabric', 'fabric-uuid', null, []);
+        $fabric = $this->engine->classify(1, 'Fabric', 'fabric-uuid', null, ['MC_VERSION']);
         $paper = $this->engine->classify(2, 'Paper', 'paper-uuid', null, []);
         $planner = new ModpackProvisioningPlanner($this->engine);
         $pack = new ModpackDescriptor(

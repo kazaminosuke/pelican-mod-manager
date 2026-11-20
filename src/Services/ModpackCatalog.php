@@ -13,7 +13,6 @@ use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\FtbModpackSource;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Sources\TechnicModpackSource;
-use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
 use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeManifestReader;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
@@ -126,59 +125,22 @@ final class ModpackCatalog
         ];
     }
 
-    /**
-     * Options for a searchable install field. Keys are `source:projectId`.
-     *
-     * @return array<string, string>
-     */
-    public function searchOptions(Server $server, string $query): array
+    /** @return array<string, string> */
+    public function archiveProviders(): array
     {
-        $query = trim($query);
-        if (mb_strlen($query) < 2) {
+        return array_intersect_key($this->providers(), array_fill_keys([ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value], true));
+    }
+
+    /** @return array<string, string> */
+    public function searchOptions(Server $server, ModpackProvider $provider, string $query): array
+    {
+        if (mb_strlen(trim($query)) < 2 || !array_key_exists($provider->value, $this->archiveProviders())) {
             return [];
         }
 
         $options = [];
-        try {
-            foreach ($this->modrinth->searchModpacks($server, 1, $query, false)['hits'] as $hit) {
-                if (!is_array($hit)) {
-                    continue;
-                }
-                $id = trim((string) ($hit['project_id'] ?? ''));
-                if ($id === '') {
-                    continue;
-                }
-                $options[ProjectSourceKey::Modrinth->value.':'.$id] = $this->label($hit, 'Modrinth');
-            }
-        } catch (Throwable $exception) {
-            report($exception);
-        }
-
-        if ($this->curseForge->isConfigured()) {
-            try {
-                foreach ($this->curseForge->searchModpacks($server, 1, $query, false)['hits'] as $hit) {
-                    if (!is_array($hit)) {
-                        continue;
-                    }
-                    $id = trim((string) ($hit['project_id'] ?? ''));
-                    if ($id === '' || !ctype_digit($id)) {
-                        continue;
-                    }
-                    $options[ProjectSourceKey::CurseForge->value.':'.$id] = $this->label($hit, 'CurseForge');
-                }
-            } catch (Throwable $exception) {
-                report($exception);
-            }
-        }
-
-        foreach ([
-            ModpackProvider::Ftb->value => $this->safeSearch(fn (): array => $this->ftb->search($query)),
-            ModpackProvider::Technic->value => $this->safeSearch(fn (): array => $this->technic->search($query)),
-            ModpackProvider::Atlauncher->value => $this->safeSearch(fn (): array => $this->atlauncher->search($query)),
-        ] as $packs) {
-            foreach ($packs as $pack) {
-                $options[$pack->optionKey()] = $pack->optionLabel();
-            }
+        foreach ($this->searchPage($server, $provider, $query, 1)['hits'] as $hit) {
+            $options[$hit['key']] = $this->label($hit, $provider->getLabel());
         }
 
         return $options;
@@ -306,23 +268,19 @@ final class ModpackCatalog
         $archiveAllowed = !$serverUnsupported || !$server->exists;
         $metadata = $archiveAllowed ? $this->inspectModrinthArchive($download['url']) : null;
         $minecraft = $metadata['minecraft'] ?? $download['minecraft'] ?? null;
-        $java = JavaRuntimeImage::preferredLabel($minecraft);
-        $usableGeneric = !$serverUnsupported && ($metadata['generic_egg'] ?? false) && in_array($java, ['Java 8', 'Java 16', 'Java 17'], true)
-            && preg_match('/^[A-Za-z0-9]{1,8}$/', $projectId) === 1
-            && preg_match('/^[A-Za-z0-9]{1,8}$/', $resolvedVersion) === 1;
 
         return new ModpackDescriptor(
             provider: ModpackProvider::Modrinth->value,
             id: $projectId,
-            title: $projectId,
+            title: (string) ($project['title'] ?? $projectId),
             versionId: $resolvedVersion,
             versionName: (string) ($download['version_number'] ?? $resolvedVersion),
             minecraftVersion: $minecraft,
             loader: $metadata['loader'] ?? $download['loader'] ?? null,
             loaderVersion: $metadata['loader_version'] ?? null,
             iconUrl: null,
-            provisioningProfileId: $usableGeneric ? 'modrinth-generic' : null,
-            variables: $usableGeneric ? ['PROJECT_ID' => $projectId, 'VERSION_ID' => $resolvedVersion] : [],
+            provisioningProfileId: null,
+            variables: [],
             archiveAllowed: $archiveAllowed,
             unsupportedReason: $archiveAllowed ? null : 'Modrinth marks this modpack as unsupported on a dedicated server.',
             downloadUrl: (string) $download['url'],
@@ -331,14 +289,14 @@ final class ModpackCatalog
         );
     }
 
-    /** @return array{minecraft: ?string, loader: ?string, loader_version: ?string, generic_egg: bool}|null */
+    /** @return array{minecraft: ?string, loader: ?string, loader_version: ?string}|null */
     private function inspectModrinthArchive(string $url): ?array
     {
         if (parse_url($url, PHP_URL_SCHEME) !== 'https' || parse_url($url, PHP_URL_HOST) !== 'cdn.modrinth.com') {
             return null;
         }
 
-        $key = 'mod-manager:mrpack-install-metadata:'.hash('sha256', $url);
+        $key = 'mod-manager:mrpack-runtime:'.hash('sha256', $url);
 
         return Cache::remember($key, 600, static function () use ($url): ?array {
             $temp = tempnam(sys_get_temp_dir(), 'mrpack-index');
@@ -391,9 +349,18 @@ final class ModpackCatalog
         }
 
         $resolvedVersion = (string) $download['version_id'];
-        $metadata = null;
+        $metadata = [];
+        if ($download['server_pack']) {
+            $serverUrl = $download['url'];
+            $metadata = Cache::remember('mod-manager:cf-server-runtime:'.hash('sha256', $serverUrl), 600, static function () use ($serverUrl): array {
+                $variables = (new CurseForgeManifestReader())->read($serverUrl, 'variables.txt', allowWrapper: true);
+
+                return $variables !== null ? (ModpackArchive::curseForgeServerPackMetadata($variables) ?? []) : [];
+            });
+        }
+
         $url = $download['manifest_url'] ?? null;
-        if (is_string($url)) {
+        if ($metadata === [] && is_string($url)) {
             $metadata = Cache::remember('mod-manager:cf-manifest:'.hash('sha256', $url), 600, static function () use ($url): array {
                 try {
                     $json = (new CurseForgeManifestReader())->read($url);
@@ -403,21 +370,6 @@ final class ModpackCatalog
                     return [];
                 }
             });
-        }
-
-        if (!isset($metadata['build']) && $download['server_pack']) {
-            $serverUrl = $download['url'];
-            $serverMetadata = Cache::remember('mod-manager:cf-variables:'.hash('sha256', $serverUrl), 600, static function () use ($serverUrl): array {
-                $variables = (new CurseForgeManifestReader())->read($serverUrl, 'variables.txt');
-
-                return $variables !== null ? (ModpackArchive::curseForgeServerPackMetadata($variables) ?? []) : [];
-            });
-            $minecraft = $metadata['minecraft'] ?? $download['minecraft'];
-            $loader = $metadata['loader'] ?? $download['loader'];
-            if ($serverMetadata !== [] && ($minecraft === null || $minecraft === $serverMetadata['minecraft'])
-                && ($loader === null || $loader === $serverMetadata['loader'])) {
-                $metadata = $serverMetadata;
-            }
         }
 
         return new ModpackDescriptor(
@@ -430,14 +382,8 @@ final class ModpackCatalog
             loader: $metadata['loader'] ?? $download['loader'] ?? null,
             loaderVersion: $metadata['build'] ?? null,
             iconUrl: null,
-            // The generic script handles these loaders and follows the
-            // verified server file's parent for the client manifest.
-            provisioningProfileId: $download['egg_version_id'] !== null
-                && in_array($download['loader'], ['forge', 'fabric', 'quilt'], true) ? 'curseforge-generic' : null,
-            variables: $download['egg_version_id'] !== null ? [
-                'PROJECT_ID' => $projectId,
-                'VERSION_ID' => $download['egg_version_id'],
-            ] : [],
+            provisioningProfileId: null,
+            variables: [],
             archiveAllowed: true,
             unsupportedReason: null,
             downloadUrl: $download['url'],
@@ -446,21 +392,6 @@ final class ModpackCatalog
             usesServerPack: $download['server_pack'],
             artifactId: $download['artifact_id'],
         );
-    }
-
-    /**
-     * @param  callable(): list<ModpackDescriptor>  $search
-     * @return list<ModpackDescriptor>
-     */
-    private function safeSearch(callable $search): array
-    {
-        try {
-            return $search();
-        } catch (Throwable $exception) {
-            report($exception);
-
-            return [];
-        }
     }
 
     /** @return array{0: ?string, 1: string} */

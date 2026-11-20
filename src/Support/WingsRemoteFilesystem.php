@@ -79,10 +79,7 @@ class WingsRemoteFilesystem
         string $directory,
         string $filename,
     ): void {
-        $fileRepository
-            ->setServer($server)
-            ->deleteFiles($directory === '' ? '/' : $directory, [$filename])
-            ->throw();
+        $this->deleteMany($fileRepository, $server, $directory, [$filename]);
     }
 
     public function deleteQuietly(
@@ -96,6 +93,23 @@ class WingsRemoteFilesystem
         } catch (Exception $exception) {
             report($exception);
         }
+    }
+
+    /** @param list<string> $filenames */
+    public function deleteManyQuietly(DaemonFileRepository $fileRepository, Server $server, string $directory, array $filenames): void
+    {
+        foreach (array_chunk($filenames, 100) as $chunk) {
+            try {
+                $this->deleteMany($fileRepository, $server, $directory, $chunk);
+            } catch (Exception $exception) {
+                report($exception);
+            }
+        }
+    }
+
+    private function deleteMany(DaemonFileRepository $repo, Server $server, string $directory, array $filenames): void
+    {
+        $repo->setServer($server)->deleteFiles($directory === '' ? '/' : $directory, $filenames)->throw();
     }
 
     /**

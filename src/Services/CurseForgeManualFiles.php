@@ -20,14 +20,28 @@ final class CurseForgeManualFiles
 
     public function __construct(private readonly WingsRemoteFilesystem $wings) {}
 
+    /** @return array<string, array<string, mixed>> */
+    public function uploads(Server $server, DaemonFileRepository $repository): array
+    {
+        $indexed = [];
+        foreach ($this->wings->listDirectory($repository, $server, '.mod-manager-curseforge') as $entry) {
+            $name = $entry['name'] ?? null;
+            if (is_string($name) && ($entry['file'] ?? false) === true && ($entry['symlink'] ?? true) === false) {
+                $indexed[$name] = $entry;
+            }
+        }
+
+        return $indexed;
+    }
+
     /** Return a private snapshot of the verified file. The caller closes it. */
-    public function verifiedSnapshot(Server $server, DaemonFileRepository $repository, CurseForgeFile $file, int $remainingBytes = self::MAX_FILE_BYTES): StreamInterface
+    public function verifiedSnapshot(Server $server, DaemonFileRepository $repository, CurseForgeFile $file, int $remainingBytes = self::MAX_FILE_BYTES, ?array $uploads = null): StreamInterface
     {
         if (!$file->canUpload()) {
             throw new CurseForgeManualFileException($file, $file->reason === 'distribution' ? 'unverifiable' : ($file->reason ?? 'metadata_missing'));
         }
-        [$directory, $filename] = ModpackPaths::split($file->stagingPath());
-        $listed = $this->wings->findListedFile($repository, $server, $directory, $filename);
+        $uploads ??= $this->uploads($server, $repository);
+        $listed = $uploads[basename($file->stagingPath())] ?? null;
         if ($listed === null) {
             throw new CurseForgeManualFileException($file, 'missing_upload');
         }

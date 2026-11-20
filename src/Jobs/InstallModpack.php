@@ -20,10 +20,10 @@ use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackInstaller;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Services\ModpackReviewArchive;
 use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
-use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Throwable;
 
@@ -140,7 +140,11 @@ final class InstallModpack
                 $workflow->assertStopped($server);
             }
 
-            $file = $catalog->file($server, $this->source, $this->projectId, $this->versionId !== '' ? $this->versionId : null);
+            $reviewArchive = app(ModpackReviewArchive::class);
+            $cached = isset($review['artifact'], $review['release']['archive_sha256'])
+                && $reviewArchive->restore($review['release']['archive_sha256'], $temp);
+            $archiveHash = $cached ? $review['release']['archive_sha256'] : null;
+            $file = $cached ? $review['artifact'] : $catalog->file($server, $this->source, $this->projectId, $this->versionId !== '' ? $this->versionId : null);
             if ($file === null) {
                 throw new ModpackException('No installable modpack file was found for this server.');
             }
@@ -149,26 +153,26 @@ final class InstallModpack
                 $file['version_id'] !== $this->versionId
                 || (isset($this->selection['server_pack']) && (bool) $this->selection['server_pack'] !== (bool) ($file['server_pack'] ?? false))
                 || (isset($this->selection['artifact_id']) && ($file['artifact_id'] ?? $file['version_id']) !== $this->selection['artifact_id'])
-                || (isset($file['minecraft'], $this->selection['minecraft']) && $file['minecraft'] !== $this->selection['minecraft'])
-                || (isset($file['loader'], $this->selection['loader']) && $file['loader'] !== $this->selection['loader'])
             )) {
                 throw new ModpackException('The selected modpack file or its runtime requirements changed after server creation.');
             }
 
-            try {
-                $response = Http::timeout(180)
-                    ->withOptions(['sink' => $temp, 'allow_redirects' => ['protocols' => ['https']]])
-                    ->get($file['url']);
-                $response->throw();
-            } finally {
-                if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
-                    $leases->refresh($this->serverId, $type, $this->leaseToken);
-                    $leaseRefreshedAt = microtime(true);
+            if (!$cached) {
+                try {
+                    $response = Http::timeout(180)
+                        ->withOptions(['sink' => $temp, 'allow_redirects' => ['protocols' => ['https']]])
+                        ->get($file['url']);
+                    $response->throw();
+                } finally {
+                    if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
+                        $leases->refresh($this->serverId, $type, $this->leaseToken);
+                        $leaseRefreshedAt = microtime(true);
+                    }
                 }
             }
 
             if ($isCurseForge && !($file['server_pack'] ?? false)) {
-                $archiveHash = hash_file('sha256', $temp);
+                $archiveHash ??= hash_file('sha256', $temp);
                 if (!is_string($archiveHash) || ($resume !== null && $archiveHash !== ($this->selection['archive_sha256'] ?? null))) {
                     throw new ModpackException('The downloaded CurseForge archive no longer matches the selected file.');
                 }
@@ -202,10 +206,14 @@ final class InstallModpack
                 'switch' => $previous !== null && ($previous['provider'] !== $this->source || $previous['pack_id'] !== $this->projectId),
             ];
             $loader = MinecraftLoader::fromServer($server)?->value;
-            $minecraft = MinecraftVersionResolver::resolve($server);
-            if ($phase !== 'initial' && ($loader === null || $minecraft === null || ($release['minecraft_version'] !== null && $minecraft !== $release['minecraft_version'])
-                || JavaRuntimeImage::isTooOld($server->image, $release['minecraft_version']))) {
-                throw new ModpackException('The current Minecraft, loader or Java runtime cannot be verified for this update.');
+            $runtime = app(InstalledEggCatalog::class)->variableValues($server);
+            $minecraft = $runtime['MC_VERSION'] ?? $runtime['MINECRAFT_VERSION'] ?? null;
+            if (is_string($minecraft) && preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $minecraft) !== 1) {
+                $minecraft = null;
+            }
+            if ($loader === null || $minecraft === null || ($release['minecraft_version'] !== null && $minecraft !== $release['minecraft_version'])
+                || JavaRuntimeImage::isTooOld($server->image, $release['minecraft_version'])) {
+                throw new ModpackException('Set a supported, fixed Minecraft version and loader in the Egg before installing the modpack.');
             }
             $lastCheck = 0.0;
             $guard = function (bool $force = true) use ($server, $type, $leases, $workflow, &$lastCheck, $backup, $review): void {
@@ -225,19 +233,35 @@ final class InstallModpack
                 $lastCheck = microtime(true);
             };
             $operations->modpackPhase($this->serverId, $phase === 'preview' ? 'verifying' : 'installing');
-            $result = $installer->deploy(
-                $server, $fileRepository, $temp, $release, $loader ?? ($this->selection['loader'] ?? null),
-                $this->selection['minecraft'] ?? $minecraft, $phase === 'preview',
-                $review['summary']['digest'] ?? null, $backup?->uuid, $guard,
-                $phase === 'initial' ? null : ($this->selection['variables'] ?? app(InstalledEggCatalog::class)->variableValues($server)),
-            );
+            $lockedForApply = $backup !== null && $workflow->lockForApply($server, $backup);
+            try {
+                $result = $installer->deploy(
+                    $server, $fileRepository, $temp, $release, $loader,
+                    $minecraft, $phase === 'preview',
+                    $review['summary']['digest'] ?? null, $backup?->uuid, $guard,
+                    $runtime, verifyInstalledRuntime: true, unlockBackup: $lockedForApply,
+                );
+            } finally {
+                if ($lockedForApply) {
+                    try {
+                        $recovery = app(ModpackInventory::class)->read($server)['recovery'];
+                        if (($recovery['backup'] ?? null) !== $backup->uuid) {
+                            $workflow->unlockAfterApply($server, $backup->uuid);
+                        }
+                    } catch (Throwable $cleanupError) {
+                        report($cleanupError);
+                    }
+                }
+            }
             if ($phase === 'preview') {
+                $release['loader_version'] = $result['runtime_build'];
+                $reviewArchive->remember($temp, $archiveHash);
                 if ($resume !== null) {
                     $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
                 }
                 $workflow->publish($server, $this->leaseToken, $release, $this->selection ?? [
                     'egg_id' => (string) $server->egg_id, 'image' => $server->image,
-                ], $result);
+                ], $result, $file);
 
                 return null;
             }
@@ -326,6 +350,10 @@ final class InstallModpack
 
         if (isset($this->selection['image']) && $server->image !== $this->selection['image']) {
             throw new ModpackException('The server image changed after the modpack was queued.');
+        }
+
+        if (isset($this->selection['startup']) && (string) $server->startup !== $this->selection['startup']) {
+            throw new ModpackException('The server startup command changed after the modpack was queued.');
         }
 
         $expected = $this->selection['variables'] ?? [];

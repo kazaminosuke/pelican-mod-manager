@@ -20,32 +20,19 @@ final class ModpackProvisioningPlanner
         private readonly EggCompatibilityEngine $engine,
     ) {}
 
-    public function requirement(ModpackDescriptor $pack, ?string $curseForgeApiKey = null): PackRequirement
+    public function requirement(ModpackDescriptor $pack): PackRequirement
     {
         $profile = $pack->provisioningProfileId;
         $variables = $pack->variables;
         $archive = $pack->archiveAllowed;
         $unsupported = $pack->unsupportedReason;
 
-        if ($pack->provider === ModpackProvider::CurseForge->value && $profile === 'curseforge-generic') {
-            if (!is_string($curseForgeApiKey) || trim($curseForgeApiKey) === '') {
-                $profile = null;
-            } else {
-                $variables['API_KEY'] = trim($curseForgeApiKey);
-            }
+        if (in_array($pack->provider, [ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value], true)) {
+            $profile = null;
+            $variables = [];
         }
-
-        if ($pack->provider === ModpackProvider::Modrinth->value && $profile === 'modrinth-generic') {
-            $projectOk = preg_match('/^[A-Za-z0-9]{1,8}$/', $pack->id) === 1;
-            $versionOk = is_string($pack->versionId) && preg_match('/^[A-Za-z0-9]{1,8}$/', $pack->versionId) === 1;
-            if (!$projectOk || !$versionOk) {
-                $profile = null;
-            } else {
-                $variables = [
-                    'PROJECT_ID' => $pack->id,
-                    'VERSION_ID' => $pack->versionId,
-                ];
-            }
+        if ($pack->provider === ModpackProvider::Ftb->value) {
+            $unsupported = trans('pelican-mod-manager::strings.modpacks.ftb_install_unverified');
         }
 
         $loaderProfiles = match ($pack->loader) {
@@ -98,7 +85,6 @@ final class ModpackProvisioningPlanner
             archiveVariables: $archiveVariables,
             allowUnknownLoader: $curseForge && $archive && $pack->loader === null,
             compatibilityWarning: $pack->compatibilityWarning ?? match (true) {
-                $pack->provider === ModpackProvider::Ftb->value => 'ftb_install_unverified',
                 $curseForge && (!$pack->usesServerPack || $pack->loader === null || $pack->minecraftVersion === null) => 'server_compatibility_unknown',
                 default => null,
             },
@@ -125,10 +111,9 @@ final class ModpackProvisioningPlanner
         array $currentVariables = [],
         int|string|null $explicitEggId = null,
         bool $automatic = true,
-        ?string $curseForgeApiKey = null,
     ): CompatibilityResult {
         return $this->engine->select(
-            $this->requirement($pack, $curseForgeApiKey),
+            $this->requirement($pack),
             $eggs,
             $context,
             $currentEggId,
