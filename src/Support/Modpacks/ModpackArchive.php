@@ -123,13 +123,30 @@ final class ModpackArchive
         $name = str_replace('\\', '/', (string) $zip->getNameIndex($firstFile['index']));
         $root = substr($name, 0, strlen($name) - strlen($firstFile['path']));
         $runtime = null;
-        foreach (array_unique([$root.'variables.txt', 'variables.txt']) as $path) {
-            if ($zip->locateName($path) === false) {
+        $paths = array_fill_keys([$root.'variables.txt', 'variables.txt', $root.'manifest.json', 'manifest.json'], true);
+        for ($index = 0; $index < $zip->numFiles; $index++) {
+            $path = str_replace('\\', '/', (string) $zip->getNameIndex($index));
+            if (!array_key_exists($path, $paths)) {
                 continue;
             }
-            $contents = $zip->getFromName($path, 65537);
-            $metadata = is_string($contents) && strlen($contents) <= 65536 ? self::curseForgeServerPackMetadata($contents) : null;
-            if ($metadata === null || ($runtime !== null && $runtime !== $metadata)) {
+            if (!$paths[$path]) {
+                throw new ModpackException("Duplicate server ZIP runtime entry [$path].");
+            }
+            $paths[$path] = false;
+            $variables = basename($path) === 'variables.txt';
+            $limit = $variables ? 65536 : self::MAX_MANIFEST_BYTES;
+            $contents = $zip->getFromIndex($index, $limit + 1);
+            if (!is_string($contents) || strlen($contents) > $limit) {
+                throw new ModpackException("Server ZIP runtime entry [$path] could not be read.");
+            }
+            $metadata = $variables ? self::curseForgeServerPackMetadata($contents) : self::curseForgeInstallMetadata($contents);
+            if (!$variables && !isset($metadata['minecraft'], $metadata['loader'], $metadata['build'])) {
+                continue;
+            }
+            if ($metadata === null || ($runtime !== null && (
+                $runtime['minecraft'] !== $metadata['minecraft'] || $runtime['loader'] !== $metadata['loader']
+                || !ModpackLoader::matchesBuild($metadata['loader'], $metadata['build'], $runtime['build'], $metadata['minecraft'])
+            ))) {
                 throw new ModpackException('The server ZIP has invalid or conflicting runtime metadata.');
             }
             $runtime = $metadata;

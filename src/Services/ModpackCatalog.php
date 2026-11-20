@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Sources\AtlauncherModpackSource;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
 use Kazaminosuke\ModManager\Sources\FtbModpackSource;
@@ -353,9 +354,19 @@ final class ModpackCatalog
         if ($download['server_pack']) {
             $serverUrl = $download['url'];
             $metadata = Cache::remember('mod-manager:cf-server-runtime:'.hash('sha256', $serverUrl), 600, static function () use ($serverUrl): array {
-                $variables = (new CurseForgeManifestReader())->read($serverUrl, 'variables.txt', allowWrapper: true);
+                $reader = new CurseForgeManifestReader();
+                $variables = $reader->read($serverUrl, 'variables.txt', allowWrapper: true);
+                $runtime = $variables === null ? null : ModpackArchive::curseForgeServerPackMetadata($variables);
+                if ($runtime !== null) {
+                    return $runtime;
+                }
 
-                return $variables !== null ? (ModpackArchive::curseForgeServerPackMetadata($variables) ?? []) : [];
+                $manifest = $reader->read($serverUrl, 'manifest.json', allowWrapper: true);
+                try {
+                    return $manifest === null ? [] : array_filter(ModpackArchive::curseForgeInstallMetadata($manifest) ?? []);
+                } catch (ModpackException) {
+                    return [];
+                }
             });
         }
 

@@ -4,7 +4,7 @@ PR #2の `84f21de` と、同じツリーを持つ名義修正後の `fff3d31` �
 
 ## EggとMod Managerの役割
 
-- **Modrinth・CurseForge**はローダーEggでMinecraftとローダーを準備し、Mod Managerが選択した配布物を一時配置して検証します。作成時の自動起動は無効です。PelicanがEggのインストール終了を返した後で、管理ジョブが起動JARまたは `unix_args.txt` と、そこから参照されるローダーを確認します。版を固定できるEgg変数が必要です。専用Server Packの `variables.txt` は子ZIPを優先し、ZIP展開時にも照合します。
+- **Modrinth・CurseForge**はローダーEggでMinecraftとローダーを準備し、Mod Managerが選択した配布物を一時配置して検証します。作成時の自動起動は無効です。PelicanがEggのインストール終了を返した後で、管理ジョブが起動JARまたは `unix_args.txt` と、そこから参照されるローダーを確認します。版を固定できるEgg変数が必要です。専用Server Packは子ZIPの `variables.txt` または `manifest.json` を優先し、ZIP展開時に重複と矛盾も確認します。
 - **Technic**は公式配布物と専用Eggを固定できる版を専用Eggで導入します。専用スクリプトによる導入は差分更新の対象外です。
 - **FTB**は版の閲覧に対応します。公式Eggはインストーラーの失敗後も終了コード0を返すため、このWizardでの作成を停止しています。ATLauncherも版の閲覧に対応します。
 

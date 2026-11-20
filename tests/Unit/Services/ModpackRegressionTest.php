@@ -188,6 +188,26 @@ final class ModpackRegressionTest extends TestCase
         $runtime->assertInstalled($server, $repo, 'neoforge', '1.21.1', '21.1.267', ['NEOFORGE_VERSION' => '21.1.267']);
     }
 
+    public function test_wrapped_server_zip_can_declare_its_runtime_in_its_own_manifest(): void
+    {
+        $path = $this->zip([
+            'server/config/example.toml' => 'fixture',
+            'server/manifest.json' => json_encode([
+                'manifestType' => 'minecraftModpack',
+                'minecraft' => ['version' => '1.21.1', 'modLoaders' => [['id' => 'neoforge-21.1.266', 'primary' => true]]],
+            ], JSON_THROW_ON_ERROR),
+        ]);
+        $archive = new ZipArchive();
+        $archive->open($path, ZipArchive::RDONLY);
+        try {
+            $files = ModpackArchive::serverFiles($archive);
+            self::assertSame(['minecraft' => '1.21.1', 'loader' => 'neoforge', 'build' => '21.1.266'], ModpackArchive::serverPackRuntime($archive, $files[0]));
+        } finally {
+            $archive->close();
+            unlink($path);
+        }
+    }
+
     private function file(string $bytes): array
     {
         $hash = hash('sha256', $bytes);
