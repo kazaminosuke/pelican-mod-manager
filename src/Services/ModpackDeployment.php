@@ -57,7 +57,7 @@ final class ModpackDeployment
         $owned = array_diff_key($owned, $retained);
         $this->assertDistinctPaths($target);
         $individual = $this->individuallyManaged($server, $repo);
-        $plan = $this->plan($server, $repo, $owned, $target, $individual);
+        $plan = $this->plan($server, $repo, $owned, $target, $individual['files']);
         $summary = $this->summary($plan, $protected, $switch);
         foreach (array_keys($retained) as $path) {
             if ($switch && ModpackPaths::isExecutablePackContent($path)) {
@@ -82,13 +82,34 @@ final class ModpackDeployment
             foreach ($this->listing($server, $repo, 'mods') as $entry) {
                 $path = 'mods/'.$entry['name'];
                 if (str_ends_with(strtolower($path), '.jar')
-                    && !isset($individual[strtolower($path)]) && !isset($plan[$path])) {
+                    && !isset($individual['files'][strtolower($path)]) && !isset($plan[$path])) {
                     $summary['mod_conflicts'][] = $path;
                     $summary['blocking_conflicts'][] = $path;
                     $summary['conflicts'][] = $path;
                     $summary['mods']['conflict']++;
                     $summary['counts']['conflict']++;
                 }
+            }
+        }
+        if ($individual['projects'] !== []) {
+            $source = (string) ($release['provider'] ?? '');
+            foreach ($target as $path => $entry) {
+                $projectId = $entry['project_id'] ?? null;
+                if (!is_string($projectId) || $projectId === '') {
+                    continue;
+                }
+                $key = strtolower($source.':'.$projectId);
+                $conflictPath = $individual['projects'][$key] ?? null;
+                if ($conflictPath === null || strtolower($conflictPath) === strtolower($path)
+                    || isset($plan[$conflictPath]) || isset($summary['paths'][$conflictPath])) {
+                    continue;
+                }
+                $summary['mod_conflicts'][] = $conflictPath;
+                $summary['blocking_conflicts'][] = $conflictPath;
+                $summary['conflicts'][] = $conflictPath;
+                $summary['paths'][$conflictPath] = 'conflict';
+                $summary['mods']['conflict']++;
+                $summary['counts']['conflict']++;
             }
         }
         if ($preview) {
@@ -140,7 +161,7 @@ final class ModpackDeployment
             if ($staged !== [] || $summary['counts']['delete'] > 0) {
                 $this->listings = [];
                 if ($world !== $this->world($server, $repo)
-                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo))) {
+                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo)['files'])) {
                     throw new ModpackException('Server files changed during staging. No modpack files were applied.');
                 }
                 $guard();
@@ -179,12 +200,16 @@ final class ModpackDeployment
                 }
             }
 
-            $this->listings = [];
-            foreach ($applied as $path => $change) {
-                if ($change['new'] === null ? $this->entry($server, $repo, $path) !== null
-                    : $this->digest($server, $repo, $path) !== $change['new']) {
-                    throw new ModpackException("Wings did not apply [$path] with its verified content.");
+            $deletes = array_filter($applied, static fn (array $change): bool => $change['new'] === null);
+            if ($deletes !== []) {
+                $this->listings = [];
+                foreach (array_keys($deletes) as $path) {
+                    if ($this->entry($server, $repo, $path) !== null) {
+                        throw new ModpackException("Wings did not apply [$path] with its verified content.");
+                    }
                 }
+            }
+            foreach (array_keys($applied) as $path) {
                 unset($staged[$path]);
             }
 
@@ -354,24 +379,35 @@ final class ModpackDeployment
         }
     }
 
+    /**
+     * @return array{files: array<string, true>, projects: array<string, string>}
+     */
     private function individuallyManaged(Server $server, DaemonFileRepository $repo): array
     {
         $entry = $this->entry($server, $repo, 'mods/.pelican-mod-manager.json');
         if ($entry === null) {
-            return [];
+            return ['files' => [], 'projects' => []];
         }
         $metadata = json_decode($this->smallFile($server, $repo, 'mods/.pelican-mod-manager.json', $entry, 4_000_000), true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($metadata['installed_mods'] ?? null)) {
             throw new ModpackException('The individual mod inventory is unreadable.');
         }
         $files = [];
+        $projects = [];
         foreach ($metadata['installed_mods'] as $mod) {
-            if (($mod['managed_by'] ?? null) === 'catalog' && is_string($mod['filename'] ?? null)) {
-                $files['mods/'.strtolower($mod['filename'])] = true;
+            if (($mod['managed_by'] ?? null) !== 'catalog' || !is_string($mod['filename'] ?? null)) {
+                continue;
+            }
+            $path = 'mods/'.$mod['filename'];
+            $files[strtolower($path)] = true;
+            $source = $mod['source'] ?? null;
+            $projectId = $mod['project_id'] ?? null;
+            if (is_string($source) && $source !== '' && (is_string($projectId) || is_int($projectId)) && (string) $projectId !== '') {
+                $projects[strtolower($source.':'.(string) $projectId)] = $path;
             }
         }
 
-        return $files;
+        return ['files' => $files, 'projects' => $projects];
     }
 
     private function world(Server $server, DaemonFileRepository $repo): string

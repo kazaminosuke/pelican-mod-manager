@@ -104,10 +104,12 @@ final class JavaRuntimeImage
     /**
      * @param  array<string, string>  $dockerImages
      */
-    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion, ?int $minimumJava = null): ?string
+    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion, ?int $minimumJava = null, ?string $loader = null): ?string
     {
         $label = self::preferredLabel($minecraftVersion, $minimumJava);
-        if ($label === null) {
+        $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
+        $maximum = self::maximumJava($minecraftVersion, $loader);
+        if ($label === null || ($maximum !== null && $required > $maximum)) {
             return null;
         }
 
@@ -122,12 +124,29 @@ final class JavaRuntimeImage
         }
 
         $version = (int) substr($label, strlen('Java '));
+        $compatible = [];
         foreach ($dockerImages as $image) {
-            if (is_string($image) && self::imageJava($image) === $version) {
+            if (!is_string($image) || $image === '') {
+                continue;
+            }
+            $actual = self::imageJava($image);
+            if ($actual === null) {
+                continue;
+            }
+            if ($actual === $version) {
                 return $image;
+            }
+            if ($actual >= $required && ($maximum === null || $actual <= $maximum)) {
+                $compatible[] = ['java' => $actual, 'image' => $image];
             }
         }
 
-        return null;
+        if ($compatible === []) {
+            return null;
+        }
+
+        usort($compatible, static fn (array $left, array $right): int => $left['java'] <=> $right['java']);
+
+        return $compatible[0]['image'];
     }
 }

@@ -75,7 +75,15 @@ final class ModpackCreationStep
                             ->selectablePlaceholder(false)
                             ->live()
                             ->dehydrated(false)
-                            ->afterStateUpdated(fn (Set $set) => $set('mm_page', 1)),
+                            ->afterStateUpdated(function (Set $set, Get $get): void {
+                                $set('mm_page', 1);
+                                $set('mm_project', null);
+                                $set('mm_project_title', null);
+                                $set('mm_version', null);
+                                $set('mm_egg', null);
+                                $set('mm_confirm_compatibility', false);
+                                self::restore($set, $get);
+                            }),
                         Select::make('mm_minecraft')
                             ->label(fn (): string => trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
                             ->options(fn (): array => app(ModpackCatalog::class)->minecraftVersions())
@@ -294,10 +302,19 @@ final class ModpackCreationStep
         }
 
         $image = (string) $get('image');
+        $loader = $result->loader ?? $result->selected?->loader;
         if (JavaRuntimeImage::isTooOld($image, $result->minecraftVersion, $result->minimumJava)) {
             throw ValidationException::withMessages([
                 $component->resolveRelativeStatePath('image') => trans('pelican-mod-manager::strings.modpacks.java_too_old', [
                     'java' => JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava),
+                ]),
+            ]);
+        }
+        if (JavaRuntimeImage::isTooNew($image, $result->minecraftVersion, $loader)) {
+            throw ValidationException::withMessages([
+                $component->resolveRelativeStatePath('image') => trans('pelican-mod-manager::strings.modpacks.java_too_new', [
+                    'loader' => (string) $loader,
+                    'java' => JavaRuntimeImage::maximumLabel($result->minecraftVersion, $loader),
                 ]),
             ]);
         }
@@ -318,6 +335,8 @@ final class ModpackCreationStep
         }
 
         [$source, $project] = explode(':', (string) $get('mm_project'), 2);
+        $descriptorTitle = self::descriptor((string) $get('mm_project'), (string) $get('mm_version'))?->title;
+        $title = trim((string) ($get('mm_project_title') ?: ($descriptorTitle ?? '')));
 
         return [
             'mode' => $result->mode->value,
@@ -329,12 +348,13 @@ final class ModpackCreationStep
                 'image' => $image,
                 'startup' => (string) $get('startup'),
                 'minecraft' => $result->minecraftVersion,
-                'loader' => $result->loader ?? $result->selected?->loader,
+                'loader' => $loader,
                 'server_pack' => $result->serverFileStatus === 'server_pack_selected',
                 'artifact_id' => $result->artifactId,
+                ...($title === '' ? [] : ['title' => $title]),
+                ...($result->minimumJava === null ? [] : ['minimum_java' => $result->minimumJava]),
                 ...($result->manifestFingerprint === null ? [] : [
                     'manifest_fingerprint' => $result->manifestFingerprint,
-                    'title' => self::descriptor((string) $get('mm_project'), (string) $get('mm_version'))?->title,
                 ]),
                 'variables' => $result->mode === ProvisioningMode::Archive ? array_intersect_key(
                     $environment,
@@ -399,9 +419,11 @@ final class ModpackCreationStep
         $set('select_startup', $startup);
 
         $images = is_array($egg->docker_images) ? $egg->docker_images : [];
-        $image = JavaRuntimeImage::fromEggImages($images, $result->minecraftVersion, $result->minimumJava);
-        $set('image', $image);
-        $set('select_image', $image);
+        $image = JavaRuntimeImage::fromEggImages($images, $result->minecraftVersion, $result->minimumJava, $result->loader ?? $result->selected?->loader);
+        if ($image !== null) {
+            $set('image', $image);
+            $set('select_image', $image);
+        }
         // Panel uses required ToggleButtons with numeric option keys.
         $set('skip_scripts', 0);
         if (self::requiresManualStart($result)) {

@@ -388,6 +388,9 @@ final class InstallModpack
             $selection['archive_sha256'] = $archiveHash;
             $selection['server_pack'] = false;
             $selection['artifact_id'] = $file['artifact_id'] ?? $file['version_id'];
+            if (isset($review['token']) && is_string($review['token'])) {
+                $workflow->extendTtl($server, $review['token'], 7 * 86400);
+            }
             $operations->pauseCurseForgeModpack($this->serverId, $this->leaseToken, $this->projectId, $file['version_id'], $selection, $pending->files);
         } catch (Throwable $exception) {
             report($exception);
@@ -461,6 +464,7 @@ final class InstallModpack
                 '.mod-manager-modpack.json',
                 $payload,
             );
+            Cache::forget('modpack-legacy:'.$server->uuid);
         } catch (Throwable $exception) {
             report($exception);
         }

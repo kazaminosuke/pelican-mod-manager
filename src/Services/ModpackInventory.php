@@ -45,6 +45,8 @@ class ModpackInventory
         ]) !== 1) {
             throw new ModpackException('The modpack inventory could not be committed.');
         }
+
+        Cache::forget('modpack-legacy:'.$server->uuid);
     }
 
     public function abort(Server $server, string $token): void

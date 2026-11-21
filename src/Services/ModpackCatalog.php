@@ -103,6 +103,9 @@ final class ModpackCatalog
             $hit['key'] = $provider->value.':'.$hit['project_id'];
             $hit['title'] = (string) ($hit['title'] ?? '');
             $hit['source'] = $provider->getLabel();
+            if ($provider === ModpackProvider::CurseForge && $hit['title'] !== '') {
+                Cache::put('mod-manager:cf-title:'.$hit['project_id'], $hit['title'], 600);
+            }
             $hits[] = $hit;
         }
 
@@ -393,10 +396,21 @@ final class ModpackCatalog
             });
         }
 
+        $cachedTitle = Cache::get('mod-manager:cf-title:'.$projectId);
+        $title = is_string($cachedTitle) && $cachedTitle !== '' ? $cachedTitle : null;
+        if ($title === null) {
+            try {
+                $peeked = $this->curseForge->peekProject($projectId, dispatchOnMiss: false)['data'] ?? null;
+                $title = is_string($peeked['name'] ?? null) && $peeked['name'] !== '' ? $peeked['name'] : null;
+            } catch (Throwable) {
+                $title = null;
+            }
+        }
+
         return new ModpackDescriptor(
             provider: ModpackProvider::CurseForge->value,
             id: $projectId,
-            title: $projectId,
+            title: $title ?? $projectId,
             versionId: $resolvedVersion,
             versionName: (string) ($download['version_number'] ?? $resolvedVersion),
             minecraftVersion: $metadata['minecraft'] ?? $download['minecraft'] ?? null,

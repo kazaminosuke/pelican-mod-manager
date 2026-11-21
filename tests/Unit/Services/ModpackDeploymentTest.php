@@ -287,6 +287,55 @@ final class ModpackDeploymentTest extends TestCase
         self::assertArrayNotHasKey('mods/optional.jar', $store->data['inventory']['files']);
     }
 
+    public function test_individually_managed_curseforge_project_with_different_filename_blocks_duplicate_mod(): void
+    {
+        $wings = new DeploymentWings();
+        $wings->files['mods/jei-old.jar'] = 'individual-jei';
+        $wings->files['mods/.pelican-mod-manager.json'] = json_encode([
+            'installed_mods' => [[
+                'filename' => 'jei-old.jar',
+                'managed_by' => 'catalog',
+                'source' => 'curseforge',
+                'project_id' => '238222',
+            ]],
+        ], JSON_THROW_ON_ERROR);
+        $store = new DeploymentInventory();
+        $service = new ModpackDeployment($wings, $store);
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $target = [
+            'mods/jei-new.jar' => [
+                ...$this->file('pack-jei'),
+                'project_id' => '238222',
+            ],
+        ];
+
+        $preview = $service->run($server, $repo, $this->release('1'), $target, null, true, null, static fn () => null);
+
+        self::assertSame(['mods/jei-old.jar'], $preview['mod_conflicts']);
+        self::assertSame(['mods/jei-old.jar'], $preview['blocking_conflicts']);
+        self::assertSame(1, $preview['mods']['conflict']);
+    }
+
+    public function test_deploy_verifies_staged_bytes_once_without_duplicate_post_move_downloads(): void
+    {
+        $wings = new DeploymentWings();
+        $store = new DeploymentInventory();
+        $service = new ModpackDeployment($wings, $store);
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+
+        $service->run($server, $repo, $this->release('1'), [
+            'mods/one.jar' => $this->file('mod-one'),
+            'config/app.toml' => $this->file('cfg-one'),
+        ], null, false, null, static fn () => null);
+
+        // Each staged file is read once on Wings during stage() inspection, without a second post-move download.
+        self::assertSame(2, $wings->reads);
+        self::assertSame('mod-one', $wings->files['mods/one.jar']);
+        self::assertSame('cfg-one', $wings->files['config/app.toml']);
+    }
+
     private function zip(array $files): string
     {
         $path = tempnam(sys_get_temp_dir(), 'managed-modpack-test');
@@ -366,6 +415,8 @@ final class DeploymentWings extends WingsRemoteFilesystem
 
     public int $uploads = 0;
 
+    public int $reads = 0;
+
     public ?string $failMove = null;
 
     public function listDirectory(DaemonFileRepository $fileRepository, Server $server, string $directory): array
@@ -386,6 +437,7 @@ final class DeploymentWings extends WingsRemoteFilesystem
 
     public function readStream(DaemonFileRepository $fileRepository, Server $server, string $path): StreamInterface
     {
+        $this->reads++;
         if (!isset($this->files[$path])) {
             throw new ModpackException("Missing file $path");
         }

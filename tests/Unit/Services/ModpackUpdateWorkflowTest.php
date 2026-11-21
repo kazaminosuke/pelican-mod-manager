@@ -11,6 +11,7 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
@@ -125,6 +126,27 @@ final class ModpackUpdateWorkflowTest extends TestCase
         $panel->shouldNotReceive('handle');
         $this->expectExceptionMessage('wait for Wings to confirm');
         $workflow->createBackup($server, $workflow->review($server)['token'], $panel);
+    }
+
+    public function test_extend_ttl_keeps_approved_review_alive_through_seven_day_manual_wait(): void
+    {
+        Carbon::setTestNow('2026-11-20 00:00:00');
+        try {
+            [$workflow, , $leases] = $this->setupWorkflow(ContainerStatus::Offline);
+            $server = $this->server();
+            $lease = $leases->tryAcquire(43, ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK);
+            $workflow->publish($server, $lease, [], [], []);
+            $token = $workflow->review($server)['token'];
+
+            $workflow->extendTtl($server, $token, 7 * 86400);
+            Carbon::setTestNow('2026-11-23 00:00:00');
+
+            $review = $workflow->review($server);
+            self::assertIsArray($review);
+            self::assertSame($token, $review['token']);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     private function setupWorkflow(ContainerStatus $status): array

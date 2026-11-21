@@ -50,6 +50,14 @@ final class ModpackUpdateWorkflow
         $this->operations->awaitModpackReview($server, $lease);
     }
 
+    public function extendTtl(Server $server, string $token, int $ttl): void
+    {
+        $review = $this->review($server);
+        if ($review !== null && hash_equals($review['token'], $token)) {
+            $this->cache->put($this->key($server), $review, max(self::TTL, $ttl));
+        }
+    }
+
     public function createBackup(Server $server, string $token, InitiateBackupService $backups): void
     {
         $this->leases->run((int) $server->getKey(), ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK, function () use ($server, $token, $backups): void {

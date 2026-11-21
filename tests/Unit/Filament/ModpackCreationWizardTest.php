@@ -204,7 +204,7 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('925200', $runner->spawned[0]['payload']['project_id']);
         self::assertSame([
             'egg_id' => '7', 'image' => 'ghcr.io/pelican-eggs/yolks:java_21', 'startup' => 'java -jar server.jar', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
-            'artifact_id' => '9620727',
+            'artifact_id' => '9620727', 'title' => 'All the Mods 10',
             'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => '21.1.266'],
         ], $runner->spawned[0]['payload']['selection']);
         self::assertGreaterThan(time(), $runner->spawned[0]['payload']['defer_until']);
@@ -806,6 +806,7 @@ final class ModpackCreationWizardTest extends TestCase
             self::assertSame('0.14.12', $data['environment']['LOADER_VERSION']);
             self::assertSame('latest', $data['environment']['FABRIC_VERSION']);
             self::assertSame('vtGmZsbn', $data['mm_install_plan']['version_id']);
+            self::assertSame('Fabric Server Optimization', $data['mm_install_plan']['selection']['title']);
 
             return true;
         })->andReturn((new Server())->forceFill(['id' => 50]));
@@ -818,6 +819,41 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSet('data.egg_id', 9)
             ->call('create')
             ->assertHasNoErrors();
+    }
+
+    public function test_switching_provider_clears_selected_modpack_state_and_restores_startup(): void
+    {
+        $this->addEgg(9, 'Fabric', '10000000-b803-4f34-82cf-2d6518c6351a', ['MC_VERSION' => 'latest', 'LOADER_VERSION' => 'latest']);
+        Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([]),
+            'api.modrinth.com/v2/search*' => Http::response([
+                'hits' => [['project_id' => 'YkG1DyHE', 'title' => 'Fabric Pack']], 'total_hits' => 1,
+            ]),
+            'api.modrinth.com/v2/project/YkG1DyHE/version*' => Http::response([[
+                'id' => 'vtGmZsbn', 'project_id' => 'YkG1DyHE', 'version_number' => '1.0',
+                'game_versions' => ['1.20.1'], 'loaders' => ['fabric'],
+                'files' => [['filename' => 'pack.mrpack', 'url' => 'https://cdn.modrinth.com/pack.mrpack', 'primary' => true]],
+            ]]),
+            'api.modrinth.com/v2/version/vtGmZsbn' => Http::response([
+                'id' => 'vtGmZsbn', 'project_id' => 'YkG1DyHE', 'version_number' => '1.0',
+                'game_versions' => ['1.20.1'], 'loaders' => ['fabric'],
+                'files' => [['filename' => 'pack.mrpack', 'url' => 'https://cdn.modrinth.com/pack.mrpack', 'primary' => true]],
+            ]),
+            'api.modrinth.com/v2/project/YkG1DyHE' => Http::response(['id' => 'YkG1DyHE', 'server_side' => 'required']),
+            'api.modpacks.ch/public/modpack/popular/installs/20' => Http::response(['packs' => []]),
+        ]);
+
+        Livewire::test(ModpackCreationWizardHarness::class)
+            ->set('data.mm_modpack', true)
+            ->set('data.mm_project', 'modrinth:YkG1DyHE')
+            ->set('data.mm_version', 'vtGmZsbn')
+            ->assertSet('data.egg_id', 9)
+            ->set('data.mm_provider', 'ftb')
+            ->assertSet('data.mm_project', null)
+            ->assertSet('data.mm_project_title', null)
+            ->assertSet('data.mm_version', null)
+            ->assertSet('data.mm_confirm_compatibility', false)
+            ->assertSet('data.egg_id', null);
     }
 
     private function ftbPack(): array
