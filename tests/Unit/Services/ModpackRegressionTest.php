@@ -63,6 +63,37 @@ final class ModpackRegressionTest extends TestCase
             'A pack-owned executable requires an explicit retention decision or removal on a switch.');
     }
 
+    public function test_update_blocks_edited_obsolete_scripts_and_preserves_operator_config(): void
+    {
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $wings = new DeploymentWings();
+        $store = new DeploymentInventory();
+        $deployment = new ModpackDeployment($wings, $store);
+        $guard = static fn () => null;
+        $first = ['provider' => 'modrinth', 'pack_id' => 'pack-a', 'version_id' => '1'];
+        $next = ['provider' => 'modrinth', 'pack_id' => 'pack-a', 'version_id' => '2'];
+        $script = 'kubejs/server_scripts/removed.js';
+        $config = 'config/example.toml';
+        $deployment->run($server, $repo, $first, [$script => $this->file('default script'), $config => $this->file('default config')], null, false, null, $guard);
+        $wings->files[$script] = 'edited script';
+        $wings->files[$config] = 'edited config';
+
+        $preview = $deployment->run($server, $repo, $next, [], null, true, null, $guard);
+
+        self::assertSame([$script], $preview['blocking_conflicts']);
+        self::assertSame('preserve', $preview['paths'][$config]);
+        try {
+            $deployment->run($server, $repo, $next, [], $preview['digest'], false, 'backup', $guard);
+            self::fail('An edited executable removed by the new release must be resolved before apply.');
+        } catch (ModpackException $error) {
+            self::assertStringContainsString('Conflicting active files', $error->getMessage());
+        }
+        self::assertSame('1', $store->data['inventory']['version_id']);
+        self::assertSame('edited script', $wings->files[$script]);
+        self::assertSame('edited config', $wings->files[$config]);
+    }
+
     public function test_oversize_server_override_does_not_fall_back_to_shared_client_config(): void
     {
         $json = ['formatVersion' => 1, 'game' => 'minecraft', 'files' => []];

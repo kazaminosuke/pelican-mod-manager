@@ -14,7 +14,7 @@ final class ModpackDelta
      * @param callable(string, bool): (string|false|null) $observe
      * @return array<string, array{action: string, observed: string|false|null, size: ?int}>
      */
-    public static function plan(array $owned, array $desired, callable $observe, bool $switch = false): array
+    public static function plan(array $owned, array $desired, callable $observe): array
     {
         $plan = [];
         $paths = array_unique([...array_keys($desired), ...array_keys($owned)]);
@@ -23,8 +23,7 @@ final class ModpackDelta
             $old = $owned[$path] ?? null;
             $target = $desired[$path] ?? null;
             $mod = str_starts_with(strtolower($path), 'mods/');
-            $removeObsolete = $mod || ($switch && ModpackPaths::isExecutablePackContent($path));
-            if ($target === null && !$removeObsolete) {
+            if ($target === null && !ModpackPaths::isExecutablePackContent($path)) {
                 $plan[$path] = ['action' => 'preserve', 'observed' => null, 'size' => null];
 
                 continue;

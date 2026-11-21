@@ -55,7 +55,7 @@ final class ModpackDeployment
         $owned = array_diff_key($owned, $retained);
         $this->assertDistinctPaths($target);
         $individual = $this->individuallyManaged($server, $repo);
-        $plan = $this->plan($server, $repo, $owned, $target, $individual, $switch);
+        $plan = $this->plan($server, $repo, $owned, $target, $individual);
         $summary = $this->summary($plan, $protected, $switch);
         foreach (array_keys($retained) as $path) {
             if ($switch && ModpackPaths::isExecutablePackContent($path)) {
@@ -122,7 +122,7 @@ final class ModpackDeployment
             if ($staged !== [] || $summary['counts']['delete'] > 0) {
                 $this->listings = [];
                 if ($world !== $this->world($server, $repo)
-                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo), $switch)) {
+                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo))) {
                     throw new ModpackException('Server files changed during staging. No modpack files were applied.');
                 }
                 $guard();
@@ -269,7 +269,7 @@ final class ModpackDeployment
             'size' => $item['size']];
     }
 
-    private function plan(Server $server, DaemonFileRepository $repo, array $owned, array $target, array $individual, bool $switch): array
+    private function plan(Server $server, DaemonFileRepository $repo, array $owned, array $target, array $individual): array
     {
         return ModpackDelta::plan($owned, $target, function (string $path, bool $tracked) use ($server, $repo, $individual) {
             $entry = $this->entry($server, $repo, $path);
@@ -281,7 +281,7 @@ final class ModpackDeployment
             }
 
             return $this->digest($server, $repo, $path);
-        }, $switch);
+        });
     }
 
     private function summary(array $plan, array $protected, bool $switch): array
@@ -302,7 +302,7 @@ final class ModpackDeployment
                 if ($isMod) {
                     $modConflicts[] = $path;
                 }
-                if ($isMod || ($switch && ModpackPaths::isExecutablePackContent($path))) {
+                if (ModpackPaths::isExecutablePackContent($path) && ($isMod || $switch || $action === 'conflict')) {
                     $blocking[] = $path;
                 }
             }
