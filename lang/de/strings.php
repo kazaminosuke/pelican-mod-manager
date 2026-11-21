@@ -375,6 +375,7 @@ return [
         'server_pack_unavailable' => 'Das dedizierte Server-ZIP ist nicht verfügbar. Das reguläre Modpack-ZIP wird verwendet.',
         'server_pack_unlisted' => 'Kein dediziertes Server-ZIP gelistet. Das reguläre Modpack-ZIP wird verwendet.',
         'java_too_old' => 'Für das ausgewählte Image konnte die erforderliche Version :java oder neuer nicht bestätigt werden.',
+        'java_too_new' => 'Das ausgewählte Image verwendet eine zu neue Java-Version für älteres :loader (:java oder älter erforderlich).',
         'modrinth_server_unsupported' => 'Modrinth stuft dieses Modpack als inkompatibel mit dedizierten Servern ein. Du kannst die Installation mit einem passenden Loader-Egg versuchen. Prüfe die Dateien und das Startprotokoll beim manuellen Start.',
         'ftb_manifest_invalid' => 'FTB hat kein vollständiges Manifest für die ausgewählte öffentliche Version bereitgestellt.',
         'ftb_manifest_unavailable' => 'Das FTB-Manifest konnte nicht heruntergeladen werden. Versuche es erneut mit derselben Version im Mod Manager.',

@@ -189,6 +189,12 @@ final class ModpackInstaller
                 'java' => JavaRuntimeImage::preferredLabel($manifest->minecraftVersion, $manifest->minimumJava),
             ]));
         }
+        if (JavaRuntimeImage::isTooNew($image, $manifest->minecraftVersion, $manifest->loader)) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_new', [
+                'loader' => $manifest->loader ?? 'Minecraft',
+                'java' => JavaRuntimeImage::maximumLabel($manifest->minecraftVersion, $manifest->loader),
+            ]));
+        }
 
         return $manifest;
     }

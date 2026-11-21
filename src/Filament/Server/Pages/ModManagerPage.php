@@ -4300,6 +4300,11 @@ class ModManagerPage extends Page implements HasTable
                                 $java,
                                 JavaRuntimeImage::isTooOld($server->image, $result->minecraftVersion, $result->minimumJava)
                                     ? trans('pelican-mod-manager::strings.modpacks.java_too_old', ['java' => $java]) : null,
+                                JavaRuntimeImage::isTooNew($server->image, $result->minecraftVersion, $result->loader)
+                                    ? trans('pelican-mod-manager::strings.modpacks.java_too_new', [
+                                        'loader' => $result->loader ?? 'Minecraft',
+                                        'java' => JavaRuntimeImage::maximumLabel($result->minecraftVersion, $result->loader),
+                                    ]) : null,
                                 $result->serverFileStatus !== null
                                     ? trans('pelican-mod-manager::strings.modpacks.'.$result->serverFileStatus) : null,
                             ]));

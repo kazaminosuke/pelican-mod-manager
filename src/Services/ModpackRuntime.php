@@ -56,11 +56,14 @@ final class ModpackRuntime
         $entry = match ($loader) {
             'fabric' => 'fabric.mod.json',
             'quilt' => 'quilt.mod.json',
+            'forge' => 'version.json',
             default => null,
         };
         [$manifest, $embedded] = $this->launcherMetadata($repo, $server, $jar, $entry);
         if ($loader !== 'fabric') {
-            $main = $loader === 'forge' ? 'net\.minecraftforge\.' : 'org\.quiltmc\.';
+            $main = $loader === 'forge'
+                ? '(?:net\.minecraftforge\.|cpw\.mods\.fml\.relauncher\.)'
+                : 'org\.quiltmc\.';
             if (!preg_match('/^Main-Class: '.$main.'\S+/m', $manifest)) {
                 throw new ModpackException("The installed JAR does not contain a $loader launcher.");
             }
@@ -73,8 +76,7 @@ final class ModpackRuntime
                     } elseif (($embedded['quilt_loader']['version'] ?? null) !== $build) {
                         throw new ModpackException('The installed Quilt launcher does not identify the selected loader build.');
                     }
-                } elseif (!preg_match('/^Implementation-Version: (\S+)/m', $manifest, $version)
-                    || !ModpackLoader::matchesBuild($loader, $build, $version[1], $minecraft)) {
+                } elseif (!$this->matchesLegacyForgeBuild($manifest, $embedded, $build, $minecraft)) {
                     throw new ModpackException('The legacy Forge launcher does not identify the selected loader build.');
                 }
             }
@@ -103,6 +105,31 @@ final class ModpackRuntime
         $this->requireJar($repo, $server, $match[0]);
         $this->requireJar($repo, $server, "libraries/net/fabricmc/intermediary/$minecraft/intermediary-$minecraft.jar");
         $this->requireJar($repo, $server, 'minecraft-server.jar');
+    }
+
+    private function matchesLegacyForgeBuild(string $manifest, array $versionJson, string $build, string $minecraft): bool
+    {
+        $candidates = [];
+        if (preg_match('/^ServerLaunchArgs:[^\r\n]*--fml\.forgeVersion\s+(\S+)/m', $manifest, $match) === 1) {
+            $candidates[] = $match[1];
+        }
+        if (preg_match_all('/^Implementation-Version: (\S+)/m', $manifest, $versions) > 0) {
+            foreach ($versions[1] as $candidate) {
+                $candidates[] = $candidate;
+            }
+        }
+        $versionId = $versionJson['id'] ?? null;
+        if (is_string($versionId) && preg_match('/Forge([A-Za-z0-9.+_-]+)/i', $versionId, $match) === 1) {
+            $candidates[] = $match[1];
+        }
+
+        foreach (array_unique($candidates) as $candidate) {
+            if (ModpackLoader::matchesBuild('forge', $build, $candidate, $minecraft)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function requireJar(DaemonFileRepository $repo, Server $server, string $path): void
@@ -148,7 +175,8 @@ final class ModpackRuntime
                 throw new ModpackException('The installed launcher is not a valid JAR.');
             }
             try {
-                $manifest = preg_replace('/\r?\n /', '', (string) $archive->getFromName('META-INF/MANIFEST.MF', 65536));
+                // Signed legacy Forge JAR manifests can exceed 64 KB.
+                $manifest = preg_replace('/\r?\n /', '', (string) $archive->getFromName('META-INF/MANIFEST.MF', 512 * 1024));
                 $loader = $entry === null ? null : json_decode((string) $archive->getFromName($entry, 65536), true);
 
                 return [$manifest, is_array($loader) ? $loader : []];

@@ -219,6 +219,46 @@ final class ModpackRegressionTest extends TestCase
         $runtime->assertInstalled($server, $repo, 'neoforge', '1.21.1', '21.1.267', ['NEOFORGE_VERSION' => '21.1.267']);
     }
 
+    public function test_legacy_forge_jar_manifests_and_1201_neoforge_unix_args_are_verified(): void
+    {
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $wings = new DeploymentWings();
+        $runtime = new ModpackRuntime($wings);
+
+        // 1.7.10 Forge universal JAR uses cpw.mods.fml.relauncher.ServerLaunchWrapper and version.json.
+        $forge1710 = $this->zip([
+            'META-INF/MANIFEST.MF' => "Manifest-Version: 1.0\r\nTweakClass: cpw.mods.fml.common.launcher.FMLTweaker\r\nMain-Class: cpw.mods.fml.relauncher.ServerLaunchWrapper\r\n",
+            'version.json' => json_encode(['id' => '1.7.10-Forge10.13.4.1614-1.7.10'], JSON_THROW_ON_ERROR),
+        ]);
+        try {
+            $wings->files = ['server.jar' => (string) file_get_contents($forge1710)];
+        } finally {
+            unlink($forge1710);
+        }
+        $runtime->assertInstalled((new Server())->forceFill(['startup' => 'java -jar {{SERVER_JARFILE}}']), $repo, 'forge', '1.7.10', '10.13.4.1614', []);
+
+        // 1.16.5 Forge launcher JAR has multiple Implementation-Version sections plus ServerLaunchArgs.
+        $digestPadding = str_repeat("Name: filler/Class.class\r\nSHA-256-Digest: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n\r\n", 900);
+        $forge1165 = $this->zip([
+            'META-INF/MANIFEST.MF' => "Manifest-Version: 1.0\r\nMain-Class: net.minecraftforge.server.ServerMain\r\n"
+                ."ServerLaunchArgs: --gameDir . --launchTarget fmlserver --fml.forgeVersion 36.2.42 --fml.mcVersion 1.16.5\r\n\r\n"
+                ."Name: net/minecraftforge/fml/mclanguageprovider/\r\nImplementation-Version: 1\r\n\r\n"
+                .$digestPadding
+                ."Name: net/minecraftforge/versions/forge/\r\nImplementation-Version: 36.2.42\r\n\r\n",
+        ]);
+        try {
+            $wings->files = ['server.jar' => (string) file_get_contents($forge1165)];
+        } finally {
+            unlink($forge1165);
+        }
+        $runtime->assertInstalled((new Server())->forceFill(['startup' => 'java -jar {{SERVER_JARFILE}}']), $repo, 'forge', '1.16.5', '36.2.42', []);
+
+        // 1.20.1 NeoForge uses libraries/net/neoforged/forge/1.20.1-<build> while release targets store <build>.
+        $neoJar = 'libraries/net/neoforged/forge/1.20.1-47.1.84/forge-1.20.1-47.1.84-universal.jar';
+        $wings->files = ['unix_args.txt' => "-cp $neoJar\n--fml.mcVersion 1.20.1\n", $neoJar => "PK\x03\x04"];
+        $runtime->assertInstalled((new Server())->forceFill(['startup' => 'java @unix_args.txt']), $repo, 'neoforge', '1.20.1', '47.1.84', []);
+    }
+
     public function test_wrapped_server_zip_can_declare_its_runtime_in_its_own_manifest(): void
     {
         $path = $this->zip([

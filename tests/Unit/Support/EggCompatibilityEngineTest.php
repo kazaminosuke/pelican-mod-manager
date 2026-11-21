@@ -126,6 +126,18 @@ final class EggCompatibilityEngineTest extends TestCase
         }
     }
 
+    public function test_neoforge_1201_uses_the_prefixed_coordinate_and_matches_unprefixed_builds(): void
+    {
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        $legacyNeo = new ModpackDescriptor('ftb', '119', 'Direwolf20 1.20', '100051', '1.16.1', '1.20.1', 'neoforge', '47.1.84', null, null, [], true, null);
+        $modernNeo = new ModpackDescriptor('curseforge', '925200', 'ATM10', '9620701', '8.6', '1.21.1', 'neoforge', '21.1.266', null, null, [], true, null);
+
+        self::assertSame('1.20.1-47.1.84', $planner->requirement($legacyNeo)->archiveVariables['NEOFORGE_VERSION']);
+        self::assertSame('21.1.266', $planner->requirement($modernNeo)->archiveVariables['NEOFORGE_VERSION']);
+        self::assertTrue(\Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '1.20.1-47.1.84']));
+        self::assertFalse(\Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '47.1.85']));
+    }
+
     public function test_one_high_confidence_fabric_egg_is_selected_for_creation(): void
     {
         $fabric = $this->engine->classify(1, 'Fabric', 'fabric-uuid', null, ['FABRIC_VERSION', 'LOADER_VERSION', 'MC_VERSION', 'SERVER_JARFILE']);
@@ -317,6 +329,11 @@ final class EggCompatibilityEngineTest extends TestCase
         self::assertSame('ghcr.io/example/java_17', JavaRuntimeImage::fromEggImages($images, '1.20.1'));
         self::assertSame('ghcr.io/example/java_8', JavaRuntimeImage::fromEggImages($images, '1.12.2'));
         self::assertNull(JavaRuntimeImage::fromEggImages(['Java 8' => 'ghcr.io/example/java_8'], '1.21.1'));
+        self::assertTrue(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_17', '1.12.2', 'forge'));
+        self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_8', '1.12.2', 'forge'));
+        self::assertTrue(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_21', '1.16.5', 'forge'));
+        self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_16', '1.16.5', 'forge'));
+        self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_21', '1.20.1', 'forge'));
     }
 
     public function test_technic_bindings_read_the_version_token_from_the_server_archive_url(): void

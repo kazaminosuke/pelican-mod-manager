@@ -67,6 +67,12 @@ final class ModpackInstallCoordinator
                 'java' => JavaRuntimeImage::preferredLabel($descriptor->minecraftVersion, $descriptor->minimumJava),
             ]));
         }
+        if (JavaRuntimeImage::isTooNew($server->image, $descriptor->minecraftVersion, $descriptor->loader)) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_new', [
+                'loader' => $descriptor->loader ?? 'Minecraft',
+                'java' => JavaRuntimeImage::maximumLabel($descriptor->minecraftVersion, $descriptor->loader),
+            ]));
+        }
         if ($result->compatibilityWarning !== null && !$confirmedCompatibility) {
             throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.'.$result->compatibilityWarning));
         }
@@ -87,6 +93,7 @@ final class ModpackInstallCoordinator
             'loader' => $descriptor->loader, 'loader_version' => $descriptor->loaderVersion,
             'server_pack' => $descriptor->usesServerPack, 'artifact_id' => $descriptor->artifactId,
             'title' => $descriptor->title,
+            ...($descriptor->minimumJava === null ? [] : ['minimum_java' => $descriptor->minimumJava]),
             ...($descriptor->manifestFingerprint === null ? [] : ['manifest_fingerprint' => $descriptor->manifestFingerprint]),
         ];
         $dispatch = $this->operations->dispatchModpackInstall($server, ProjectType::Mod, $descriptor->provider, $descriptor->id,

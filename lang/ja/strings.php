@@ -375,6 +375,7 @@ return [
         'server_pack_unavailable' => '専用サーバーZIPを取得できないため、通常のModpack ZIPを使用します。',
         'server_pack_unlisted' => '専用サーバーZIPの掲載がないため、通常のModpack ZIPを使用します。',
         'java_too_old' => '選択したイメージで、必要な :java 以上を利用できることを確認できませんでした。',
+        'java_too_new' => '選択したイメージの Java は旧版 :loader の上限を超えています（:java 以下を選択してください）。',
         'modrinth_server_unsupported' => 'ModrinthではこのModpackが専用サーバー非対応と表示されています。対応するローダーのEggで導入を試せます。ファイルを確認し、手動起動時に起動ログを確認してください。',
         'ftb_manifest_invalid' => '選択したFTB公開リリースの完全なファイル一覧を確認できませんでした。',
         'ftb_manifest_unavailable' => 'FTBリリースのファイル一覧を取得できませんでした。Mod Managerから同じリリースを再試行してください。',

@@ -49,12 +49,51 @@ final class JavaRuntimeImage
         return 8;
     }
 
+    public static function maximumJava(?string $minecraftVersion, ?string $loader = null): ?int
+    {
+        $version = strtolower(trim((string) $minecraftVersion));
+        if ($version === '' || preg_match('/^(\d+)\.(\d+)(?:\.(\d+))?/', $version, $matches) !== 1) {
+            return null;
+        }
+
+        $major = (int) $matches[1];
+        $minor = (int) $matches[2];
+        if ($major !== 1) {
+            return null;
+        }
+
+        if ($minor <= 12 && ($loader === 'forge' || $loader === null)) {
+            return 8;
+        }
+
+        if ($minor <= 16 && $loader === 'forge') {
+            return 16;
+        }
+
+        return null;
+    }
+
+    public static function maximumLabel(?string $minecraftVersion, ?string $loader = null): ?string
+    {
+        $max = self::maximumJava($minecraftVersion, $loader);
+
+        return $max === null ? null : 'Java '.$max;
+    }
+
     public static function isTooOld(?string $image, ?string $minecraftVersion, ?int $minimumJava = null): bool
     {
         $actual = self::imageJava($image);
         $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
 
         return $actual === null ? $minimumJava !== null : $actual < $required;
+    }
+
+    public static function isTooNew(?string $image, ?string $minecraftVersion, ?string $loader = null): bool
+    {
+        $actual = self::imageJava($image);
+        $maximum = self::maximumJava($minecraftVersion, $loader);
+
+        return $actual !== null && $maximum !== null && $actual > $maximum;
     }
 
     private static function imageJava(?string $image): ?int
