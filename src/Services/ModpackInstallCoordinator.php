@@ -59,9 +59,13 @@ final class ModpackInstallCoordinator
         $result = $preview['result'];
         if ($versionId === '' || $descriptor->versionId !== $versionId
             || $result->disposition !== CompatibilityDisposition::Compatible
-            || $result->mode !== ProvisioningMode::Archive
-            || JavaRuntimeImage::isTooOld($server->image, $descriptor->minecraftVersion)) {
+            || $result->mode !== ProvisioningMode::Archive) {
             throw new ModpackException('This release cannot use the current Egg, runtime or archive installer. Review the compatibility details. An in-place reinstall cannot be rolled back.');
+        }
+        if (JavaRuntimeImage::isTooOld($server->image, $descriptor->minecraftVersion, $descriptor->minimumJava)) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_old', [
+                'java' => JavaRuntimeImage::preferredLabel($descriptor->minecraftVersion, $descriptor->minimumJava),
+            ]));
         }
         if ($result->compatibilityWarning !== null && !$confirmedCompatibility) {
             throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.'.$result->compatibilityWarning));
@@ -83,6 +87,7 @@ final class ModpackInstallCoordinator
             'loader' => $descriptor->loader, 'loader_version' => $descriptor->loaderVersion,
             'server_pack' => $descriptor->usesServerPack, 'artifact_id' => $descriptor->artifactId,
             'title' => $descriptor->title,
+            ...($descriptor->manifestFingerprint === null ? [] : ['manifest_fingerprint' => $descriptor->manifestFingerprint]),
         ];
         $dispatch = $this->operations->dispatchModpackInstall($server, ProjectType::Mod, $descriptor->provider, $descriptor->id,
             $descriptor->versionId, selection: $selection);

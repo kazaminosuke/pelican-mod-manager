@@ -29,5 +29,7 @@ final class PackRequirement
         public readonly ?string $serverFileStatus = null,
         public readonly ?string $archiveCompatibilityWarning = null,
         public readonly ?string $artifactId = null,
+        public readonly ?int $minimumJava = null,
+        public readonly ?string $manifestFingerprint = null,
     ) {}
 }

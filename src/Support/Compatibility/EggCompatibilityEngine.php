@@ -522,6 +522,8 @@ final class EggCompatibilityEngine
                 ?? ($mode === ProvisioningMode::Archive ? $requirement->archiveCompatibilityWarning : null),
             serverFileStatus: $requirement->serverFileStatus,
             artifactId: $requirement->artifactId,
+            minimumJava: $requirement->minimumJava,
+            manifestFingerprint: $requirement->manifestFingerprint,
         );
     }
 }

@@ -30,6 +30,8 @@ final class ModpackDescriptor
         public readonly bool $usesServerPack = false,
         public readonly ?string $artifactId = null,
         public readonly ?string $compatibilityWarning = null,
+        public readonly ?int $minimumJava = null,
+        public readonly ?string $manifestFingerprint = null,
     ) {}
 
     public function optionKey(): string

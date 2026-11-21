@@ -2,18 +2,20 @@
 
 namespace Kazaminosuke\ModManager\Sources;
 
+use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
+use Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\UpstreamHttp;
 use Throwable;
 
 /**
- * FTB packs installed by the current FTB Server egg.
- *
- * The egg runs api.feed-the-beast.com's server installer from FTB_MODPACK_ID
- * and FTB_MODPACK_VERSION_ID during installation. Search hits that exist only
- * as CurseForge ids are ignored, because that installer does not accept them.
+ * Public FTB catalog and fixed-release manifests used by the managed installer.
  */
 final class FtbModpackSource
 {
@@ -43,21 +45,48 @@ final class FtbModpackSource
             ->throw()
             ->json();
 
-        $ids = is_array($response['packs'] ?? null) ? $response['packs'] : [];
+        $ids = [];
+        foreach (array_slice(is_array($response['packs'] ?? null) ? $response['packs'] : [], 0, 6) as $id) {
+            if (self::isId($id)) {
+                $ids[(string) $id] = (string) $id;
+            }
+        }
+        if ($ids === []) {
+            return [];
+        }
+
+        $packs = $pending = [];
+        foreach ($ids as $id) {
+            $pack = Cache::get(self::summaryKey($id));
+            if (is_array($pack)) {
+                $packs[$id] = $pack;
+            } else {
+                $pending[] = $id;
+            }
+        }
+        if ($pending !== []) {
+            $responses = Http::pool(static fn (Pool $pool): array => array_map(
+                static fn (string $id) => $pool->as($id)->acceptJson()->timeout(8)->connectTimeout(3)->get(self::PACK.$id),
+                $pending,
+            ));
+            foreach ($pending as $id) {
+                $response = $responses[$id] ?? null;
+                if ($response instanceof Response && $response->successful()) {
+                    $pack = $this->publicPack($response->json(), $id);
+                    if ($pack !== []) {
+                        $packs[$id] = $pack;
+                        Cache::put(self::summaryKey($id), $pack, 60);
+                    }
+                }
+            }
+        }
+
         $descriptors = [];
-        foreach (array_slice($ids, 0, 6) as $id) {
-            if (!is_numeric($id)) {
-                continue;
-            }
-
-            try {
-                $pack = $this->describe((string) (int) $id);
-            } catch (Throwable) {
-                continue;
-            }
-
-            if ($pack !== null) {
-                $descriptors[] = $pack;
+        foreach ($ids as $id) {
+            $pack = $packs[$id] ?? [];
+            $version = $this->publicVersions($pack)[0] ?? null;
+            if ($version !== null) {
+                $descriptors[] = $this->descriptor($pack, $version);
             }
         }
 
@@ -84,7 +113,7 @@ final class FtbModpackSource
     public function describe(string $packId, ?string $versionId = null): ?ModpackDescriptor
     {
         $pack = $this->fetchPack($packId);
-        if (!is_numeric($pack['id'] ?? null) || ($pack['private'] ?? false) === true) {
+        if ($pack === []) {
             return null;
         }
 
@@ -108,24 +137,50 @@ final class FtbModpackSource
             return null;
         }
 
-        return $this->descriptor($pack, $selected);
+        return $this->descriptor($pack, $selected, $versionId !== null && $versionId !== '');
+    }
+
+    public static function releaseUrl(string $packId, string $versionId): ?string
+    {
+        return self::isId($packId) && self::isId($versionId) ? self::PACK.$packId.'/'.$versionId : null;
+    }
+
+    private static function isId(mixed $value): bool
+    {
+        return (is_string($value) || is_int($value)) && preg_match('/^[1-9]\d*$/D', (string) $value) === 1;
+    }
+
+    private static function summaryKey(string $id): string
+    {
+        return 'mod-manager:ftb-summary:'.$id;
     }
 
     /** @return array<string, mixed> */
     private function fetchPack(string $packId): array
     {
-        if (preg_match('/^[1-9]\d*$/', $packId) !== 1) {
+        if (!self::isId($packId)) {
             return [];
         }
 
-        $response = UpstreamHttp::json()
-            ->timeout(8)
-            ->connectTimeout(3)
-            ->get(self::PACK.$packId)
-            ->throw()
-            ->json();
+        $cached = Cache::get(self::summaryKey($packId));
+        if (is_array($cached)) {
+            return $cached;
+        }
 
-        return is_array($response) && (string) ($response['id'] ?? '') === $packId ? $response : [];
+        $response = UpstreamHttp::json()->timeout(8)->connectTimeout(3)->get(self::PACK.$packId)->throw();
+        $pack = $this->publicPack($response->json(), $packId);
+        if ($pack !== []) {
+            Cache::put(self::summaryKey($packId), $pack, 60);
+        }
+
+        return $pack;
+    }
+
+    /** @return array<string, mixed> */
+    private function publicPack(mixed $pack, string $id): array
+    {
+        return is_array($pack) && self::isId($pack['id'] ?? null) && (string) $pack['id'] === $id
+            && ($pack['private'] ?? false) === false ? $pack : [];
     }
 
     /**
@@ -136,7 +191,7 @@ final class FtbModpackSource
     {
         $versions = [];
         foreach (is_array($pack['versions'] ?? null) ? $pack['versions'] : [] as $version) {
-            if (!is_array($version) || ($version['private'] ?? false) === true || !is_numeric($version['id'] ?? null)) {
+            if (!is_array($version) || ($version['private'] ?? false) !== false || !self::isId($version['id'] ?? null)) {
                 continue;
             }
 
@@ -144,7 +199,8 @@ final class FtbModpackSource
         }
 
         usort($versions, static function (array $left, array $right): int {
-            return ((int) ($right['released'] ?? 0)) <=> ((int) ($left['released'] ?? 0));
+            return [(int) ($right['released'] ?? $right['updated'] ?? 0), (int) $right['id']]
+                <=> [(int) ($left['released'] ?? $left['updated'] ?? 0), (int) $left['id']];
         });
 
         return $versions;
@@ -154,11 +210,27 @@ final class FtbModpackSource
      * @param  array<string, mixed>  $pack
      * @param  array<string, mixed>  $version
      */
-    private function descriptor(array $pack, array $version): ModpackDescriptor
+    private function descriptor(array $pack, array $version, bool $inspect = false): ModpackDescriptor
     {
         [$loader, $loaderVersion, $minecraft] = $this->targets($version);
-        $id = (string) (int) $pack['id'];
-        $versionId = (string) (int) $version['id'];
+        $id = (string) $pack['id'];
+        $versionId = (string) $version['id'];
+        $url = self::releaseUrl($id, $versionId);
+        $manifest = null;
+        $unsupported = null;
+        if ($inspect && $url !== null) {
+            try {
+                $response = UpstreamHttp::json()->timeout(12)->connectTimeout(3)
+                    ->withOptions(['allow_redirects' => ['protocols' => ['https']]])
+                    ->get($url)->throw();
+                $manifest = FtbReleaseManifest::read($response->body(), $id, $versionId);
+            } catch (ModpackException $exception) {
+                $unsupported = $exception->getMessage();
+            } catch (Throwable $exception) {
+                report($exception);
+                $unsupported = trans('pelican-mod-manager::strings.modpacks.ftb_manifest_unavailable');
+            }
+        }
 
         return new ModpackDescriptor(
             provider: ModpackProvider::Ftb->value,
@@ -166,19 +238,18 @@ final class FtbModpackSource
             title: (string) ($pack['name'] ?? $id),
             versionId: $versionId,
             versionName: (string) ($version['name'] ?? $versionId),
-            minecraftVersion: $minecraft,
-            loader: $loader,
-            loaderVersion: $loaderVersion,
+            minecraftVersion: $manifest?->minecraftVersion ?? $minecraft,
+            loader: $manifest?->loader ?? $loader,
+            loaderVersion: $manifest?->loaderVersion ?? $loaderVersion,
             iconUrl: $this->icon($pack),
-            provisioningProfileId: 'ftb-server',
-            variables: [
-                'FTB_MODPACK_ID' => $id,
-                'FTB_MODPACK_VERSION_ID' => $versionId,
-                'FTB_SEARCH_TERM' => '',
-                'FTB_VERSION_STRING' => '',
-            ],
-            archiveAllowed: false,
-            unsupportedReason: null,
+            provisioningProfileId: null,
+            variables: [],
+            archiveAllowed: $manifest !== null,
+            unsupportedReason: $unsupported,
+            downloadUrl: $manifest === null ? null : $url,
+            artifactId: $manifest === null ? null : $versionId,
+            minimumJava: $manifest?->minimumJava,
+            manifestFingerprint: $manifest === null ? null : FtbReleaseManifest::fingerprint($manifest),
         );
     }
 

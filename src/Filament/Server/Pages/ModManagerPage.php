@@ -4245,8 +4245,11 @@ class ModManagerPage extends Page implements HasTable
                     Select::make('provider')
                         ->label(trans('pelican-mod-manager::strings.table.columns.source'))
                         ->options(fn (): array => app(ModpackCatalog::class)->archiveProviders())
-                        ->default(fn (): string => str_starts_with($this->currentModpackSelection($server) ?? '', 'curseforge:')
-                            && array_key_exists('curseforge', app(ModpackCatalog::class)->archiveProviders()) ? 'curseforge' : 'modrinth')
+                        ->default(function () use ($server): string {
+                            $provider = explode(':', $this->currentModpackSelection($server) ?? '', 2)[0];
+
+                            return array_key_exists($provider, app(ModpackCatalog::class)->archiveProviders()) ? $provider : 'modrinth';
+                        })
                         ->selectablePlaceholder(false)
                         ->required()
                         ->live()
@@ -4285,17 +4288,21 @@ class ModManagerPage extends Page implements HasTable
                         ->visible(fn (Get $get): bool => filled($get('project')) && filled($get('version')))
                         ->state(function (Get $get) use ($server): string {
                             $result = $this->modpackPreview($server, $get);
+                            if ($result === null) {
+                                return trans('pelican-mod-manager::strings.modpacks.plan_unavailable');
+                            }
+                            $java = JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava);
 
-                            return $result === null
-                                ? trans('pelican-mod-manager::strings.modpacks.plan_unavailable')
-                                : implode(' ', array_filter([
-                                    $result->reasonDetail,
-                                    $result->selected?->name,
-                                    $result->loader,
-                                    JavaRuntimeImage::preferredLabel($result->minecraftVersion),
-                                    $result->serverFileStatus !== null
-                                        ? trans('pelican-mod-manager::strings.modpacks.'.$result->serverFileStatus) : null,
-                                ]));
+                            return implode(' ', array_filter([
+                                $result->reasonDetail,
+                                $result->selected?->name,
+                                $result->loader,
+                                $java,
+                                JavaRuntimeImage::isTooOld($server->image, $result->minecraftVersion, $result->minimumJava)
+                                    ? trans('pelican-mod-manager::strings.modpacks.java_too_old', ['java' => $java]) : null,
+                                $result->serverFileStatus !== null
+                                    ? trans('pelican-mod-manager::strings.modpacks.'.$result->serverFileStatus) : null,
+                            ]));
                         }),
                     Checkbox::make('confirm_server_compatibility')
                         ->label(trans('pelican-mod-manager::strings.modpacks.confirm_server_compatibility'))
@@ -5382,8 +5389,8 @@ class ModManagerPage extends Page implements HasTable
         $status = $installedOperation['status'] ?? null;
         $phase = $installedOperation['result']['phase'] ?? null;
         if (($installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_MODPACK
-            && in_array($phase, ['resuming', 'downloading', 'verifying'], true)) {
-            return trans('pelican-mod-manager::strings.curseforge_manual.phases.'.$phase);
+            && in_array($phase, ['resuming', 'downloading', 'verifying', 'installing'], true)) {
+            return trans('pelican-mod-manager::strings.modpacks.phases.'.$phase);
         }
         $progress = (int) ($installedOperation['progress'] ?? 0);
         $total = $installedOperation['total'] ?? null;

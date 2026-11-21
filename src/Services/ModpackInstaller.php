@@ -9,6 +9,8 @@ use Kazaminosuke\ModManager\Exceptions\CurseForgeDependenciesPending;
 use Kazaminosuke\ModManager\Exceptions\CurseForgeManualFileException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
+use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
+use Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackManifest;
@@ -19,7 +21,7 @@ use Psr\Http\Message\StreamInterface;
 use ZipArchive;
 
 /**
- * Resolves one selected archive into the target consumed by ModpackDeployment.
+ * Resolves one selected release into the target consumed by ModpackDeployment.
  */
 final class ModpackInstaller
 {
@@ -107,7 +109,13 @@ final class ModpackInstaller
                     $target[$entry['path']] = $this->managedEntry($hash, $hash, $entry['size'], [], null, null, $open, null);
                 }
             } else {
-                $manifest = ModpackArchive::read($archive, strict: true);
+                if ($release['provider'] === ModpackManifest::FORMAT_FTB) {
+                    $manifest = $this->readFtbRelease($archive, $release, $server->image);
+                    $release['version_name'] = $manifest->version;
+                    $release['java'] = JavaRuntimeImage::preferredLabel($manifest->minecraftVersion, $manifest->minimumJava);
+                } else {
+                    $manifest = ModpackArchive::read($archive, strict: true);
+                }
                 if ($manifest->format !== $release['provider']) {
                     throw new ModpackException('The archive manifest belongs to another provider.');
                 }
@@ -155,13 +163,34 @@ final class ModpackInstaller
             $release['loader_version'] = $verifiedBuild;
             $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard, $warnings, $unlockBackup);
 
-            return [...$result, 'warnings' => $warnings, 'runtime_build' => $verifiedBuild];
+            return [...$result, 'warnings' => $warnings, 'runtime_build' => $verifiedBuild,
+                'version_name' => $release['version_name'] ?? null, 'java' => $release['java'] ?? null];
         } finally {
             foreach ($snapshots as $snapshot) {
                 $snapshot->close();
             }
             $zip?->close();
         }
+    }
+
+    private function readFtbRelease(string $path, array $release, ?string $image): ModpackManifest
+    {
+        $json = file_get_contents($path, length: FtbReleaseManifest::MAX_BYTES + 1);
+        if ($json === false) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.ftb_manifest_unavailable'));
+        }
+        $manifest = FtbReleaseManifest::read($json, $release['pack_id'], $release['version_id']);
+        $fingerprint = $release['manifest_fingerprint'] ?? null;
+        if (!is_string($fingerprint) || !hash_equals($fingerprint, FtbReleaseManifest::fingerprint($manifest))) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.ftb_manifest_changed'));
+        }
+        if (JavaRuntimeImage::isTooOld($image, $manifest->minecraftVersion, $manifest->minimumJava)) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_old', [
+                'java' => JavaRuntimeImage::preferredLabel($manifest->minecraftVersion, $manifest->minimumJava),
+            ]));
+        }
+
+        return $manifest;
     }
 
     private function managedEntry(?string $identity, ?string $sha256, ?int $size, array $hashes, ?string $fileId, ?string $projectId, ?callable $open, ?string $url, bool $required = false): array
@@ -208,7 +237,7 @@ final class ModpackInstaller
      */
     private function resolveDownloads(Server $server, DaemonFileRepository $repository, ModpackManifest $manifest, array &$warnings, array &$staged): array
     {
-        if (count($manifest->remoteFiles) > 2000) {
+        if (count($manifest->remoteFiles) > ModpackManifest::MAX_REMOTE_FILES) {
             throw new ModpackException('This modpack lists more files than can be installed safely.');
         }
 

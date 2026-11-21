@@ -129,7 +129,7 @@ final class ModpackCatalog
     /** @return array<string, string> */
     public function archiveProviders(): array
     {
-        return array_intersect_key($this->providers(), array_fill_keys([ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value], true));
+        return array_intersect_key($this->providers(), array_fill_keys([ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value, ModpackProvider::Ftb->value], true));
     }
 
     /** @return array<string, string> */
@@ -234,6 +234,7 @@ final class ModpackCatalog
             $download = match ($source) {
                 ProjectSourceKey::Modrinth->value => $this->modrinth->modpackDownloadById($projectId, $versionId),
                 ProjectSourceKey::CurseForge->value => $this->curseForge->modpackDownloadById($projectId, $versionId),
+                ModpackProvider::Ftb->value => $this->ftbFile($projectId, $versionId),
                 default => null,
             };
 
@@ -241,6 +242,15 @@ final class ModpackCatalog
         }
 
         return $this->latestFile($server, $source, $projectId);
+    }
+
+    /** @return array{version_id: string, version_number: string, filename: string, url: string}|null */
+    private function ftbFile(string $packId, string $versionId): ?array
+    {
+        $url = FtbModpackSource::releaseUrl($packId, $versionId);
+
+        return $url === null ? null : ['version_id' => $versionId, 'version_number' => $versionId,
+            'filename' => 'ftb-'.$packId.'-'.$versionId.'.json', 'url' => $url];
     }
 
     /** @return list<array{id: string, label: string}> */

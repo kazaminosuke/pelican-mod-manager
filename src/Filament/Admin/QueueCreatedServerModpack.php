@@ -39,17 +39,16 @@ final class QueueCreatedServerModpack
                     $plan['selection'],
                 );
                 if ($outcome['dispatched'] || $outcome['reason'] === 'already_active') {
-                    $notification = Notification::make()
+                    Notification::make()
                         ->title(trans('pelican-mod-manager::strings.modpacks.provision_queued'))
-                        ->success();
-                    if ($plan['source'] === 'curseforge') {
-                        $notification->actions([
+                        ->success()
+                        ->actions([
                             Action::make('modpack_progress')
-                                ->label(trans('pelican-mod-manager::strings.curseforge_manual.open_progress'))
+                                ->label(trans('pelican-mod-manager::strings.modpacks.open_progress'))
                                 ->url(ModManagerPage::getUrl(panel: 'server', tenant: $record)),
-                        ])->persistent();
-                    }
-                    $notification->send();
+                        ])
+                        ->persistent()
+                        ->send();
 
                     return;
                 }

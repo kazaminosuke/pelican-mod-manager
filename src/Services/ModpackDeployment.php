@@ -4,6 +4,8 @@ namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Support\ArchiveSignature;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDelta;
@@ -476,7 +478,11 @@ final class ModpackDeployment
                 $stream->close();
             }
         } else {
-            $this->wings->pullForeground($repo, $server, $item['url'], $directory, $temp);
+            try {
+                $this->wings->pullForeground($repo, $server, $item['url'], $directory, $temp);
+            } catch (ConnectionException|RequestException $error) {
+                throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.file_download_failed', ['path' => $path]), previous: $error);
+            }
         }
         $expected = $item['hashes'];
         if ($item['sha256'] !== null) {

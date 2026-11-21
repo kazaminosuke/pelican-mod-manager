@@ -6,6 +6,7 @@ use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Container\Container;
+use Illuminate\Http\Client\ConnectionException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Services\ModpackDeployment;
 use Kazaminosuke\ModManager\Services\ModpackInstaller;
@@ -290,9 +291,20 @@ final class DeploymentWings extends WingsRemoteFilesystem
 
     public array $downloadFiles = [];
 
+    public ?string $missingDownload = null;
+
+    public ?string $interruptedDownload = null;
+
     public function pullForeground(DaemonFileRepository $fileRepository, Server $server, string $url, string $directory, string $filename): array
     {
         $bytes = $this->downloadFiles[$url];
+        if ($this->missingDownload === $url) {
+            return ['name' => $filename, 'size' => strlen($bytes)];
+        }
+        if ($this->interruptedDownload === $url) {
+            $this->files[$directory.'/'.$filename] = substr($bytes, 0, 4);
+            throw new ConnectionException('simulated interrupted Wings pull');
+        }
         $this->files[$directory.'/'.$filename] = $bytes;
 
         return ['name' => $filename, 'size' => strlen($bytes)];

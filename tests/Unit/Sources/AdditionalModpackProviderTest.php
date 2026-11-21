@@ -2,8 +2,11 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Sources;
 
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\Repository;
 use Illuminate\Container\Container;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Sources\AtlauncherModpackSource;
@@ -28,6 +31,7 @@ final class AdditionalModpackProviderTest extends TestCase
         Container::setInstance($container);
         Facade::setFacadeApplication($container);
         Http::swap($factory);
+        Cache::swap(new Repository(new ArrayStore()));
         Http::preventStrayRequests();
     }
 
@@ -38,12 +42,12 @@ final class AdditionalModpackProviderTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_ftb_search_uses_pack_ids_and_records_exact_version_variables(): void
+    public function test_ftb_search_reuses_pack_summaries_and_inspects_only_the_selected_release(): void
     {
         Http::fake([
             'api.feed-the-beast.com/v1/modpacks/public/modpack/search/*' => Http::response([
                 'status' => 'success',
-                'packs' => [5],
+                'packs' => [5, 5, 6],
                 'curseforge' => [999],
             ]),
             'api.feed-the-beast.com/v1/modpacks/public/modpack/5' => Http::response([
@@ -75,20 +79,40 @@ final class AdditionalModpackProviderTest extends TestCase
                     ],
                 ],
             ]),
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/6' => Http::response([], 503),
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/5/89' => Http::response([
+                'parent' => 5, 'id' => 89, 'name' => '2.0.4',
+                'targets' => [
+                    ['name' => 'minecraft', 'version' => '1.12.2', 'type' => 'game'],
+                    ['name' => 'forge', 'version' => '14.23.5.2847', 'type' => 'modloader'],
+                    ['name' => 'java', 'version' => '1.8.0_312', 'type' => 'runtime'],
+                ],
+                'files' => [
+                    ['path' => './config', 'name' => 'pack.cfg', 'size' => 2, 'sha1' => sha1('ok'),
+                        'url' => 'https://files.example.test/pack.cfg'],
+                ],
+            ]),
         ]);
 
-        $latest = (new FtbModpackSource())->describe('5');
-        $older = (new FtbModpackSource())->describe('5', '89');
+        $source = new FtbModpackSource();
+        [$latest] = $source->search('interactions');
+        self::assertSame(['89', '90'], array_column(array_reverse($source->versions('5')), 'id'));
+        $older = $source->describe('5', '89');
 
         self::assertNotNull($latest);
         self::assertSame('90', $latest->versionId);
         self::assertSame('neoforge', $latest->loader);
-        self::assertSame('ftb-server', $latest->provisioningProfileId);
-        self::assertSame('', $latest->variables['FTB_SEARCH_TERM']);
+        self::assertNull($latest->provisioningProfileId);
+        self::assertSame([], $latest->variables);
         self::assertFalse($latest->archiveAllowed);
         self::assertSame('89', $older?->versionId);
         self::assertSame('forge', $older?->loader);
-        self::assertSame('89', $older?->variables['FTB_MODPACK_VERSION_ID']);
+        self::assertTrue($older?->archiveAllowed);
+        self::assertSame('89', $older->artifactId);
+        self::assertSame(8, $older->minimumJava);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/D', $older->manifestFingerprint);
+        Http::assertSentCount(4);
+        Http::assertNotSent(static fn ($request): bool => str_ends_with($request->url(), '/5/90'));
     }
 
     public function test_ftb_rejects_metadata_for_a_different_pack(): void

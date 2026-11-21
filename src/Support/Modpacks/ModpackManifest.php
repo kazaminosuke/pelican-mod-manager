@@ -3,13 +3,17 @@
 namespace Kazaminosuke\ModManager\Support\Modpacks;
 
 /**
- * A parsed Modrinth mrpack or CurseForge modpack.
+ * The verified deployment requirements read from a modpack artifact.
  */
 final class ModpackManifest
 {
     public const FORMAT_MODRINTH = 'modrinth';
 
     public const FORMAT_CURSEFORGE = 'curseforge';
+
+    public const FORMAT_FTB = 'ftb';
+
+    public const MAX_REMOTE_FILES = 2000;
 
     /**
      * @param  list<ModpackRemoteFile>  $remoteFiles
@@ -26,5 +30,6 @@ final class ModpackManifest
         public readonly array $remoteFiles,
         public readonly array $overrides,
         public readonly array $skipped,
+        public readonly ?int $minimumJava = null,
     ) {}
 }

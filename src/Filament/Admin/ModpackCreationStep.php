@@ -26,6 +26,7 @@ use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Throwable;
 
 /**
@@ -160,6 +161,7 @@ final class ModpackCreationStep
                             $result->provider,
                             $result->minecraftVersion !== null ? 'Minecraft '.$result->minecraftVersion : null,
                             $result->loader,
+                            JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava),
                             $result->selected?->name,
                             $result->reasonDetail,
                             $result->serverFileStatus !== null
@@ -292,10 +294,10 @@ final class ModpackCreationStep
         }
 
         $image = (string) $get('image');
-        if (JavaRuntimeImage::isTooOld($image, $result->minecraftVersion)) {
+        if (JavaRuntimeImage::isTooOld($image, $result->minecraftVersion, $result->minimumJava)) {
             throw ValidationException::withMessages([
                 $component->resolveRelativeStatePath('image') => trans('pelican-mod-manager::strings.modpacks.java_too_old', [
-                    'java' => JavaRuntimeImage::preferredLabel($result->minecraftVersion),
+                    'java' => JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava),
                 ]),
             ]);
         }
@@ -330,6 +332,10 @@ final class ModpackCreationStep
                 'loader' => $result->loader ?? $result->selected?->loader,
                 'server_pack' => $result->serverFileStatus === 'server_pack_selected',
                 'artifact_id' => $result->artifactId,
+                ...($result->manifestFingerprint === null ? [] : [
+                    'manifest_fingerprint' => $result->manifestFingerprint,
+                    'title' => self::descriptor((string) $get('mm_project'), (string) $get('mm_version'))?->title,
+                ]),
                 'variables' => $result->mode === ProvisioningMode::Archive ? array_intersect_key(
                     $environment,
                     array_flip(['MINECRAFT_VERSION', 'MC_VERSION', 'LOADER_VERSION', 'FORGE_VERSION', 'NEOFORGE_VERSION', 'QUILT_VERSION', 'SERVER_JARFILE']),
@@ -393,7 +399,7 @@ final class ModpackCreationStep
         $set('select_startup', $startup);
 
         $images = is_array($egg->docker_images) ? $egg->docker_images : [];
-        $image = JavaRuntimeImage::fromEggImages($images, $result->minecraftVersion);
+        $image = JavaRuntimeImage::fromEggImages($images, $result->minecraftVersion, $result->minimumJava);
         $set('image', $image);
         $set('select_image', $image);
         // Panel uses required ToggleButtons with numeric option keys.
@@ -433,12 +439,7 @@ final class ModpackCreationStep
         $attributes->set($key, null);
 
         try {
-            $parts = explode(':', $project, 2);
-            if (count($parts) !== 2) {
-                return null;
-            }
-
-            $descriptor = app(ModpackCatalog::class)->describe(new Server(), $parts[0], $parts[1], (string) $version);
+            $descriptor = self::descriptor($project, (string) $version);
             if ($descriptor === null) {
                 return null;
             }
@@ -460,5 +461,21 @@ final class ModpackCreationStep
 
             return null;
         }
+    }
+
+    private static function descriptor(string $project, string $version): ?ModpackDescriptor
+    {
+        $parts = explode(':', $project, 2);
+        if (count($parts) !== 2) {
+            return null;
+        }
+
+        $key = 'modpack-creation-release:'.hash('sha256', serialize([$project, $version]));
+        $attributes = request()->attributes;
+        if (!$attributes->has($key)) {
+            $attributes->set($key, app(ModpackCatalog::class)->describe(new Server(), $parts[0], $parts[1], $version));
+        }
+
+        return $attributes->get($key);
     }
 }

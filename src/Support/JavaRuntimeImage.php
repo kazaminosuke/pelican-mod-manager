@@ -8,7 +8,14 @@ namespace Kazaminosuke\ModManager\Support;
  */
 final class JavaRuntimeImage
 {
-    public static function preferredLabel(?string $minecraftVersion): ?string
+    public static function preferredLabel(?string $minecraftVersion, ?int $minimumJava = null): ?string
+    {
+        $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
+
+        return $required === 0 ? null : 'Java '.$required;
+    }
+
+    private static function minecraftJava(?string $minecraftVersion): ?int
     {
         $version = strtolower(trim((string) $minecraftVersion));
         if ($version === '') {
@@ -24,39 +31,43 @@ final class JavaRuntimeImage
         $patch = isset($matches[3]) ? (int) $matches[3] : 0;
 
         if ($major >= 26) {
-            return 'Java 25';
+            return 25;
         }
 
         if ($minor > 20 || ($minor === 20 && $patch >= 5)) {
-            return 'Java 21';
+            return 21;
         }
 
         if ($minor >= 18) {
-            return 'Java 17';
+            return 17;
         }
 
         if ($minor === 17) {
-            return 'Java 16';
+            return 16;
         }
 
-        return 'Java 8';
+        return 8;
     }
 
-    public static function isTooOld(?string $image, ?string $minecraftVersion): bool
+    public static function isTooOld(?string $image, ?string $minecraftVersion, ?int $minimumJava = null): bool
     {
-        $required = self::preferredLabel($minecraftVersion);
+        $actual = self::imageJava($image);
+        $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
 
-        return $required !== null
-            && preg_match('/:(?:java[_-])(\d+)(?:$|[-_@])/', (string) $image, $match) === 1
-            && (int) $match[1] < (int) substr($required, strlen('Java '));
+        return $actual === null ? $minimumJava !== null : $actual < $required;
+    }
+
+    private static function imageJava(?string $image): ?int
+    {
+        return preg_match('~(?:^|[/:])java[_-](\d+)(?:$|[.:_@-])~i', (string) $image, $match) === 1 ? (int) $match[1] : null;
     }
 
     /**
      * @param  array<string, string>  $dockerImages
      */
-    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion): ?string
+    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion, ?int $minimumJava = null): ?string
     {
-        $label = self::preferredLabel($minecraftVersion);
+        $label = self::preferredLabel($minecraftVersion, $minimumJava);
         if ($label === null) {
             return null;
         }
@@ -71,9 +82,9 @@ final class JavaRuntimeImage
             }
         }
 
-        $needle = 'java_'.substr($label, strlen('Java '));
+        $version = (int) substr($label, strlen('Java '));
         foreach ($dockerImages as $image) {
-            if (is_string($image) && str_contains(strtolower($image), $needle)) {
+            if (is_string($image) && self::imageJava($image) === $version) {
                 return $image;
             }
         }

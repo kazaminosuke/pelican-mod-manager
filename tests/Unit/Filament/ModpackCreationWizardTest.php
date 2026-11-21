@@ -23,14 +23,17 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\View;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
 use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
+use Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Kazaminosuke\ModManager\Tests\Unit\Services\DeploymentWings;
@@ -261,62 +264,10 @@ final class ModpackCreationWizardTest extends TestCase
     #[DataProvider('existingUpdateDependencies')]
     public function test_archive_job_verifies_runtime_and_updates_through_the_background_entry_point(bool $manual, bool $initial = false, bool $missingRuntime = false): void
     {
-        require_once __DIR__.'/../Services/ModpackDeploymentTest.php';
-        $this->addEgg(7, 'Fabric', '10000000-b803-4f34-82cf-2d6518c6351a', ['MC_VERSION' => '1.20.1', 'LOADER_VERSION' => '0.15.0']);
-        DB::table('eggs')->where('id', 7)->update(['tags' => '["minecraft","fabric"]']);
-        Schema::table('servers', function (Blueprint $table): void {
-            $table->string('uuid');
-            $table->string('image')->nullable();
-            $table->text('startup')->nullable();
-        });
-        Schema::create('server_variables', function (Blueprint $table): void {
-            $table->id();
-            $table->unsignedInteger('server_id');
-            $table->unsignedInteger('variable_id');
-            $table->string('variable_value');
-        });
-        Schema::create('backups', function (Blueprint $table): void {
-            $table->id();
-            $table->unsignedInteger('server_id');
-            $table->string('uuid');
-            $table->json('ignored_files');
-            $table->boolean('is_successful');
-            $table->boolean('is_locked')->default(false);
-            $table->timestamp('completed_at')->nullable();
-            $table->timestamps();
-        });
-        $migration = require dirname(__DIR__, 3).'/database/migrations/2026_11_19_000006_create_mod_manager_modpacks_table.php';
-        $migration->up();
-        DB::table('servers')->insert(['id' => 42, 'egg_id' => 7, 'uuid' => 'server-42', 'image' => 'ghcr.io/pelican-eggs/yolks:java_17']);
-        foreach (DB::table('egg_variables')->get() as $variable) {
-            DB::table('server_variables')->insert(['server_id' => 42, 'variable_id' => $variable->id, 'variable_value' => $variable->default_value]);
-        }
-        $server = Server::findOrFail(42);
-        $runner = PluginBackgroundRunner::fake();
-        $this->app->instance(PluginBackgroundRunner::class, $runner);
-        $repo = Mockery::mock(DaemonFileRepository::class);
-        $daemon = Mockery::mock(DaemonServerRepository::class);
-        $daemon->shouldReceive('setServer')->andReturnSelf();
-        $daemon->shouldReceive('getState')->with(5)->andReturn(ContainerStatus::Offline);
-        $daemon->shouldNotReceive('power');
-        $this->app->instance(DaemonFileRepository::class, $repo);
-        $this->app->instance(DaemonServerRepository::class, $daemon);
-        $wings = new DeploymentWings();
-        $runtimeJar = tempnam(sys_get_temp_dir(), 'fabric-launcher');
-        $launcher = new ZipArchive();
-        $launcher->open($runtimeJar, ZipArchive::OVERWRITE);
-        $fabricLoader = 'libraries/net/fabricmc/fabric-loader/0.15.0/fabric-loader-0.15.0.jar';
-        $intermediary = 'libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar';
-        $launcher->addFromString('META-INF/MANIFEST.MF',
-            "Manifest-Version: 1.0\r\nMain-Class: net.fabricmc.loader.impl.launch.server.FabricServerLauncher\r\nClass-Path: $fabricLoader\r\n  $intermediary\r\n");
-        $launcher->close();
-        $wings->files = ['server.jar' => file_get_contents($runtimeJar), $fabricLoader => "PK\x03\x04", $intermediary => "PK\x03\x04",
-            'minecraft-server.jar' => "PK\x03\x04"];
-        unlink($runtimeJar);
-        $this->app->instance(WingsRemoteFilesystem::class, $wings);
+        [$server, $wings, $runner] = $this->archiveJobFixtures();
         $inventory = app(ModpackInventory::class);
         if ($missingRuntime) {
-            unset($wings->files[$fabricLoader]);
+            unset($wings->files['libraries/net/fabricmc/fabric-loader/0.15.0/fabric-loader-0.15.0.jar']);
         }
 
         if (!$initial) {
@@ -393,16 +344,7 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('waiting_review', $state?->status, (string) ($state?->result['message'] ?? ''));
         self::assertSame(1, $preview['summary']['mods']['delete']);
         self::assertSame('original', $wings->files['mods/old.bin']);
-        $backup = Mockery::mock(InitiateBackupService::class);
-        $backup->shouldReceive('setIgnoredFiles')->with(['# Full modpack update backup'])->andReturnSelf();
-        $backup->shouldReceive('setIsLocked')->with(false)->andReturnSelf();
-        $backup->shouldReceive('handle')->once()->andReturnUsing(function (): Backup {
-            $id = DB::table('backups')->insertGetId(['server_id' => 42, 'uuid' => 'backup-42', 'is_successful' => true,
-                'ignored_files' => json_encode(['# Full modpack update backup'], JSON_THROW_ON_ERROR), 'completed_at' => now(), 'created_at' => now()]);
-
-            return Backup::findOrFail($id);
-        });
-        $workflow->createBackup($server, $preview['token'], $backup);
+        $this->createUpdateBackup($server, $preview['token']);
         $workflow->approve($server, $preview['token'], false, null);
         BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[$manual ? 2 : 1]['payload']);
         $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
@@ -418,6 +360,168 @@ final class ModpackCreationWizardTest extends TestCase
             self::assertSame($jarBytes, $wings->files['mods/manual.jar']);
             self::assertSame('3043174', $inventory->read($server)['inventory']['files']['mods/manual.jar']['file_id']);
         }
+    }
+
+    /** @return array<string, array{string, ?string}> */
+    public static function ftbJobOutcomes(): array
+    {
+        return [
+            'fixed release installed' => ['success', null],
+            'manifest HTTP failure' => ['http_error', 'could not be downloaded'],
+            'successful HTTP response without files' => ['no_files', 'complete manifest'],
+            'release does not belong to selected pack' => ['wrong_pack', 'complete manifest'],
+            'provider returns a different release' => ['wrong_release', 'complete manifest'],
+            'provider reports an error within HTTP 200' => ['logical_error', 'complete manifest'],
+            'required file has no checksum' => ['missing_hash', 'SHA-1'],
+            'required file would replace loader files' => ['unmanaged_path', 'no supported server path'],
+            'contents changed after selecting' => ['changed', 'changed the contents'],
+            'startup JAR does not exist' => ['no_launcher', '[server.jar] could not be read'],
+            'installed loader has the wrong version' => ['wrong_loader', 'does not reference this Minecraft and loader build'],
+            'file pull returns success without a file' => ['missing_file', 'Missing file'],
+            'file has the right size but the wrong hash' => ['bad_hash', 'published hash'],
+            'partial download then retry' => ['interrupted', 'Could not download and verify'],
+            'configured Java too old' => ['wrong_java', 'Java 25'],
+        ];
+    }
+
+    #[DataProvider('ftbJobOutcomes')]
+    public function test_ftb_job_verifies_the_loader_and_every_file_before_recording_success(string $scenario, ?string $failure): void
+    {
+        [$server, $wings, $runner] = $this->archiveJobFixtures($scenario === 'wrong_loader' ? '0.15.1' : '0.15.0');
+        $mod = $wings->files['server.jar']; // Any real ZIP is sufficient for the staging signature check.
+        if ($scenario === 'no_launcher') {
+            unset($wings->files['server.jar']);
+        }
+        $wings->files += ['server.properties' => 'level-name=world', 'world/level.dat' => 'saved world'];
+        $runtimeFiles = $wings->files;
+        $release = $this->ftbRelease('89', 'initial', $mod, $scenario === 'wrong_java' ? '25.0.1' : '17.0.6');
+        $fingerprint = FtbReleaseManifest::fingerprint(FtbReleaseManifest::read(json_encode($release, JSON_THROW_ON_ERROR), '5', '89'));
+        switch ($scenario) {
+            case 'no_files':
+                unset($release['files']);
+                break;
+            case 'wrong_pack':
+                $release['parent'] = 42;
+                break;
+            case 'wrong_release':
+                $release['id'] = 90;
+                break;
+            case 'logical_error':
+                $release['status'] = 'error';
+                break;
+            case 'missing_hash':
+                unset($release['files'][0]['sha1']);
+                break;
+            case 'unmanaged_path':
+                $release['files'][0]['path'] = './libraries';
+                break;
+            case 'changed':
+                $release['files'][0]['sha1'] = sha1('changed');
+                break;
+            case 'missing_file':
+                $wings->missingDownload = 'https://ftb-files.example.test/example.jar';
+                break;
+            case 'bad_hash':
+                $mod = substr($mod, 0, -1).(substr($mod, -1) === 'x' ? 'y' : 'x');
+                break;
+            case 'interrupted':
+                $wings->interruptedDownload = 'https://ftb-files.example.test/example.jar';
+                break;
+        }
+        $wings->downloadFiles = ['https://ftb-files.example.test/pack.cfg' => 'initial', 'https://ftb-files.example.test/example.jar' => $mod];
+        $url = 'https://api.feed-the-beast.com/v1/modpacks/public/modpack/5/89';
+        Http::fake([$url => static fn () => $scenario === 'http_error' ? Http::response([], 503) : Http::response($release)]);
+        $selection = ['managed_phase' => 'initial', 'egg_id' => '7', 'image' => $server->image,
+            'variables' => app(InstalledEggCatalog::class)->variableValues($server), 'minecraft' => '1.20.1', 'loader' => 'fabric',
+            'server_pack' => false, 'artifact_id' => '89', 'manifest_fingerprint' => $fingerprint];
+        $operations = app(InstalledOperationManager::class);
+        $inventory = app(ModpackInventory::class);
+        $dispatch = fn () => $operations->dispatchModpackInstall($server, ProjectType::Mod, 'ftb', '5', '89', selection: $selection);
+        self::assertTrue($dispatch()['dispatched']);
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
+        if ($failure !== null) {
+            $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+            self::assertSame('failed', $state?->status);
+            self::assertStringContainsStringIgnoringCase($failure, (string) $state->result['message']);
+            self::assertNull($inventory->read($server)['inventory']);
+            self::assertNull($inventory->read($server)['recovery']);
+            self::assertSame($runtimeFiles, $wings->files);
+            if ($scenario !== 'interrupted') {
+                Http::assertSentCount(1);
+
+                return;
+            }
+            $wings->interruptedDownload = null;
+            self::assertTrue($dispatch()['dispatched']);
+            BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[1]['payload']);
+        }
+
+        $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        self::assertSame('completed', $state?->status, (string) ($state?->result['message'] ?? ''));
+        $installed = $inventory->read($server)['inventory'];
+        self::assertSame('89', $installed['version_id']);
+        self::assertSame('0.15.0', $installed['loader_version']);
+        self::assertSame('fixture-89', $installed['version_name']);
+        self::assertSame('initial', $wings->files['config/pack.cfg']);
+        self::assertSame(hash('sha256', $mod), $installed['files']['mods/example.jar']['sha256']);
+        self::assertSame('level-name=world', $wings->files['server.properties']);
+        self::assertSame('saved world', $wings->files['world/level.dat']);
+        self::assertArrayNotHasKey('mods/client.jar', $wings->files);
+        Http::assertSentCount($scenario === 'interrupted' ? 2 : 1);
+    }
+
+    public function test_existing_ftb_server_requires_the_same_runtime_and_updates_through_review_and_backup(): void
+    {
+        [$server, $wings, $runner] = $this->archiveJobFixtures();
+        $wings->files += ['config/pack.cfg' => 'old', 'kubejs/server_scripts/old.js' => 'old script',
+            'config/custom.cfg' => 'operator configuration', 'world/level.dat' => 'saved world', 'mods/operator.jar' => 'operator mod'];
+        $inventory = app(ModpackInventory::class);
+        $inventory->begin($server, null, 'initial', null);
+        $inventory->finish($server, 'initial', ['provider' => 'ftb', 'pack_id' => '5', 'version_id' => '88', 'files' => [
+            'config/pack.cfg' => ['identity' => 'old', 'sha256' => hash('sha256', 'old')],
+            'kubejs/server_scripts/old.js' => ['identity' => 'old script', 'sha256' => hash('sha256', 'old script')],
+        ]]);
+        $release = $this->ftbRelease('89', 'updated', java: '17.0.6');
+        $incompatible = $this->ftbRelease('90', 'updated', java: '17.0.6');
+        $incompatible['targets'][1]['version'] = '0.15.1';
+        $url = 'https://api.feed-the-beast.com/v1/modpacks/public/modpack/5';
+        Http::fake([
+            $url => Http::response($this->ftbPack()),
+            $url.'/89' => static fn () => Http::response($release),
+            $url.'/90' => static fn () => Http::response($incompatible),
+        ]);
+        $wings->downloadFiles = ['https://ftb-files.example.test/pack.cfg' => 'updated'];
+        $coordinator = app(ModpackInstallCoordinator::class);
+        try {
+            $coordinator->queuePreview($server, 'ftb:5', '90');
+            self::fail('A release that requires another loader build should be rejected before dispatch.');
+        } catch (ModpackException $error) {
+            self::assertStringContainsString('0.15.1', $error->getMessage());
+        }
+        self::assertSame([], $runner->spawned);
+
+        $coordinator->queuePreview($server, 'ftb:5', '89');
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
+        $workflow = app(ModpackUpdateWorkflow::class);
+        $preview = $workflow->review($server);
+        $state = app(InstalledOperationManager::class)->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        self::assertNotNull($preview, (string) ($state?->result['message'] ?? ''));
+        self::assertSame(['config/pack.cfg' => 'replace', 'kubejs/server_scripts/old.js' => 'delete'], $preview['summary']['paths']);
+        self::assertSame('old', $wings->files['config/pack.cfg']);
+
+        $this->createUpdateBackup($server, $preview['token']);
+        $workflow->approve($server, $preview['token'], false, null);
+        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[1]['payload']);
+        $state = app(InstalledOperationManager::class)->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        self::assertSame('completed', $state?->status, (string) ($state?->result['message'] ?? ''));
+        self::assertSame('backup-42', $state->result['backup']);
+        self::assertSame('89', $inventory->read($server)['inventory']['version_id']);
+        self::assertSame('updated', $wings->files['config/pack.cfg']);
+        self::assertSame('operator configuration', $wings->files['config/custom.cfg']);
+        self::assertSame('operator mod', $wings->files['mods/operator.jar']);
+        self::assertSame('saved world', $wings->files['world/level.dat']);
+        self::assertArrayNotHasKey('kubejs/server_scripts/old.js', $wings->files);
+        self::assertCount(2, Http::recorded(static fn ($request): bool => str_ends_with($request->url(), '/5/89')));
     }
 
     public function test_wizard_requires_confirmation_and_uses_archive_even_with_curseforge_generic_installed(): void
@@ -467,44 +571,10 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertHasNoErrors();
     }
 
-    /** @return array<string, array{string, string, string, string, string, array<string, string>}> */
-    public static function eggInstallSelections(): array
+    public function test_technic_release_variables_reach_the_server_creation_service(): void
     {
-        return [
-            'FTB Server' => [
-                'ftb', '18', '12169', 'FTB Server', 'e60a9de8-a0b1-4d97-b4e2-6568f048668d',
-                ['FTB_MODPACK_ID' => '18', 'FTB_MODPACK_VERSION_ID' => '12169', 'FTB_SEARCH_TERM' => '', 'FTB_VERSION_STRING' => ''],
-            ],
-            'Tekkit 2' => [
-                'technic', 'tekkit-2', 'v1.2.6', 'Tekkit 2', '81bf842b-5647-4c83-9254-523b6f8308fb',
-                ['MODPACK_VERSION' => 'v1.2.6'],
-            ],
-        ];
-    }
-
-    /** @param array<string, string> $variables */
-    #[DataProvider('eggInstallSelections')]
-    public function test_provider_release_variables_reach_the_server_creation_service(
-        string $provider,
-        string $project,
-        string $version,
-        string $eggName,
-        string $eggUuid,
-        array $variables,
-    ): void {
-        $this->addEgg(9, $eggName, $eggUuid, array_fill_keys(array_keys($variables), ''));
+        $this->addEgg(9, 'Tekkit 2', '81bf842b-5647-4c83-9254-523b6f8308fb', ['MODPACK_VERSION' => '']);
         Http::fake([
-            'api.feed-the-beast.com/v1/modpacks/public/modpack/search/*' => Http::response(['packs' => [18]]),
-            'api.feed-the-beast.com/v1/modpacks/public/modpack/18' => Http::response([
-                'id' => 18, 'name' => 'FTB Vanilla+',
-                'versions' => [
-                    ['id' => 12170, 'name' => 'Later release', 'released' => 300],
-                    ['id' => 12169, 'name' => '1.1.1', 'released' => 200, 'targets' => [
-                        ['name' => 'minecraft', 'version' => '1.7.10', 'type' => 'game'],
-                        ['name' => 'forge', 'version' => '10.13.4.1448', 'type' => 'modloader'],
-                    ]],
-                ],
-            ]),
             'api.technicpack.net/search?*' => Http::response(['modpacks' => [['slug' => 'tekkit-2', 'name' => 'Tekkit 2']]]),
             'api.technicpack.net/modpack/tekkit-2?*' => Http::response([
                 'name' => 'tekkit-2', 'version' => '1.2.6', 'minecraft' => '1.4.7',
@@ -515,39 +585,91 @@ final class ModpackCreationWizardTest extends TestCase
         ]);
 
         $service = Mockery::mock(ServerCreationService::class);
-        if ($provider === 'ftb') {
-            $service->shouldNotReceive('handle');
-            $this->app->instance(ServerCreationService::class, $service);
-            Livewire::test(ModpackCreationWizardHarness::class)
-                ->set('data.mm_provider', 'ftb')
-                ->set('data.mm_query', 'Vanilla')
-                ->set('data.mm_modpack', true)
-                ->set('data.mm_project', 'ftb:18')
-                ->set('data.mm_version', '12169')
-                ->assertSee('This wizard can browse FTB releases.')
-                ->call('create')->assertHasErrors();
-
-            return;
-        }
-        $service->shouldReceive('handle')->once()->withArgs(function (array $data) use ($provider, $project, $version, $variables): bool {
+        $service->shouldReceive('handle')->once()->withArgs(function (array $data): bool {
             self::assertSame(9, $data['egg_id']);
-            self::assertSame($variables, $data['environment']);
+            self::assertSame(['MODPACK_VERSION' => 'v1.2.6'], $data['environment']);
             self::assertSame('egg_install', $data['mm_install_plan']['mode']);
-            self::assertSame($provider, $data['mm_install_plan']['source']);
-            self::assertSame($project, $data['mm_install_plan']['project_id']);
-            self::assertSame($version, $data['mm_install_plan']['version_id']);
+            self::assertSame('technic', $data['mm_install_plan']['source']);
+            self::assertSame('tekkit-2', $data['mm_install_plan']['project_id']);
+            self::assertSame('v1.2.6', $data['mm_install_plan']['version_id']);
 
             return true;
         })->andReturn((new Server())->forceFill(['id' => 49]));
         $this->app->instance(ServerCreationService::class, $service);
 
-        $wizard = Livewire::test(ModpackCreationWizardHarness::class)
-            ->set('data.mm_provider', $provider)
-            ->set('data.mm_query', $provider === 'ftb' ? 'Vanilla' : 'Tekkit')
+        Livewire::test(ModpackCreationWizardHarness::class)
+            ->set('data.mm_provider', 'technic')
+            ->set('data.mm_query', 'Tekkit')
             ->set('data.mm_modpack', true)
-            ->set('data.mm_project', $provider.':'.$project)
-            ->set('data.mm_version', $version);
-        $wizard->call('create')->assertHasNoErrors();
+            ->set('data.mm_project', 'technic:tekkit-2')
+            ->set('data.mm_version', 'v1.2.6')
+            ->call('create')
+            ->assertHasNoErrors();
+    }
+
+    /** @return array<string, array{bool}> */
+    public static function ftbWizardPlans(): array
+    {
+        return ['verified manifest' => [true], 'missing file list' => [false]];
+    }
+
+    #[DataProvider('ftbWizardPlans')]
+    public function test_ftb_wizard_uses_a_loader_egg_only_for_a_verifiable_fixed_release(bool $complete): void
+    {
+        $runner = PluginBackgroundRunner::fake();
+        $this->app->instance(PluginBackgroundRunner::class, $runner);
+        $this->addEgg(8, 'FTB Server', 'e60a9de8-a0b1-4d97-b4e2-6568f048668d',
+            ['FTB_MODPACK_ID' => '', 'FTB_MODPACK_VERSION_ID' => '', 'FTB_SEARCH_TERM' => '', 'FTB_VERSION_STRING' => '']);
+        $this->addEgg(9, 'Fabric', '78b02ebb-fec8-49c5-943c-ca4aa117b693', ['MC_VERSION' => 'latest', 'LOADER_VERSION' => 'latest']);
+        DB::table('eggs')->where('id', 9)->update(['tags' => '["minecraft","fabric"]']);
+        $release = $this->ftbRelease('89', 'initial');
+        if (!$complete) {
+            unset($release['files']);
+        }
+        Http::fake([
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/search/*' => Http::response(['packs' => [5]]),
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/5' => Http::response($this->ftbPack()),
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/5/89' => Http::response($release),
+        ]);
+
+        $service = Mockery::mock(ServerCreationService::class);
+        if ($complete) {
+            $service->shouldReceive('handle')->once()->withArgs(function (array $data): bool {
+                self::assertSame(9, $data['egg_id']);
+                self::assertSame(['MC_VERSION' => '1.20.1', 'LOADER_VERSION' => '0.15.0'], $data['environment']);
+                self::assertSame('ghcr.io/pelican-eggs/yolks:java_21', $data['image']);
+                self::assertSame(0, (int) $data['start_on_completion']);
+                $plan = $data['mm_install_plan'];
+                self::assertSame('archive', $plan['mode']);
+                self::assertSame('ftb', $plan['source']);
+                self::assertSame('5', $plan['project_id']);
+                self::assertSame('89', $plan['version_id']);
+                self::assertSame('89', $plan['selection']['artifact_id']);
+                self::assertSame('Example FTB Pack', $plan['selection']['title']);
+                self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/D', $plan['selection']['manifest_fingerprint']);
+
+                return true;
+            })->andReturn((new Server())->forceFill(['id' => 49]));
+        } else {
+            $service->shouldNotReceive('handle');
+        }
+        $this->app->instance(ServerCreationService::class, $service);
+        $wizard = Livewire::test(ModpackCreationWizardHarness::class)
+            ->set('data.mm_provider', 'ftb')
+            ->set('data.mm_query', 'Example')
+            ->set('data.mm_modpack', true)
+            ->set('data.mm_project', 'ftb:5')
+            ->set('data.mm_version', '89');
+        if ($complete) {
+            $wizard->assertSet('data.egg_id', 9)->call('create')->assertHasNoErrors();
+            self::assertCount(1, $runner->spawned);
+            self::assertSame('89', $runner->spawned[0]['payload']['version_id']);
+            self::assertSame('ftb', $runner->spawned[0]['payload']['source']);
+        } else {
+            $wizard->assertSee('FTB did not provide a complete manifest')->call('create')->assertHasErrors();
+            self::assertSame([], $runner->spawned);
+        }
+        Http::assertNotSent(static fn ($request): bool => str_ends_with($request->url(), '/5/90'));
     }
 
     public function test_atlauncher_releases_are_browsable_but_do_not_create_a_server(): void
@@ -696,6 +818,109 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSet('data.egg_id', 9)
             ->call('create')
             ->assertHasNoErrors();
+    }
+
+    private function ftbPack(): array
+    {
+        return ['id' => 5, 'name' => 'Example FTB Pack', 'versions' => [
+            ['id' => 89, 'name' => '1.0.0', 'updated' => 200],
+            ['id' => 90, 'name' => '2.0.0', 'updated' => 300],
+        ]];
+    }
+
+    private function ftbRelease(string $version, string $config, ?string $mod = null, string $java = '21.0.6'): array
+    {
+        $files = [
+            ['path' => './config/', 'name' => 'pack.cfg', 'size' => strlen($config), 'sha1' => sha1($config),
+                'url' => 'https://ftb-files.example.test/pack.cfg'],
+            ['path' => './mods', 'name' => 'client.jar', 'clientonly' => true],
+            ['path' => './', 'name' => 'server.properties'],
+        ];
+        if ($mod !== null) {
+            $files[] = ['path' => './mods', 'name' => 'example.jar', 'optional' => true, 'size' => strlen($mod),
+                'sha1' => sha1($mod), 'mirrors' => ['https://ftb-files.example.test/example.jar']];
+        }
+
+        return ['parent' => 5, 'id' => (int) $version, 'name' => 'fixture-'.$version, 'status' => 'success', 'files' => $files, 'targets' => [
+            ['type' => 'game', 'name' => 'minecraft', 'version' => '1.20.1'],
+            ['type' => 'modloader', 'name' => 'fabric', 'version' => '0.15.0'],
+            ['type' => 'runtime', 'name' => 'java', 'version' => $java],
+        ]];
+    }
+
+    /** @return array{Server, DeploymentWings, PluginBackgroundRunner} */
+    private function archiveJobFixtures(string $launcherBuild = '0.15.0'): array
+    {
+        require_once __DIR__.'/../Services/ModpackDeploymentTest.php';
+        $this->addEgg(7, 'Fabric', '10000000-b803-4f34-82cf-2d6518c6351a', ['MC_VERSION' => '1.20.1', 'LOADER_VERSION' => '0.15.0']);
+        DB::table('eggs')->where('id', 7)->update(['tags' => '["minecraft","fabric"]']);
+        Schema::table('servers', function (Blueprint $table): void {
+            $table->string('uuid');
+            $table->string('image')->nullable();
+            $table->text('startup')->nullable();
+        });
+        Schema::create('server_variables', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedInteger('server_id');
+            $table->unsignedInteger('variable_id');
+            $table->string('variable_value');
+        });
+        Schema::create('backups', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedInteger('server_id');
+            $table->string('uuid');
+            $table->json('ignored_files');
+            $table->boolean('is_successful');
+            $table->boolean('is_locked')->default(false);
+            $table->timestamp('completed_at')->nullable();
+            $table->timestamps();
+        });
+        $migration = require dirname(__DIR__, 3).'/database/migrations/2026_11_19_000006_create_mod_manager_modpacks_table.php';
+        $migration->up();
+        DB::table('servers')->insert(['id' => 42, 'egg_id' => 7, 'uuid' => 'server-42', 'image' => 'ghcr.io/pelican-eggs/yolks:java_17']);
+        foreach (DB::table('egg_variables')->get() as $variable) {
+            DB::table('server_variables')->insert(['server_id' => 42, 'variable_id' => $variable->id, 'variable_value' => $variable->default_value]);
+        }
+        $server = Server::findOrFail(42);
+        $runner = PluginBackgroundRunner::fake();
+        $this->app->instance(PluginBackgroundRunner::class, $runner);
+        $repo = Mockery::mock(DaemonFileRepository::class);
+        $daemon = Mockery::mock(DaemonServerRepository::class);
+        $daemon->shouldReceive('setServer')->andReturnSelf();
+        $daemon->shouldReceive('getState')->with(5)->andReturn(ContainerStatus::Offline);
+        $daemon->shouldNotReceive('power');
+        $this->app->instance(DaemonFileRepository::class, $repo);
+        $this->app->instance(DaemonServerRepository::class, $daemon);
+        $wings = new DeploymentWings();
+        $runtimeJar = tempnam(sys_get_temp_dir(), 'fabric-launcher');
+        $launcher = new ZipArchive();
+        $launcher->open($runtimeJar, ZipArchive::OVERWRITE);
+        $fabricLoader = "libraries/net/fabricmc/fabric-loader/$launcherBuild/fabric-loader-$launcherBuild.jar";
+        $intermediary = 'libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar';
+        $launcher->addFromString('META-INF/MANIFEST.MF',
+            "Manifest-Version: 1.0\r\nMain-Class: net.fabricmc.loader.impl.launch.server.FabricServerLauncher\r\nClass-Path: $fabricLoader\r\n  $intermediary\r\n");
+        $launcher->close();
+        $wings->files = ['server.jar' => file_get_contents($runtimeJar), $fabricLoader => "PK\x03\x04", $intermediary => "PK\x03\x04",
+            'minecraft-server.jar' => "PK\x03\x04"];
+        unlink($runtimeJar);
+        $this->app->instance(WingsRemoteFilesystem::class, $wings);
+
+        return [$server, $wings, $runner];
+    }
+
+    private function createUpdateBackup(Server $server, string $token): void
+    {
+        $workflow = app(ModpackUpdateWorkflow::class);
+        $backup = Mockery::mock(InitiateBackupService::class);
+        $backup->shouldReceive('setIgnoredFiles')->with(['# Full modpack update backup'])->andReturnSelf();
+        $backup->shouldReceive('setIsLocked')->with(false)->andReturnSelf();
+        $backup->shouldReceive('handle')->once()->andReturnUsing(function (): Backup {
+            $id = DB::table('backups')->insertGetId(['server_id' => 42, 'uuid' => 'backup-42', 'is_successful' => true,
+                'ignored_files' => json_encode(['# Full modpack update backup'], JSON_THROW_ON_ERROR), 'completed_at' => now(), 'created_at' => now()]);
+
+            return Backup::findOrFail($id);
+        });
+        $workflow->createBackup($server, $token, $backup);
     }
 
     /** @param array<string, string> $variables */

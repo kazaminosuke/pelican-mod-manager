@@ -10,6 +10,7 @@ use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\PackRequirement;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 
 /**
  * Turns pack metadata into the requirement the shared egg engine understands.
@@ -30,9 +31,6 @@ final class ModpackProvisioningPlanner
         if (in_array($pack->provider, [ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value], true)) {
             $profile = null;
             $variables = [];
-        }
-        if ($pack->provider === ModpackProvider::Ftb->value) {
-            $unsupported = trans('pelican-mod-manager::strings.modpacks.ftb_install_unverified');
         }
 
         $loaderProfiles = match ($pack->loader) {
@@ -57,7 +55,7 @@ final class ModpackProvisioningPlanner
             $archiveVariables = ['MC_VERSION' => $pack->minecraftVersion, 'MINECRAFT_VERSION' => $pack->minecraftVersion];
         }
         if ($pack->loader !== null && $pack->loaderVersion !== null) {
-            $variable = $pack->loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($pack->loader).'_VERSION';
+            $variable = ModpackLoader::buildVariable($pack->loader);
             $build = $pack->loaderVersion;
             if ($pack->loader === 'forge' && $pack->minecraftVersion !== null && !str_contains($build, '-')) {
                 // The official Forge Egg uses a full Maven version when FORGE_VERSION is set.
@@ -90,6 +88,8 @@ final class ModpackProvisioningPlanner
             },
             archiveCompatibilityWarning: $pack->loaderVersion === null ? 'loader_build_unknown' : null,
             artifactId: $pack->artifactId,
+            minimumJava: $pack->minimumJava,
+            manifestFingerprint: $pack->manifestFingerprint,
             serverFileStatus: match (true) {
                 $pack->usesServerPack => 'server_pack_selected',
                 $pack->hasServerPack === true => 'server_pack_unavailable',

@@ -1,5 +1,7 @@
 # PR #2 配布元横断回帰試験
 
+この表は当時の検証結果を記録しています。FTBの現在の導入経路と対応条件は[Modpack更新ガイド](modpack-updates.md#ftbの対象と確認手順)に記載しています。
+
 基点は `f9bc1c32d4e27b7a458cc9a97785691e0a79eace` です。検証対象は提供元API、実配布ファイル、既存サーバーのMod Manager、新規作成Wizardです。隔離環境でのみ実行しました。先行した実ZIP・専用Egg・OSS互換性監査は別記に残しています。[先行監査](modpack-compatibility-audit.md) · [PR #2](https://github.com/kazaminosuke/pelican-mod-manager/pull/2)
 
 ## テストマトリクス

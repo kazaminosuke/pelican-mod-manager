@@ -11,6 +11,7 @@ use Illuminate\Container\Container;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
+use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\CurseForgeDependenciesPending;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
@@ -111,7 +112,8 @@ final class InstallModpack
         }
 
         $leaseRefreshedAt = microtime(true);
-        $isCurseForge = $this->source === 'curseforge';
+        $isCurseForge = $this->source === ModpackProvider::CurseForge->value;
+        $isFtb = $this->source === ModpackProvider::Ftb->value;
         $resume = $this->selection['manual_token'] ?? null;
         $archiveHash = null;
         $file = null;
@@ -120,7 +122,7 @@ final class InstallModpack
             if ($resume !== null && ($operations->waitingCurseForgeModpack($server)['token'] ?? null) !== $resume) {
                 throw new ModpackException('This pending modpack has expired or was cancelled.');
             }
-            if ($isCurseForge) {
+            if ($isCurseForge || $isFtb) {
                 $operations->modpackPhase($this->serverId, 'downloading');
             }
             $this->validateSelection($server);
@@ -163,6 +165,12 @@ final class InstallModpack
                         ->withOptions(['sink' => $temp, 'allow_redirects' => ['protocols' => ['https']]])
                         ->get($file['url']);
                     $response->throw();
+                } catch (Throwable $exception) {
+                    if ($isFtb) {
+                        throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.ftb_manifest_unavailable'), previous: $exception);
+                    }
+
+                    throw $exception;
                 } finally {
                     if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
                         $leases->refresh($this->serverId, $type, $this->leaseToken);
@@ -205,6 +213,9 @@ final class InstallModpack
                 'legacy' => $phase !== 'initial' && $current['inventory'] === null,
                 'switch' => $previous !== null && ($previous['provider'] !== $this->source || $previous['pack_id'] !== $this->projectId),
             ];
+            if ($isFtb) {
+                $release['manifest_fingerprint'] = $this->selection['manifest_fingerprint'] ?? null;
+            }
             $loader = MinecraftLoader::fromServer($server)?->value;
             $runtime = app(InstalledEggCatalog::class)->variableValues($server);
             $minecraft = $runtime['MC_VERSION'] ?? $runtime['MINECRAFT_VERSION'] ?? null;
@@ -253,8 +264,10 @@ final class InstallModpack
                     }
                 }
             }
+            $release['loader_version'] = $result['runtime_build'];
+            $release['version_name'] = $result['version_name'];
+            $release['java'] = $result['java'];
             if ($phase === 'preview') {
-                $release['loader_version'] = $result['runtime_build'];
                 $reviewArchive->remember($temp, $archiveHash);
                 if ($resume !== null) {
                     $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
@@ -294,7 +307,7 @@ final class InstallModpack
             if ($resume !== null) {
                 $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
             }
-            $this->rememberPack($server, $fileRepository, $file);
+            $this->rememberPack($server, $fileRepository, $release);
             $operations->complete(
                 $server,
                 $type,
@@ -369,18 +382,18 @@ final class InstallModpack
     }
 
     /**
-     * @param  array<string, mixed>  $file
+     * @param  array<string, mixed>  $release
      */
-    private function rememberPack(Server $server, DaemonFileRepository $fileRepository, array $file): void
+    private function rememberPack(Server $server, DaemonFileRepository $fileRepository, array $release): void
     {
         try {
             $payload = json_encode([
                 'provider' => $this->source,
                 'pack_id' => $this->projectId,
-                'version_id' => (string) ($file['version_id'] ?? $this->versionId),
-                'version_name' => (string) ($file['version_number'] ?? ''),
-                'minecraft_version' => $file['minecraft'] ?? null,
-                'loader' => $file['loader'] ?? null,
+                'version_id' => (string) $release['version_id'],
+                'version_name' => (string) $release['version_name'],
+                'minecraft_version' => $release['minecraft_version'],
+                'loader' => $release['loader'],
                 'mode' => 'archive',
                 'installed_at' => gmdate('c'),
             ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
