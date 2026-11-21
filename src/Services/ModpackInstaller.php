@@ -148,7 +148,7 @@ final class ModpackInstaller
                         return $snapshot;
                     };
                     $target[$path] = $this->managedEntry($identity, $hashes['sha256'] ?? null, $file->size, $hashes,
-                        $file->fileId === null ? null : (string) $file->fileId, $file->projectId === null ? null : (string) $file->projectId, $open, $file->url, $file->required);
+                        $file->fileId === null ? null : (string) $file->fileId, $file->projectId === null ? null : (string) $file->projectId, $open, $file->url, $file->required, $file->fallbackUrls);
                 }
                 foreach ($manifest->overrides as $override) {
                     if (isset($target[$override->path])) {
@@ -163,7 +163,7 @@ final class ModpackInstaller
             $release['loader_version'] = $verifiedBuild;
             $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard, $warnings, $unlockBackup);
 
-            return [...$result, 'warnings' => $warnings, 'runtime_build' => $verifiedBuild,
+            return [...$result, 'warnings' => array_values(array_unique([...$warnings, ...($result['warnings'] ?? [])])), 'runtime_build' => $verifiedBuild,
                 'version_name' => $release['version_name'] ?? null, 'java' => $release['java'] ?? null];
         } finally {
             foreach ($snapshots as $snapshot) {
@@ -199,10 +199,10 @@ final class ModpackInstaller
         return $manifest;
     }
 
-    private function managedEntry(?string $identity, ?string $sha256, ?int $size, array $hashes, ?string $fileId, ?string $projectId, ?callable $open, ?string $url, bool $required = false): array
+    private function managedEntry(?string $identity, ?string $sha256, ?int $size, array $hashes, ?string $fileId, ?string $projectId, ?callable $open, ?string $url, bool $required = false, array $fallbackUrls = []): array
     {
         return ['identity' => $identity, 'sha256' => $sha256, 'size' => $size, 'hashes' => $hashes, 'file_id' => $fileId,
-            'project_id' => $projectId, 'open' => $open, 'url' => $url, 'required' => $required];
+            'project_id' => $projectId, 'open' => $open, 'url' => $url, 'fallback_urls' => $fallbackUrls, 'required' => $required];
     }
 
     private function assertInstalledRuntime(Server $server, DaemonFileRepository $repo, ?string $loader, ?string $minecraft, ?string $build, ?array $runtime): void

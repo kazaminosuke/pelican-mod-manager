@@ -233,6 +233,60 @@ final class ModpackDeploymentTest extends TestCase
         self::assertSame('1', $store->data['inventory']['files']['mods/optional.bin']['file_id']);
     }
 
+    public function test_mirror_fallback_recovers_from_wrong_primary_file_and_optional_failures_skip_cleanly(): void
+    {
+        $wings = new DeploymentWings();
+        $store = new DeploymentInventory();
+        $server = new Server();
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $service = new ModpackDeployment($wings, $store);
+
+        $expectedMod = "PK\x03\x04valid-rftools";
+        $wrongMod = "PK\x03\x04wrong-l2artifacts";
+        $primaryUrl = 'https://edge.forgecdn.net/files/4069/974/l2artifacts.jar';
+        $mirrorUrl = 'https://files.feed-the-beast.com/blob/right.jar';
+        $brokenOptionalUrl = 'https://cdn.example/missing-optional.jar';
+
+        $wings->downloadFiles[$primaryUrl] = $wrongMod;
+        $wings->downloadFiles[$mirrorUrl] = $expectedMod;
+        $wings->missingDownload = $brokenOptionalUrl;
+        $wings->downloadFiles[$brokenOptionalUrl] = "PK\x03\x04unused";
+
+        $target = [
+            'mods/rftools.jar' => [
+                'identity' => hash('sha256', $expectedMod),
+                'sha256' => hash('sha256', $expectedMod),
+                'size' => strlen($expectedMod),
+                'hashes' => ['sha1' => sha1($expectedMod), 'sha256' => hash('sha256', $expectedMod)],
+                'file_id' => null,
+                'project_id' => null,
+                'open' => null,
+                'url' => $primaryUrl,
+                'fallback_urls' => [$mirrorUrl],
+                'required' => true,
+            ],
+            'mods/optional.jar' => [
+                'identity' => hash('sha256', 'opt'),
+                'sha256' => hash('sha256', 'opt'),
+                'size' => 10,
+                'hashes' => ['sha1' => sha1('opt')],
+                'file_id' => null,
+                'project_id' => null,
+                'open' => null,
+                'url' => $brokenOptionalUrl,
+                'fallback_urls' => [],
+                'required' => false,
+            ],
+        ];
+
+        $result = $service->run($server, $repo, $this->release('1'), $target, null, false, null, static fn () => null);
+        self::assertSame($expectedMod, $wings->files['mods/rftools.jar']);
+        self::assertArrayNotHasKey('mods/optional.jar', $wings->files);
+        self::assertSame(['unavailable-optional:mods/optional.jar'], $result['warnings']);
+        self::assertArrayHasKey('mods/rftools.jar', $store->data['inventory']['files']);
+        self::assertArrayNotHasKey('mods/optional.jar', $store->data['inventory']['files']);
+    }
+
     private function zip(array $files): string
     {
         $path = tempnam(sys_get_temp_dir(), 'managed-modpack-test');

@@ -13,7 +13,7 @@ final class ModpackManifest
 
     public const FORMAT_FTB = 'ftb';
 
-    public const MAX_REMOTE_FILES = 2000;
+    public const MAX_REMOTE_FILES = 20000;
 
     /**
      * @param  list<ModpackRemoteFile>  $remoteFiles

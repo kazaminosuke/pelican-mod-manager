@@ -36,10 +36,16 @@ final class ModpackDeltaTest extends TestCase
     public function test_pack_directories_exclude_custom_worlds_and_sensitive_paths(): void
     {
         foreach (['config/shared-world/data/custom.dat', 'config/playerdata/player', 'world/data/map', 'ops.json',
-            'server.properties', 'mods/.temp.jar', 'mods/../world/file', 'config/anything/session.lock'] as $path) {
+            'server.properties', 'mods/.temp.jar', 'mods/../world/file', 'config/anything/session.lock',
+            'ftbteambases/pregen_initial/level.dat', 'datapacks/ftb/session.lock'] as $path) {
             self::assertFalse(ModpackPaths::isManaged($path, 'config/shared-world'), $path);
         }
         self::assertTrue(ModpackPaths::isManaged('config/options.toml', 'config/shared-world'));
         self::assertTrue(ModpackPaths::isManaged('mods/test.jar', 'survival-2026'));
+        self::assertTrue(ModpackPaths::isManaged('datapacks/ftb/data/ftb/loot_table/entities/slime.json', 'world'));
+        self::assertTrue(ModpackPaths::isManaged('datapacks/ftb/data/ftb/tinkering/materials/stats/steel.json', 'world'));
+        self::assertTrue(ModpackPaths::isManaged('ftbteambases/pregen_initial/region/r.0.0.mca', 'world'));
+        self::assertTrue(ModpackPaths::isManaged('groovy/init.groovy', 'world'));
+        self::assertTrue(ModpackPaths::isManaged('bansoukou/Mod/Patch.class', 'world'));
     }
 }

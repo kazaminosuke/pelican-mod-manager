@@ -58,7 +58,7 @@ final class ModpackArchive
      */
     public static function serverFiles(ZipArchive $zip): array
     {
-        $roots = ['mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'global_packs', 'openloader', 'resourcepacks', 'resources', 'structures'];
+        $roots = ModpackPaths::MANAGED_ROOT_DIRECTORIES;
         $byRoot = [];
 
         for ($index = 0; $index < $zip->numFiles; $index++) {
@@ -110,7 +110,7 @@ final class ModpackArchive
         }
 
         $files = array_values(reset($byRoot));
-        if (count($files) > 10000 || array_sum(array_column($files, 'size')) > 8 * 1024 ** 3) {
+        if (count($files) > ModpackManifest::MAX_REMOTE_FILES || array_sum(array_column($files, 'size')) > 8 * 1024 ** 3) {
             throw new ModpackException('The server pack contains too many files or exceeds the unpacked size limit.');
         }
 

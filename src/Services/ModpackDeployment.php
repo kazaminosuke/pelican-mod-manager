@@ -115,10 +115,26 @@ final class ModpackDeployment
                 }
                 [$directory] = ModpackPaths::split($path);
                 $temp = '.mod-manager-next-'.$token.'-'.count($staged);
-                $staged[$path] = ['temp' => $temp];
-                $staged[$path]['sha256'] = $this->stage($server, $repo, $directory, $temp, $path, $target[$path]);
+                try {
+                    $sha256 = $this->stage($server, $repo, $directory, $temp, $path, $target[$path]);
+                    $staged[$path] = ['temp' => $temp, 'sha256' => $sha256];
+                } catch (ModpackException $error) {
+                    if (($target[$path]['required'] ?? true) || $target[$path]['open'] !== null) {
+                        throw $error;
+                    }
+                    $plan[$path]['action'] = isset($owned[$path]) ? 'keep' : 'preserve';
+                    $warnings[] = 'unavailable-optional:'.$path;
+                    $summary['counts'][$change['action']]--;
+                    $summary['counts'][$plan[$path]['action']]++;
+                    $summary['paths'][$path] = $plan[$path]['action'];
+                    if (str_starts_with(strtolower($path), 'mods/')) {
+                        $summary['mods'][$change['action']]--;
+                        $summary['mods'][$plan[$path]['action']]++;
+                    }
+                }
                 $guard(false);
             }
+            $summary['warnings'] = $warnings;
 
             $guard();
             if ($staged !== [] || $summary['counts']['delete'] > 0) {
@@ -470,6 +486,12 @@ final class ModpackDeployment
 
     private function stage(Server $server, DaemonFileRepository $repo, string $directory, string $temp, string $path, array $item): string
     {
+        $expected = $item['hashes'];
+        if ($item['sha256'] !== null) {
+            $expected['sha256'] = $item['sha256'];
+        }
+        $jar = preg_match('/\.(jar|zip)$/iD', $path) === 1;
+
         if ($item['open'] !== null) {
             $stream = ($item['open'])();
             try {
@@ -477,20 +499,34 @@ final class ModpackDeployment
             } finally {
                 $stream->close();
             }
-        } else {
+
+            return $this->inspect($server, $repo, $directory.'/'.$temp, $expected, $item['size'], $jar)['sha256'];
+        }
+
+        $urls = array_values(array_unique(array_filter(
+            [$item['url'] ?? null, ...($item['fallback_urls'] ?? [])],
+            is_string(...),
+        )));
+        $lastError = null;
+        foreach ($urls as $index => $url) {
             try {
-                $this->wings->pullForeground($repo, $server, $item['url'], $directory, $temp);
-            } catch (ConnectionException|RequestException $error) {
-                throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.file_download_failed', ['path' => $path]), previous: $error);
+                try {
+                    $this->wings->pullForeground($repo, $server, $url, $directory, $temp);
+                } catch (ConnectionException|RequestException $error) {
+                    throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.file_download_failed', ['path' => $path]), previous: $error);
+                }
+
+                return $this->inspect($server, $repo, $directory.'/'.$temp, $expected, $item['size'], $jar)['sha256'];
+            } catch (Throwable $error) {
+                $lastError = $error;
+                $this->wings->deleteQuietly($repo, $server, $directory, $temp);
+                if ($index === count($urls) - 1) {
+                    throw $lastError;
+                }
             }
         }
-        $expected = $item['hashes'];
-        if ($item['sha256'] !== null) {
-            $expected['sha256'] = $item['sha256'];
-        }
-        $jar = preg_match('/\.(jar|zip)$/iD', $path) === 1;
 
-        return $this->inspect($server, $repo, $directory.'/'.$temp, $expected, $item['size'], $jar)['sha256'];
+        throw $lastError ?? new ModpackException(trans('pelican-mod-manager::strings.modpacks.file_download_failed', ['path' => $path]));
     }
 
     private function inspect(Server $server, DaemonFileRepository $repo, string $path, array $expected = [], ?int $size = null, bool $archive = false): array

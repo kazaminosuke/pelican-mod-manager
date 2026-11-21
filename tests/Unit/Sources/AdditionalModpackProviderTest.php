@@ -128,6 +128,59 @@ final class AdditionalModpackProviderTest extends TestCase
         self::assertNull((new FtbModpackSource())->describe('18', '12169'));
     }
 
+    public function test_ftb_manifest_supports_real_pack_layouts_mirrors_sha256_and_rejects_unsafe_targets(): void
+    {
+        $mod = 'PK..mod';
+        $opt = 'PK..optional';
+        $cfg = "key=value\n";
+        $json = json_encode([
+            'parent' => 135,
+            'id' => 100624,
+            'name' => '1.10.1',
+            'status' => 'success',
+            'private' => false,
+            'targets' => [
+                ['type' => 'game', 'name' => 'minecraft', 'version' => '1.21.1'],
+                ['type' => 'modloader', 'name' => 'neoforge', 'version' => '21.1.265'],
+                ['type' => 'runtime', 'name' => 'java', 'version' => '21.0.10+7-LTS'],
+            ],
+            'files' => [
+                ['path' => './', 'name' => 'default-server.properties', 'size' => 10, 'sha1' => sha1('props'), 'url' => 'https://ftb.example/props', 'clientonly' => false],
+                ['path' => './config', 'name' => '.gitkeep', 'size' => 0, 'sha1' => sha1(''), 'url' => 'https://ftb.example/gk', 'clientonly' => false],
+                ['path' => './config/fancymenu/.disabled', 'name' => 'menu.txt', 'size' => 4, 'sha1' => sha1('menu'), 'url' => 'https://ftb.example/menu', 'clientonly' => false],
+                ['path' => './shaderpacks', 'name' => 'Complementary.zip', 'size' => 10, 'sha1' => sha1('shader'), 'url' => 'https://ftb.example/shader', 'clientonly' => false],
+                ['path' => './local/ftbchunks', 'name' => 'client-config.snbt', 'size' => 4, 'sha1' => sha1('snbt'), 'url' => 'https://ftb.example/snbt', 'clientonly' => false],
+                ['path' => './configureddefaults', 'name' => 'server.toml', 'size' => strlen($cfg), 'sha1' => sha1($cfg), 'url' => 'https://ftb.example/c1', 'clientonly' => false],
+                ['path' => './ftbteambases/pregen_initial/region', 'name' => 'r.-1.-1.mca', 'size' => 4, 'sha1' => sha1('regn'), 'url' => 'https://ftb.example/r', 'clientonly' => false],
+                ['path' => './datapacks/ftb/data/ftb/tinkering/materials/stats', 'name' => 'steel.json', 'size' => 2, 'sha1' => sha1('{}'), 'url' => 'https://ftb.example/s', 'clientonly' => false],
+                ['path' => './groovy', 'name' => 'init.groovy', 'size' => 3, 'sha1' => sha1('g()'), 'url' => 'https://ftb.example/g', 'clientonly' => false],
+                ['path' => './config', 'name' => 'EnderIO.cfg', 'size' => strlen($cfg), 'sha1' => sha1($cfg), 'url' => 'https://ftb.example/cfg', 'clientonly' => false],
+                ['path' => './config', 'name' => 'enderio.cfg', 'size' => strlen($cfg), 'sha1' => sha1($cfg), 'url' => 'https://ftb.example/cfg', 'clientonly' => false],
+                ['path' => './mods', 'name' => 'rftools.jar', 'size' => strlen($mod), 'sha1' => sha1($mod), 'hashes' => ['sha256' => hash('sha256', $mod)], 'url' => 'https://cdn.example/wrong.jar', 'mirrors' => ['https://ftb.example/right.jar'], 'clientonly' => false, 'optional' => false],
+                ['path' => './mods', 'name' => 'optional.jar', 'size' => strlen($opt), 'sha1' => sha1($opt), 'url' => 'https://cdn.example/opt.jar', 'clientonly' => false, 'optional' => true],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $manifest = \Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest::read($json, '135', '100624');
+        self::assertCount(7, $manifest->remoteFiles);
+        self::assertCount(5, $manifest->skipped);
+        $byPath = [];
+        foreach ($manifest->remoteFiles as $file) {
+            $byPath[$file->path] = $file;
+        }
+        self::assertSame(['https://ftb.example/right.jar'], $byPath['mods/rftools.jar']->fallbackUrls);
+        self::assertSame(hash('sha256', $mod), $byPath['mods/rftools.jar']->hashes['sha256']);
+        self::assertTrue($byPath['mods/rftools.jar']->required);
+        self::assertFalse($byPath['mods/optional.jar']->required);
+        self::assertArrayHasKey('config/EnderIO.cfg', $byPath);
+
+        // Conflicting hashes for case-colliding files must still be rejected.
+        $badPayload = json_decode($json, true, 64, JSON_THROW_ON_ERROR);
+        $badPayload['files'][10]['sha1'] = sha1('different');
+        $this->expectException(\Kazaminosuke\ModManager\Exceptions\ModpackException::class);
+        \Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest::read(json_encode($badPayload, JSON_THROW_ON_ERROR), '135', '100624');
+    }
+
     public function test_technic_without_a_matching_egg_is_unsupported(): void
     {
         Http::fake([

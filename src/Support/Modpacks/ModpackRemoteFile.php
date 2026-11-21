@@ -9,6 +9,7 @@ final class ModpackRemoteFile
 {
     /**
      * @param  array<string, string>  $hashes
+     * @param  list<string>  $fallbackUrls
      */
     public function __construct(
         public readonly ?string $path,
@@ -18,15 +19,16 @@ final class ModpackRemoteFile
         public readonly bool $required,
         public readonly ?int $size,
         public readonly array $hashes = [],
+        public readonly array $fallbackUrls = [],
     ) {}
 
     public function withPath(string $path, ?int $size, array $hashes): self
     {
-        return new self($path, null, $this->projectId, $this->fileId, $this->required, $size, $hashes);
+        return new self($path, null, $this->projectId, $this->fileId, $this->required, $size, $hashes, $this->fallbackUrls);
     }
 
     public function withDownload(string $path, string $url, ?int $size, array $hashes = []): self
     {
-        return new self($path, $url, $this->projectId, $this->fileId, $this->required, $size ?? $this->size, $hashes + $this->hashes);
+        return new self($path, $url, $this->projectId, $this->fileId, $this->required, $size ?? $this->size, $hashes + $this->hashes, $this->fallbackUrls);
     }
 }

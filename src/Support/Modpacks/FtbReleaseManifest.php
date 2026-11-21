@@ -7,10 +7,15 @@ use Kazaminosuke\ModManager\Exceptions\ModpackException;
 
 final class FtbReleaseManifest
 {
-    public const MAX_BYTES = 8 * 1024 * 1024;
+    public const MAX_BYTES = 24 * 1024 * 1024;
 
     private const PROTECTED_ROOT_FILES = ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json',
         'banned-players.json', 'banned-ips.json', 'usercache.json'];
+
+    /** @var list<string> */
+    private const SKIPPABLE_NON_SERVER_DIRS = [
+        'shaderpacks', 'animation', 'simple-rpc', 'screenshots', 'packmenu', 'fancymenu_data', 'patchouli_books',
+    ];
 
     public static function read(string $json, string $packId, string $releaseId): ModpackManifest
     {
@@ -43,25 +48,68 @@ final class FtbReleaseManifest
 
             $path = self::path($file);
             $key = strtolower($path);
-            if (isset($paths[$key])) {
-                throw self::error('ftb_file_unsupported', $path);
-            }
-            $paths[$key] = true;
             if (in_array($key, self::PROTECTED_ROOT_FILES, true)) {
+                if (isset($paths[$key])) {
+                    throw self::error('ftb_file_unsupported', $path);
+                }
+                $paths[$key] = true;
                 $skipped[] = $path;
+
+                continue;
+            }
+            if (self::isSkippableNonServerFile($key)) {
+                if (isset($paths[$key])) {
+                    throw self::error('ftb_file_unsupported', $path);
+                }
+                $paths[$key] = true;
+                $skipped[] = 'non-server:'.$path;
 
                 continue;
             }
 
             $size = $file['size'] ?? null;
-            $sha1 = $file['sha1'] ?? null;
-            $url = self::downloadUrl($file);
-            if (!ModpackPaths::isManaged($path, 'world') || $url === null || !is_int($size)
-                || $size < 0 || $size > 1024 ** 3 || !is_string($sha1) || preg_match('/\A[0-9a-f]{40}\z/i', $sha1) !== 1) {
+            $hashes = self::hashes($file);
+            $urls = self::downloadUrls($file);
+            if (!ModpackPaths::isManaged($path, 'world') || $urls === [] || !is_int($size)
+                || $size < 0 || $size > 1024 ** 3 || $hashes === []) {
                 throw self::error('ftb_file_unsupported', $path);
             }
-            $files[] = new ModpackRemoteFile($path, $url, null, null, true, $size, ['sha1' => strtolower($sha1)]);
+            $optional = ($file['optional'] ?? false) === true;
+            if (isset($paths[$key])) {
+                $existing = $files[$key] ?? null;
+                if ($existing === null || $existing->size !== $size || $existing->hashes !== $hashes) {
+                    throw self::error('ftb_file_unsupported', $path);
+                }
+                $mergedFallbacks = array_values(array_unique(array_filter(
+                    [...$existing->fallbackUrls, ...$urls],
+                    static fn (string $url): bool => $url !== $existing->url,
+                )));
+                $files[$key] = new ModpackRemoteFile(
+                    path: $existing->path,
+                    url: $existing->url,
+                    projectId: null,
+                    fileId: null,
+                    required: $existing->required && !$optional,
+                    size: $existing->size,
+                    hashes: $existing->hashes,
+                    fallbackUrls: $mergedFallbacks,
+                );
+
+                continue;
+            }
+            $paths[$key] = true;
+            $files[$key] = new ModpackRemoteFile(
+                path: $path,
+                url: $urls[0],
+                projectId: null,
+                fileId: null,
+                required: !$optional,
+                size: $size,
+                hashes: $hashes,
+                fallbackUrls: array_slice($urls, 1),
+            );
         }
+        $files = array_values($files);
 
         if ($files === [] || count($files) > ModpackManifest::MAX_REMOTE_FILES) {
             throw self::error('ftb_manifest_invalid');
@@ -76,7 +124,9 @@ final class FtbReleaseManifest
     {
         $files = [];
         foreach ($manifest->remoteFiles as $file) {
-            $files[$file->path] = [$file->size, $file->hashes['sha1']];
+            $hashes = $file->hashes;
+            ksort($hashes);
+            $files[$file->path] = [$file->size, $hashes, $file->required];
         }
         ksort($files);
         $skipped = $manifest->skipped;
@@ -89,6 +139,57 @@ final class FtbReleaseManifest
     private static function matchesId(mixed $actual, string $expected): bool
     {
         return (is_int($actual) || is_string($actual)) && (string) $actual === $expected;
+    }
+
+    private static function isSkippableNonServerFile(string $lowerPath): bool
+    {
+        if (ModpackPaths::isProtected($lowerPath)) {
+            return false;
+        }
+
+        $parts = explode('/', $lowerPath);
+        if (count($parts) >= 2) {
+            $top = $parts[0];
+            if (in_array($top, self::SKIPPABLE_NON_SERVER_DIRS, true)
+                || ($top === 'local' && !str_starts_with($lowerPath, 'local/kubejs/'))) {
+                return true;
+            }
+
+            if (in_array($top, ModpackPaths::MANAGED_ROOT_DIRECTORIES, true)) {
+                foreach ($parts as $part) {
+                    if (str_starts_with($part, '.')) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // Benign pack-shipped root files (docs, default templates, launcher scripts)
+        // must not abort the pack, while root binaries (.jar/.exe/etc.) remain blocked.
+        return preg_match('/\.(?:jar|zip|tar|gz|exe|bat|cmd|ps1|sh|dll|so|dylib)$/i', $lowerPath) !== 1
+            || preg_match('/^(?:start|run|launch|server)[^\/]*\.(?:sh|bat|cmd|ps1)$/i', $lowerPath) === 1;
+    }
+
+    /** @return array<string, string> */
+    private static function hashes(array $file): array
+    {
+        $hashes = [];
+        if (is_array($file['hashes'] ?? null)) {
+            foreach (['sha256' => 64, 'sha512' => 128, 'sha1' => 40] as $algo => $len) {
+                $value = $file['hashes'][$algo] ?? null;
+                if (is_string($value) && strlen($value) === $len && ctype_xdigit($value)) {
+                    $hashes[$algo] = strtolower($value);
+                }
+            }
+        }
+        $sha1 = $file['sha1'] ?? null;
+        if (is_string($sha1) && preg_match('/\A[0-9a-f]{40}\z/i', $sha1) === 1) {
+            $hashes['sha1'] ??= strtolower($sha1);
+        }
+
+        return $hashes;
     }
 
     /** @return array{string, string, string, ?int} */
@@ -153,18 +254,20 @@ final class FtbReleaseManifest
         return $path;
     }
 
-    private static function downloadUrl(array $file): ?string
+    /** @return list<string> */
+    private static function downloadUrls(array $file): array
     {
+        $urls = [];
         if (ModpackPaths::isSafeHttpsDownloadUrl($file['url'] ?? null)) {
-            return $file['url'];
+            $urls[] = $file['url'];
         }
         foreach (is_array($file['mirrors'] ?? null) ? $file['mirrors'] : [] as $mirror) {
-            if (ModpackPaths::isSafeHttpsDownloadUrl($mirror)) {
-                return $mirror;
+            if (ModpackPaths::isSafeHttpsDownloadUrl($mirror) && !in_array($mirror, $urls, true)) {
+                $urls[] = $mirror;
             }
         }
 
-        return null;
+        return $urls;
     }
 
     private static function error(string $key, string $path = ''): ModpackException
