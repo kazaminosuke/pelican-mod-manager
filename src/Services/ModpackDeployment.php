@@ -130,6 +130,7 @@ final class ModpackDeployment
         $started = false;
         $recovered = true;
         try {
+            $skippedOptional = [];
             foreach ($plan as $path => $change) {
                 if (!in_array($change['action'], ['add', 'replace'], true)) {
                     continue;
@@ -143,6 +144,7 @@ final class ModpackDeployment
                     if (($target[$path]['required'] ?? true) || $target[$path]['open'] !== null) {
                         throw $error;
                     }
+                    $skippedOptional[$path] = true;
                     $plan[$path]['action'] = isset($owned[$path]) ? 'keep' : 'preserve';
                     $warnings[] = 'unavailable-optional:'.$path;
                     $summary['counts'][$change['action']]--;
@@ -160,8 +162,13 @@ final class ModpackDeployment
             $guard();
             if ($staged !== [] || $summary['counts']['delete'] > 0) {
                 $this->listings = [];
-                if ($world !== $this->world($server, $repo)
-                    || $plan !== $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo)['files'])) {
+                $recheck = $this->plan($server, $repo, $owned, $target, $this->individuallyManaged($server, $repo)['files']);
+                foreach (array_keys($skippedOptional) as $skippedPath) {
+                    if (isset($recheck[$skippedPath], $plan[$skippedPath])) {
+                        $recheck[$skippedPath]['action'] = $plan[$skippedPath]['action'];
+                    }
+                }
+                if ($world !== $this->world($server, $repo) || $plan !== $recheck) {
                     throw new ModpackException('Server files changed during staging. No modpack files were applied.');
                 }
                 $guard();
@@ -536,7 +543,12 @@ final class ModpackDeployment
                 $stream->close();
             }
 
-            return $this->inspect($server, $repo, $directory.'/'.$temp, $expected, $item['size'], $jar)['sha256'];
+            try {
+                return $this->inspect($server, $repo, $directory.'/'.$temp, $expected, $item['size'], $jar)['sha256'];
+            } catch (Throwable $error) {
+                $this->wings->deleteQuietly($repo, $server, $directory, $temp);
+                throw $error;
+            }
         }
 
         $urls = array_values(array_unique(array_filter(

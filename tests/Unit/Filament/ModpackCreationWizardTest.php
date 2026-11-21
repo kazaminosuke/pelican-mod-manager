@@ -823,7 +823,8 @@ final class ModpackCreationWizardTest extends TestCase
 
     public function test_switching_provider_clears_selected_modpack_state_and_restores_startup(): void
     {
-        $this->addEgg(9, 'Fabric', '10000000-b803-4f34-82cf-2d6518c6351a', ['MC_VERSION' => 'latest', 'LOADER_VERSION' => 'latest']);
+        $this->addEgg(9, 'Fabric', '78b02ebb-fec8-49c5-943c-ca4aa117b693', ['MC_VERSION' => 'latest', 'LOADER_VERSION' => 'latest']);
+        DB::table('eggs')->where('id', 9)->update(['tags' => '["minecraft","fabric"]']);
         Http::fake([
             'api.modrinth.com/v2/tag/game_version' => Http::response([]),
             'api.modrinth.com/v2/search*' => Http::response([

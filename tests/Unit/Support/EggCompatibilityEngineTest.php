@@ -10,6 +10,7 @@ use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\EggProfileRegistry;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\Modpacks\TechnicEggBinding;
 use PHPUnit\Framework\TestCase;
 
@@ -134,8 +135,8 @@ final class EggCompatibilityEngineTest extends TestCase
 
         self::assertSame('1.20.1-47.1.84', $planner->requirement($legacyNeo)->archiveVariables['NEOFORGE_VERSION']);
         self::assertSame('21.1.266', $planner->requirement($modernNeo)->archiveVariables['NEOFORGE_VERSION']);
-        self::assertTrue(\Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '1.20.1-47.1.84']));
-        self::assertFalse(\Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '47.1.85']));
+        self::assertTrue(ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '1.20.1-47.1.84']));
+        self::assertFalse(ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '47.1.85']));
     }
 
     public function test_one_high_confidence_fabric_egg_is_selected_for_creation(): void

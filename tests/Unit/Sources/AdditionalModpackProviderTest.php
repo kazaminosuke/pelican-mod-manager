@@ -9,9 +9,11 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Sources\AtlauncherModpackSource;
 use Kazaminosuke\ModManager\Sources\FtbModpackSource;
 use Kazaminosuke\ModManager\Sources\TechnicModpackSource;
+use Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest;
 use PHPUnit\Framework\TestCase;
 
 final class AdditionalModpackProviderTest extends TestCase
@@ -161,7 +163,7 @@ final class AdditionalModpackProviderTest extends TestCase
             ],
         ], JSON_THROW_ON_ERROR);
 
-        $manifest = \Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest::read($json, '135', '100624');
+        $manifest = FtbReleaseManifest::read($json, '135', '100624');
         self::assertCount(7, $manifest->remoteFiles);
         self::assertCount(5, $manifest->skipped);
         $byPath = [];
@@ -171,14 +173,14 @@ final class AdditionalModpackProviderTest extends TestCase
         self::assertSame(['https://ftb.example/right.jar'], $byPath['mods/rftools.jar']->fallbackUrls);
         self::assertSame(hash('sha256', $mod), $byPath['mods/rftools.jar']->hashes['sha256']);
         self::assertTrue($byPath['mods/rftools.jar']->required);
-        self::assertFalse($byPath['mods/optional.jar']->required);
+        self::assertTrue($byPath['mods/optional.jar']->required);
         self::assertArrayHasKey('config/EnderIO.cfg', $byPath);
 
         // Conflicting hashes for case-colliding files must still be rejected.
         $badPayload = json_decode($json, true, 64, JSON_THROW_ON_ERROR);
         $badPayload['files'][10]['sha1'] = sha1('different');
-        $this->expectException(\Kazaminosuke\ModManager\Exceptions\ModpackException::class);
-        \Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest::read(json_encode($badPayload, JSON_THROW_ON_ERROR), '135', '100624');
+        $this->expectException(ModpackException::class);
+        FtbReleaseManifest::read(json_encode($badPayload, JSON_THROW_ON_ERROR), '135', '100624');
     }
 
     public function test_technic_without_a_matching_egg_is_unsupported(): void

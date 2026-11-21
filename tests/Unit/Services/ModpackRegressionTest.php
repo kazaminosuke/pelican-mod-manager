@@ -257,6 +257,9 @@ final class ModpackRegressionTest extends TestCase
         $neoJar = 'libraries/net/neoforged/forge/1.20.1-47.1.84/forge-1.20.1-47.1.84-universal.jar';
         $wings->files = ['unix_args.txt' => "-cp $neoJar\n--fml.mcVersion 1.20.1\n", $neoJar => "PK\x03\x04"];
         $runtime->assertInstalled((new Server())->forceFill(['startup' => 'java @unix_args.txt']), $repo, 'neoforge', '1.20.1', '47.1.84', []);
+
+        $this->expectException(ModpackException::class);
+        $runtime->assertInstalled((new Server())->forceFill(['startup' => 'java @unix_args.txt']), $repo, 'neoforge', '1.20.1', '47.1.99', []);
     }
 
     public function test_wrapped_server_zip_can_declare_its_runtime_in_its_own_manifest(): void

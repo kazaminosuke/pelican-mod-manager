@@ -325,14 +325,15 @@ final class ModpackDeploymentTest extends TestCase
         $server = new Server();
         $repo = $this->createStub(DaemonFileRepository::class);
 
+        $modBytes = "PK\x03\x04mod-one";
         $service->run($server, $repo, $this->release('1'), [
-            'mods/one.jar' => $this->file('mod-one'),
+            'mods/one.jar' => $this->file($modBytes),
             'config/app.toml' => $this->file('cfg-one'),
         ], null, false, null, static fn () => null);
 
         // Each staged file is read once on Wings during stage() inspection, without a second post-move download.
         self::assertSame(2, $wings->reads);
-        self::assertSame('mod-one', $wings->files['mods/one.jar']);
+        self::assertSame($modBytes, $wings->files['mods/one.jar']);
         self::assertSame('cfg-one', $wings->files['config/app.toml']);
     }
 

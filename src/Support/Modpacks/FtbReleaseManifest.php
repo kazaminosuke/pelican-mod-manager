@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Support\Modpacks;
 
+use Illuminate\Container\Container;
 use JsonException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 
@@ -74,7 +75,6 @@ final class FtbReleaseManifest
                 || $size < 0 || $size > 1024 ** 3 || $hashes === []) {
                 throw self::error('ftb_file_unsupported', $path);
             }
-            $optional = ($file['optional'] ?? false) === true;
             if (isset($paths[$key])) {
                 $existing = $files[$key] ?? null;
                 if ($existing === null || $existing->size !== $size || $existing->hashes !== $hashes) {
@@ -89,7 +89,7 @@ final class FtbReleaseManifest
                     url: $existing->url,
                     projectId: null,
                     fileId: null,
-                    required: $existing->required && !$optional,
+                    required: true,
                     size: $existing->size,
                     hashes: $existing->hashes,
                     fallbackUrls: $mergedFallbacks,
@@ -103,7 +103,7 @@ final class FtbReleaseManifest
                 url: $urls[0],
                 projectId: null,
                 fileId: null,
-                required: !$optional,
+                required: true,
                 size: $size,
                 hashes: $hashes,
                 fallbackUrls: array_slice($urls, 1),
@@ -272,6 +272,13 @@ final class FtbReleaseManifest
 
     private static function error(string $key, string $path = ''): ModpackException
     {
-        return new ModpackException(trans('pelican-mod-manager::strings.modpacks.'.$key, ['path' => $path]));
+        if (Container::getInstance()->bound('translator')) {
+            return new ModpackException(trans('pelican-mod-manager::strings.modpacks.'.$key, ['path' => $path]));
+        }
+
+        return new ModpackException(match ($key) {
+            'ftb_file_unsupported' => "The FTB release requires an unsupported file [$path].",
+            default => 'The selected FTB release manifest is invalid.',
+        });
     }
 }
