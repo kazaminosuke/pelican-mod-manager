@@ -43,6 +43,8 @@ final class ModpackArchiveTest extends TestCase
                 ],
             ], JSON_THROW_ON_ERROR),
             'overrides/config/example.toml' => "hello\n",
+            'server-overrides/config/example.toml' => "server\n",
+            'server-overrides/config/server.toml' => "server only\n",
             'client-overrides/config/client.toml' => "nope\n",
             'overrides/world/level.dat' => 'world',
         ]);
@@ -60,11 +62,89 @@ final class ModpackArchiveTest extends TestCase
         ));
         self::assertTrue($manifest->remoteFiles[0]->required);
         self::assertFalse($manifest->remoteFiles[1]->required);
-        self::assertSame(['config/example.toml', 'world/level.dat'], array_map(
+        self::assertSame('server'."\n", $manifest->overrides[0]->contents);
+        self::assertSame(['config/example.toml', 'config/server.toml', 'world/level.dat'], array_map(
             static fn ($file) => $file->path,
             $manifest->overrides,
         ));
         self::assertSame(['client-only:mods/client.jar'], $manifest->skipped);
+    }
+
+    public function test_runtime_metadata_is_independent_of_file_download_paths(): void
+    {
+        $index = [
+            'formatVersion' => 1,
+            'game' => 'minecraft',
+            'dependencies' => ['minecraft' => '1.19.3', 'fabric-loader' => '0.14.12'],
+            'files' => [['path' => 'mods/krypton.jar', 'downloads' => ['https://cdn.modrinth.com/krypton.jar']]],
+        ];
+        $missingEnv = $this->zip(['modrinth.index.json' => json_encode($index, JSON_THROW_ON_ERROR)]);
+        self::assertSame([
+            'minecraft' => '1.19.3', 'loader' => 'fabric', 'loader_version' => '0.14.12',
+        ], ModpackArchive::modrinthInstallMetadata($missingEnv));
+
+        $index['files'][0]['env'] = ['server' => 'required'];
+        $required = $this->zip(['modrinth.index.json' => json_encode($index, JSON_THROW_ON_ERROR)]);
+        self::assertSame(ModpackArchive::modrinthInstallMetadata($missingEnv), ModpackArchive::modrinthInstallMetadata($required));
+
+        $index['files'][0]['path'] = 'config/krypton.jar';
+        $otherPath = $this->zip(['modrinth.index.json' => json_encode($index, JSON_THROW_ON_ERROR)]);
+        self::assertSame(ModpackArchive::modrinthInstallMetadata($required), ModpackArchive::modrinthInstallMetadata($otherPath));
+    }
+
+    public function test_server_zip_with_a_root_local_kubejs_directory_has_a_single_pack_root(): void
+    {
+        $path = $this->zip([
+            'config/example.toml' => 'config',
+            'mods/example.jar' => 'jar',
+            'local/kubejs/dev.json' => '{}',
+            'local/other.txt' => 'unrelated',
+            'neoforge-21.1.266-installer.jar' => 'launcher',
+            'startserver.sh' => 'script',
+        ]);
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($path));
+        try {
+            self::assertSame(
+                ['config/example.toml', 'mods/example.jar', 'local/kubejs/dev.json'],
+                array_column(ModpackArchive::serverFiles($zip), 'path'),
+            );
+        } finally {
+            $zip->close();
+        }
+    }
+
+    public function test_curseforge_server_pack_creator_sidecar_accepts_only_one_literal_per_field(): void
+    {
+        // Loader metadata from the Better MC Fabric v40 server ZIP (7522918).
+        $variables = "MINECRAFT_VERSION=1.20.1\r\nMODLOADER=Fabric\r\nMODLOADER_VERSION=0.18.4\r\nJAVA_ARGS=ignored\r\n";
+        self::assertSame(['minecraft' => '1.20.1', 'loader' => 'fabric', 'build' => '0.18.4'], ModpackArchive::curseForgeServerPackMetadata($variables));
+        self::assertNull(ModpackArchive::curseForgeServerPackMetadata($variables."MODLOADER_VERSION=0.18.5\n"));
+        self::assertNull(ModpackArchive::curseForgeServerPackMetadata(str_replace('0.18.4', '$OTHER_VERSION', $variables)));
+    }
+
+    public function test_legacy_server_zip_keeps_mod_resources_and_generated_structures(): void
+    {
+        // Directory layout from the RLCraft 2.9.3 server pack (file 4612990).
+        $path = $this->zip([
+            'resources/antiqueatlas/textures/gui/markers/anvil.png' => 'marker',
+            'structures/active/10Surface.rcgp' => 'structure',
+            'mods/example.jar' => 'jar',
+            'server.properties' => 'protected',
+            'options.txt' => 'client config',
+            'start.sh' => 'launcher',
+        ]);
+        $zip = new ZipArchive();
+        self::assertTrue($zip->open($path));
+        try {
+            self::assertSame([
+                'resources/antiqueatlas/textures/gui/markers/anvil.png',
+                'structures/active/10Surface.rcgp',
+                'mods/example.jar',
+            ], array_column(ModpackArchive::serverFiles($zip), 'path'));
+        } finally {
+            $zip->close();
+        }
     }
 
     public function test_unsafe_modrinth_path_is_rejected(): void
@@ -173,44 +253,6 @@ final class ModpackArchiveTest extends TestCase
 
         self::assertSame('https://cdn.modrinth.com/old.mrpack', $selected['url']);
         self::assertSame('1.0.0', $selected['version_number']);
-    }
-
-    public function test_curseforge_selector_prefers_a_server_pack_over_a_newer_client_zip(): void
-    {
-        $selected = ModpackFileSelector::curseForgeServerPack([
-            [
-                'id' => 2,
-                'fileName' => 'client.zip',
-                'fileDate' => '2026-02-01T00:00:00Z',
-                'downloadUrl' => 'https://edge.forgecdn.net/client.zip',
-                'isServerPack' => false,
-            ],
-            [
-                'id' => 1,
-                'fileName' => 'server.zip',
-                'fileDate' => '2026-01-01T00:00:00Z',
-                'downloadUrl' => 'https://edge.forgecdn.net/server.zip',
-                'isServerPack' => true,
-            ],
-        ]);
-
-        self::assertSame(1, $selected['id']);
-    }
-
-    public function test_curseforge_selector_asks_for_a_server_pack_that_is_not_on_the_page(): void
-    {
-        $selected = ModpackFileSelector::curseForgeServerPack([
-            [
-                'id' => 5,
-                'fileName' => 'client.zip',
-                'fileDate' => '2026-02-01T00:00:00Z',
-                'downloadUrl' => 'https://edge.forgecdn.net/client.zip',
-                'serverPackFileId' => 99,
-            ],
-        ]);
-
-        self::assertSame(99, $selected['id']);
-        self::assertTrue($selected['lookup']);
     }
 
     /** @param array<string, string> $entries */

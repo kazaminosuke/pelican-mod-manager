@@ -5,17 +5,26 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use GuzzleHttp\Psr7\Utils;
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\Repository;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Services\CurseForgeManualFiles;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
+use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
+use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Mockery;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\StreamInterface;
+use ZipArchive;
 
 class InstalledArchiveTransactionTest extends TestCase
 {
@@ -53,6 +62,45 @@ class InstalledArchiveTransactionTest extends TestCase
             'hashes' => ['sha512' => 'def'],
         ]], $wings->committedFileDetails);
         self::assertSame([['added' => 'sodium.jar', 'removed' => null, 'existed' => false]], $wings->scanResultChanges);
+    }
+
+    public function test_single_curseforge_mod_uses_verified_upload_and_commits_exact_selected_version(): void
+    {
+        $file = tmpfile();
+        $path = stream_get_meta_data($file)['uri'];
+        $jar = new ZipArchive();
+        $jar->open($path, ZipArchive::OVERWRITE);
+        $jar->addFromString('mod/Main.class', 'example');
+        $jar->close();
+        $bytes = file_get_contents($path);
+        fclose($file);
+        $manual = new CurseForgeFile(264231, 2693547, 'iceandfire.jar', size: strlen($bytes), hashes: ['sha1' => sha1($bytes)], reason: 'distribution');
+        $wings = new RecordingWingsRemoteFilesystem();
+        $wings->manualUploads[$manual->stagingPath()] = $bytes;
+        $projects = $this->projects($wings, saved: true);
+        $lease = new InstalledOperationLease(new Repository(new ArrayStore()));
+        $service = new InstalledProjectMutationService(new InstalledArchiveTransaction($projects, $wings), $lease, manualFiles: new CurseForgeManualFiles($wings));
+        $version = ['id' => '2693547', 'version_number' => '1.7.1'];
+        $record = ['source' => 'curseforge', 'project_id' => '264231', 'slug' => 'ice-and-fire-dragons', 'title' => 'Ice and Fire'];
+        $primary = ['filename' => 'iceandfire.jar', 'size' => strlen($bytes)];
+
+        try {
+            $service->installOrUpdate($this->server(), Mockery::mock(DaemonFileRepository::class), ProjectType::Mod, $record,
+                ['id' => '2693548', 'version_number' => 'other'], primaryFile: $primary, manualFile: $manual);
+            self::fail('A different file ID cannot use this upload.');
+        } catch (Exception $exception) {
+            self::assertStringContainsString('does not match the selected file', $exception->getMessage());
+        }
+        self::assertSame([], $wings->events);
+        $filename = $service->installOrUpdate($this->server(), Mockery::mock(DaemonFileRepository::class), ProjectType::Mod, $record,
+            $version, primaryFile: $primary, manualFile: $manual);
+
+        self::assertSame('iceandfire.jar', $filename);
+        self::assertFalse($wings->pulledInForeground);
+        self::assertSame($bytes, $wings->streamedUpload);
+        self::assertSame([['264231', '2693547', 'iceandfire.jar']], $wings->committedReleases);
+        self::assertSame(['list', 'list', 'manual_upload', 'list', 'rename', 'metadata'], $wings->events);
+        self::assertFalse($lease->isHeld(7, ProjectType::Mod));
     }
 
     public function test_operation_session_reuses_its_authoritative_document_without_another_get(): void
@@ -380,6 +428,7 @@ class InstalledArchiveTransactionTest extends TestCase
             ->andReturnUsing(function () use ($wings, $saved): bool {
                 $wings->events[] = 'metadata';
                 $wings->committedFilenames[] = func_get_arg(7);
+                $wings->committedReleases[] = [func_get_arg(2), func_get_arg(5), func_get_arg(7)];
                 $wings->committedFileDetails[] = func_num_args() > 11 ? func_get_arg(11) : [];
 
                 return $saved;
@@ -454,6 +503,27 @@ class InstalledArchiveTransactionTest extends TestCase
 
 class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
 {
+    /** @var array<string, string> */
+    public array $manualUploads = [];
+
+    public ?string $streamedUpload = null;
+
+    /** @var list<array{string, string, string}> */
+    public array $committedReleases = [];
+
+    public function readStream(DaemonFileRepository $fileRepository, Server $server, string $path): StreamInterface
+    {
+        return Utils::streamFor($this->manualUploads[$path]);
+    }
+
+    public function putStream(DaemonFileRepository $fileRepository, Server $server, string $path, StreamInterface $contents): void
+    {
+        $this->events[] = 'manual_upload';
+        $this->streamedUpload = $contents->getContents();
+        $filename = basename($path);
+        $this->listed[$filename] = ['name' => $filename, 'size' => strlen($this->streamedUpload)];
+    }
+
     /** @var array<int, string> */
     public array $events = [];
 
@@ -573,6 +643,15 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
         unset($this->listed[$filename]);
     }
 
+    public function listDirectory(DaemonFileRepository $fileRepository, Server $server, string $directory): array
+    {
+        $this->events[] = 'list';
+
+        return array_values(array_map(static fn (string $path, string $contents): array => [
+            'name' => basename($path), 'size' => strlen($contents), 'file' => true, 'symlink' => false,
+        ], array_keys($this->manualUploads), $this->manualUploads));
+    }
+
     public function findListedFile(
         DaemonFileRepository $fileRepository,
         Server $server,
@@ -580,6 +659,10 @@ class RecordingWingsRemoteFilesystem extends WingsRemoteFilesystem
         string $filename,
     ): ?array {
         $this->events[] = 'list';
+
+        if (isset($this->manualUploads[$directory.'/'.$filename])) {
+            return ['name' => $filename, 'size' => strlen($this->manualUploads[$directory.'/'.$filename])];
+        }
 
         if (isset($this->listed[$filename])) {
             return $this->listed[$filename];

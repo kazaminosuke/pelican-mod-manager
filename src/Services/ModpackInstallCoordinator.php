@@ -2,9 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Services;
 
-use App\Models\Egg;
 use App\Models\Server;
-use App\Repositories\Daemon\DaemonFileRepository;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
@@ -13,8 +11,7 @@ use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
-use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
-use Throwable;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 
 /**
  * Plans and starts a modpack install on an existing server.
@@ -25,7 +22,6 @@ final class ModpackInstallCoordinator
         private readonly ModpackCatalog $catalog,
         private readonly ModpackProvisioningPlanner $planner,
         private readonly InstalledEggCatalog $eggs,
-        private readonly ServerEggMigration $migration,
         private readonly InstalledOperationManager $operations,
     ) {}
 
@@ -48,125 +44,63 @@ final class ModpackInstallCoordinator
             $this->eggs->variableValues($server),
             $explicitEggId,
             $explicitEggId === null || $explicitEggId === '',
-            $this->curseForgeKey(),
         );
 
         return ['descriptor' => $descriptor, 'result' => $result];
     }
 
-    /**
-     * @return array{message: string, dispatched: bool}
-     */
-    public function install(
-        Server $server,
-        string $selection,
-        ?string $versionId,
-        int|string|null $explicitEggId,
-        bool $confirmed,
-        bool $canChangeEgg = true,
-    ): array {
-        $preview = $this->preview($server, $selection, $versionId, $explicitEggId);
+    public function queuePreview(Server $server, string $selection, string $versionId, bool $confirmedCompatibility = false): void
+    {
+        if ($this->operations->waitingCurseForgeModpack($server) !== null) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.curseforge_manual.pending_selection'));
+        }
+        $preview = $this->preview($server, $selection, $versionId);
         $descriptor = $preview['descriptor'];
         $result = $preview['result'];
-
-        if ($result->disposition === CompatibilityDisposition::Unsupported) {
-            throw new ModpackException($result->reasonDetail);
+        if ($versionId === '' || $descriptor->versionId !== $versionId
+            || $result->disposition !== CompatibilityDisposition::Compatible
+            || $result->mode !== ProvisioningMode::Archive) {
+            throw new ModpackException('This release cannot use the current Egg, runtime or archive installer. Review the compatibility details. An in-place reinstall cannot be rolled back.');
         }
-
-        if ($result->disposition === CompatibilityDisposition::Ambiguous) {
-            throw new ModpackException($result->reasonDetail);
+        if (JavaRuntimeImage::isTooOld($server->image, $descriptor->minecraftVersion, $descriptor->minimumJava)) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_old', [
+                'java' => JavaRuntimeImage::preferredLabel($descriptor->minecraftVersion, $descriptor->minimumJava),
+            ]));
         }
-
-        if ($result->requiresConfirmation && !$confirmed) {
-            throw new ModpackException('Confirm the egg change before installing this modpack.');
+        if (JavaRuntimeImage::isTooNew($server->image, $descriptor->minecraftVersion, $descriptor->loader)) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_new', [
+                'loader' => $descriptor->loader ?? 'Minecraft',
+                'java' => JavaRuntimeImage::maximumLabel($descriptor->minecraftVersion, $descriptor->loader),
+            ]));
         }
-
-        $changedEgg = $result->disposition === CompatibilityDisposition::EggChange
-            || $result->disposition === CompatibilityDisposition::Variables;
-        if ($changedEgg) {
-            if (!$canChangeEgg) {
-                throw new ModpackException('You do not have permission to change the server egg or startup configuration.');
-            }
-
-            if ($result->selected === null) {
-                throw new ModpackException('No target egg was selected.');
-            }
-
-            $this->migration->apply(
-                $server,
-                $result->selected->id,
-                $result->variables,
-                $this->imageFor($result->selected->id, $descriptor->minecraftVersion),
-                $result->reinstall,
-            );
-            $server->refresh();
+        if ($result->compatibilityWarning !== null && !$confirmedCompatibility) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.'.$result->compatibilityWarning));
         }
-
-        if ($result->mode === ProvisioningMode::EggInstall) {
-            $this->remember($server, $descriptor, $result);
-
-            return [
-                'message' => 'The server egg will install this modpack during installation.',
-                'dispatched' => false,
-            ];
+        if (!$this->operations->supportsAsyncDispatch()) {
+            throw new ModpackException(trans('pelican-mod-manager::strings.operations.queue_required'));
         }
-
-        $dispatch = $this->operations->dispatchModpackInstall(
-            $server,
-            ProjectType::Mod,
-            $descriptor->provider,
-            $descriptor->id,
-            $descriptor->versionId,
-            $changedEgg ? 1200 : null,
-        );
-        if (!$dispatch['dispatched']) {
-            throw new ModpackException('The modpack install could not be queued.');
+        if (app(ModpackUpdateWorkflow::class)->review($server) !== null) {
+            throw new ModpackException('Apply or cancel the existing modpack preview before selecting another release.');
         }
-
-        return [
-            'message' => 'Modpack installation was queued.',
-            'dispatched' => true,
+        $variables = $this->eggs->variableValues($server);
+        if ($descriptor->loader !== null && $descriptor->loaderVersion !== null
+            && !ModpackLoader::hasBuild($descriptor->loader, $descriptor->loaderVersion, $descriptor->minecraftVersion, $variables)) {
+            throw new ModpackException("This release requires {$descriptor->loader} {$descriptor->loaderVersion}. Configure and verify that runtime before requesting an in-place update.");
+        }
+        $selection = [
+            'managed_phase' => 'preview', 'egg_id' => (string) $server->egg_id, 'image' => $server->image,
+            'variables' => $variables, 'startup' => (string) $server->startup, 'minecraft' => $descriptor->minecraftVersion,
+            'loader' => $descriptor->loader, 'loader_version' => $descriptor->loaderVersion,
+            'server_pack' => $descriptor->usesServerPack, 'artifact_id' => $descriptor->artifactId,
+            'title' => $descriptor->title,
+            ...($descriptor->minimumJava === null ? [] : ['minimum_java' => $descriptor->minimumJava]),
+            ...($descriptor->manifestFingerprint === null ? [] : ['manifest_fingerprint' => $descriptor->manifestFingerprint]),
         ];
-    }
-
-    private function imageFor(int|string $eggId, ?string $minecraftVersion): ?string
-    {
-        $egg = Egg::query()->find($eggId);
-        $images = is_array($egg?->docker_images) ? $egg->docker_images : [];
-
-        return JavaRuntimeImage::fromEggImages($images, $minecraftVersion);
-    }
-
-    private function remember(Server $server, ModpackDescriptor $descriptor, CompatibilityResult $result): void
-    {
-        try {
-            $payload = json_encode([
-                'provider' => $descriptor->provider,
-                'pack_id' => $descriptor->id,
-                'version_id' => $descriptor->versionId,
-                'version_name' => $descriptor->versionName,
-                'minecraft_version' => $descriptor->minecraftVersion,
-                'loader' => $descriptor->loader,
-                'mode' => $result->mode->value,
-                'egg_profile_id' => $result->selected?->profileId,
-                'installed_at' => gmdate('c'),
-            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-            app(WingsRemoteFilesystem::class)->put(
-                app(DaemonFileRepository::class),
-                $server,
-                '.mod-manager-modpack.json',
-                $payload,
-            );
-        } catch (Throwable $exception) {
-            report($exception);
+        $dispatch = $this->operations->dispatchModpackInstall($server, ProjectType::Mod, $descriptor->provider, $descriptor->id,
+            $descriptor->versionId, selection: $selection);
+        if (!$dispatch['dispatched']) {
+            throw new ModpackException('The modpack preview could not be queued.');
         }
-    }
-
-    private function curseForgeKey(): ?string
-    {
-        $key = config('pelican-mod-manager.curseforge_api_key');
-
-        return is_string($key) && trim($key) !== '' && strlen(trim($key)) <= 60 ? trim($key) : null;
     }
 
     /** @return array{0: string, 1: string} */

@@ -411,7 +411,7 @@ class SourceCacheTest extends TestCase
         self::assertCount(1, $this->backgroundRunner?->spawned ?? []);
     }
 
-    public function test_partial_fetch_returns_uncached_fallback_and_marks_failure(): void
+    public function test_partial_search_during_backoff_reuses_the_preview_without_caching_it_as_complete(): void
     {
         $cache = $this->cache();
         $spec = $this->spec();
@@ -423,12 +423,13 @@ class SourceCacheTest extends TestCase
             ->andThrow(new PartialSourceFetchException('partial', $fallback));
         $executor->shouldNotReceive('emptyResult');
 
-        $result = $this->sourceCache($cache, 'sync', $executor)
-            ->swr($spec, CacheProfile::Search);
+        $sourceCache = $this->sourceCache($cache, 'sync', $executor);
 
-        self::assertSame($fallback, $result);
+        self::assertSame($fallback, $sourceCache->swr($spec, CacheProfile::Search));
         self::assertNull($cache->get($spec->cacheKey()));
         self::assertIsArray($cache->get($spec->cacheKey().':failure:v1'));
+        self::assertSame($fallback, $sourceCache->swr($spec, CacheProfile::Search));
+        self::assertFalse($sourceCache->peek($spec)['hit']);
     }
 
     public function test_not_found_fetch_returns_empty_without_marking_failure_or_dispatching(): void

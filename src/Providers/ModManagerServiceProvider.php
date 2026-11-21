@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Providers;
 
 use App\Models\Role;
+use Filament\Resources\Events\RecordCreated;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\ServiceProvider;
@@ -11,6 +12,7 @@ use Kazaminosuke\ModManager\Console\Commands\ProcessBackgroundJobsCommand;
 use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
 use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
+use Kazaminosuke\ModManager\Filament\Admin\QueueCreatedServerModpack;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
@@ -122,6 +124,8 @@ class ModManagerServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->app['events']->listen(RecordCreated::class, QueueCreatedServerModpack::class);
+
         // Pelican's Admin > Roles screen discovers third-party permissions
         // from Role::getPermissionList(). These three are deliberately
         // separate so a role can be allowed to install, update, or delete

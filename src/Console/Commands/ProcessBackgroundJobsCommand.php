@@ -53,18 +53,20 @@ final class ProcessBackgroundJobsCommand extends Command
             $processed++;
             $payload = $job['payload'];
             $uniqueKey = $payload['_unique_key'] ?? null;
+            $attempts = (int) ($job['attempts'] ?? 1);
             $finished = false;
+            $heartbeat = static fn (): bool => $queue->heartbeat($job['id'], $attempts);
 
             try {
-                $releaseAfter = BackgroundJob::execute($job['type'], $payload);
+                $releaseAfter = BackgroundJob::execute($job['type'], $payload, $attempts, $heartbeat);
 
                 if ($releaseAfter !== null) {
                     // The job is waiting for another managed operation. It
                     // stays pending (and keeps its unique lock) without
                     // sleeping inside this shared scheduler process.
-                    $queue->release($job['id'], $releaseAfter);
+                    $queue->release($job['id'], $releaseAfter, $attempts);
                 } else {
-                    $queue->ack($job['id']);
+                    $queue->ack($job['id'], $attempts);
                     $finished = true;
                 }
             } catch (Throwable $exception) {
@@ -76,10 +78,10 @@ final class ProcessBackgroundJobsCommand extends Command
 
                 $this->error($exception->getMessage());
 
-                if (($job['attempts'] ?? 1) < self::MAX_ATTEMPTS) {
-                    $queue->retry($job['id']);
+                if ($attempts < self::MAX_ATTEMPTS) {
+                    $queue->retry($job['id'], expectedAttempts: $attempts);
                 } else {
-                    $queue->ack($job['id']);
+                    $queue->ack($job['id'], $attempts);
                     $finished = true;
                 }
             } finally {

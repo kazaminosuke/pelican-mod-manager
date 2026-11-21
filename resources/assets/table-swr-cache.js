@@ -476,10 +476,8 @@
                     return false;
                 }
 
-                if (actionDescriptorsMatch(getRowActionDescriptors(row), cachedActions)) {
-                    continue;
-                }
-
+                // A matching icon can still belong to a different record.
+                // Only the fresh Livewire response supplies record handlers.
                 const projectedActions = document.createDocumentFragment();
                 cachedActions.forEach((descriptor) => projectedActions.append(createProjectedRowAction(descriptor)));
                 container.replaceChildren(projectedActions);

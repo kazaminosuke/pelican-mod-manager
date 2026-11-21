@@ -26,6 +26,12 @@ final class ModpackDescriptor
         public readonly ?string $unsupportedReason,
         public readonly ?string $downloadUrl = null,
         public readonly ?string $filename = null,
+        public readonly ?bool $hasServerPack = null,
+        public readonly bool $usesServerPack = false,
+        public readonly ?string $artifactId = null,
+        public readonly ?string $compatibilityWarning = null,
+        public readonly ?int $minimumJava = null,
+        public readonly ?string $manifestFingerprint = null,
     ) {}
 
     public function optionKey(): string

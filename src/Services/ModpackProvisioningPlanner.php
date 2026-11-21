@@ -10,6 +10,7 @@ use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\PackRequirement;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 
 /**
  * Turns pack metadata into the requirement the shared egg engine understands.
@@ -20,32 +21,16 @@ final class ModpackProvisioningPlanner
         private readonly EggCompatibilityEngine $engine,
     ) {}
 
-    public function requirement(ModpackDescriptor $pack, ?string $curseForgeApiKey = null): PackRequirement
+    public function requirement(ModpackDescriptor $pack): PackRequirement
     {
         $profile = $pack->provisioningProfileId;
         $variables = $pack->variables;
         $archive = $pack->archiveAllowed;
         $unsupported = $pack->unsupportedReason;
 
-        if ($pack->provider === ModpackProvider::CurseForge->value && $profile === 'curseforge-generic') {
-            if (!is_string($curseForgeApiKey) || trim($curseForgeApiKey) === '') {
-                $profile = null;
-            } else {
-                $variables['API_KEY'] = trim($curseForgeApiKey);
-            }
-        }
-
-        if ($pack->provider === ModpackProvider::Modrinth->value && $profile === 'modrinth-generic') {
-            $projectOk = preg_match('/^[A-Za-z0-9]{1,8}$/', $pack->id) === 1;
-            $versionOk = is_string($pack->versionId) && preg_match('/^[A-Za-z0-9]{1,8}$/', $pack->versionId) === 1;
-            if (!$projectOk || !$versionOk) {
-                $profile = null;
-            } else {
-                $variables = [
-                    'PROJECT_ID' => $pack->id,
-                    'VERSION_ID' => $pack->versionId,
-                ];
-            }
+        if (in_array($pack->provider, [ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value], true)) {
+            $profile = null;
+            $variables = [];
         }
 
         $loaderProfiles = match ($pack->loader) {
@@ -65,6 +50,21 @@ final class ModpackProvisioningPlanner
             $profile = null;
         }
 
+        $archiveVariables = [];
+        if ($pack->minecraftVersion !== null) {
+            $archiveVariables = ['MC_VERSION' => $pack->minecraftVersion, 'MINECRAFT_VERSION' => $pack->minecraftVersion];
+        }
+        if ($pack->loader !== null && $pack->loaderVersion !== null) {
+            $variable = ModpackLoader::buildVariable($pack->loader);
+            $archiveVariables[$variable] = ModpackLoader::pinBuild(
+                $pack->loader,
+                $pack->loaderVersion,
+                $pack->minecraftVersion,
+            );
+        }
+
+        $curseForge = $pack->provider === ModpackProvider::CurseForge->value;
+
         return new PackRequirement(
             provider: $pack->provider,
             packId: $pack->id,
@@ -76,6 +76,22 @@ final class ModpackProvisioningPlanner
             archiveAllowed: $archive && $unsupported === null,
             loaderProfileIds: $unsupported === null && $archive ? $loaderProfiles : [],
             unsupportedReason: $unsupported,
+            archiveVariables: $archiveVariables,
+            allowUnknownLoader: $curseForge && $archive && $pack->loader === null,
+            compatibilityWarning: $pack->compatibilityWarning ?? match (true) {
+                $curseForge && (!$pack->usesServerPack || $pack->loader === null || $pack->minecraftVersion === null) => 'server_compatibility_unknown',
+                default => null,
+            },
+            archiveCompatibilityWarning: $pack->loaderVersion === null ? 'loader_build_unknown' : null,
+            artifactId: $pack->artifactId,
+            minimumJava: $pack->minimumJava,
+            manifestFingerprint: $pack->manifestFingerprint,
+            serverFileStatus: match (true) {
+                $pack->usesServerPack => 'server_pack_selected',
+                $pack->hasServerPack === true => 'server_pack_unavailable',
+                $pack->hasServerPack === false => 'server_pack_unlisted',
+                default => null,
+            },
         );
     }
 
@@ -91,10 +107,9 @@ final class ModpackProvisioningPlanner
         array $currentVariables = [],
         int|string|null $explicitEggId = null,
         bool $automatic = true,
-        ?string $curseForgeApiKey = null,
     ): CompatibilityResult {
         return $this->engine->select(
-            $this->requirement($pack, $curseForgeApiKey),
+            $this->requirement($pack),
             $eggs,
             $context,
             $currentEggId,

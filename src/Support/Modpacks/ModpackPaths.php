@@ -42,7 +42,7 @@ final class ModpackPaths
         $path = strtolower($relativePath);
         $base = basename($path);
 
-        if (in_array($base, [
+        if (str_starts_with($path, '.mod-manager-curseforge/') || in_array($base, [
             '.pelican-mod-manager.json',
             '.pelican-mod-manager-resource-pack.json',
             'server.properties',
@@ -64,6 +64,70 @@ final class ModpackPaths
         }
 
         return !str_contains($path, '/') && str_ends_with($path, '.jar');
+    }
+
+    /** @var list<string> */
+    public const MANAGED_ROOT_DIRECTORIES = [
+        'mods',
+        'config',
+        'configureddefaults',
+        'defaultconfigs',
+        'kubejs',
+        'scripts',
+        'groovy',
+        'bansoukou',
+        'datapacks',
+        'global_packs',
+        'openloader',
+        'ftbteambases',
+        'ftbteamdimensions',
+        'schematics',
+        'resourcepacks',
+        'resources',
+        'structures',
+    ];
+
+    /** A managed deployment may only change known pack directories. */
+    public static function isManaged(string $path, string $world): bool
+    {
+        if (self::safeRelative($path) !== $path || preg_match('/[\x00-\x1f\x7f:]/', $path) === 1) {
+            return false;
+        }
+
+        $path = strtolower($path);
+        $world = strtolower($world);
+        $parts = explode('/', $path);
+        if (count($parts) < 2 || self::isProtected($path) || $path === $world || str_starts_with($path, $world.'/')) {
+            return false;
+        }
+        foreach ($parts as $index => $part) {
+            if (str_starts_with($part, '.') || in_array($part, ['level.dat', 'level.dat_old', 'session.lock', 'uid.dat'], true)) {
+                return false;
+            }
+            if ($index > 0 && in_array($part, ['playerdata', 'players', 'region', 'entities', 'poi', 'advancements', 'stats', 'dimensions'], true)
+                && !self::allowsWorldLikeSubfolder($parts[0], $part)) {
+                return false;
+            }
+        }
+
+        return in_array($parts[0], self::MANAGED_ROOT_DIRECTORIES, true)
+            || str_starts_with($path, 'local/kubejs/');
+    }
+
+    private static function allowsWorldLikeSubfolder(string $root, string $segment): bool
+    {
+        if (in_array($root, ['ftbteambases', 'ftbteamdimensions'], true)
+            && in_array($segment, ['region', 'entities', 'poi', 'dimensions'], true)) {
+            return true;
+        }
+
+        return in_array($root, ['datapacks', 'global_packs', 'openloader', 'kubejs', 'resources', 'resourcepacks'], true)
+            && in_array($segment, ['entities', 'advancements', 'dimensions', 'stats', 'poi'], true);
+    }
+
+    public static function isExecutablePackContent(string $path): bool
+    {
+        return preg_match('~^(?:mods|scripts|groovy|bansoukou|datapacks|global_packs|openloader|(?:local/)?kubejs/(?:server_scripts|startup_scripts|data))/~i', $path) === 1;
     }
 
     /** @return array{0: string, 1: string} directory, filename */

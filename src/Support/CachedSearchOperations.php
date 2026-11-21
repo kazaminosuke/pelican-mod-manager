@@ -18,13 +18,13 @@ final class CachedSearchOperations
     ) {}
 
     /** @return array{hits: array<int, mixed>, total_hits: int}|array<string, mixed> */
-    public function search(?SourceFetchSpec $spec): array
+    public function search(?SourceFetchSpec $spec, ?float $inlineBudget = null): array
     {
         if ($spec === null) {
             return $this->emptyResult();
         }
 
-        $result = $this->cache->swr($spec, CacheProfile::Search);
+        $result = $this->cache->swr($spec, CacheProfile::Search, $inlineBudget);
 
         return is_array($result) ? $result : $this->emptyResult();
     }

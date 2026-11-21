@@ -2,12 +2,15 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Support;
 
+use Kazaminosuke\ModManager\Services\ModpackProvisioningPlanner;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\PackRequirement;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\EggProfileRegistry;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\Modpacks\TechnicEggBinding;
 use PHPUnit\Framework\TestCase;
 
@@ -60,6 +63,80 @@ final class EggCompatibilityEngineTest extends TestCase
 
         self::assertSame(CompatibilityDisposition::Ambiguous, $result->disposition);
         self::assertCount(2, $result->alternatives);
+    }
+
+    public function test_quilt_egg_without_fixed_loader_variable_is_unavailable(): void
+    {
+        $egg = $this->engine->classify(1, 'Quilt', null, null, ['MC_VERSION', 'SERVER_JARFILE']);
+        $pack = new ModpackDescriptor(
+            provider: 'modrinth', id: 'pack', title: 'Quilt Pack', versionId: 'version', versionName: '1',
+            minecraftVersion: '1.20.1', loader: 'quilt', loaderVersion: '0.20.2', iconUrl: null,
+            provisioningProfileId: null, variables: [], archiveAllowed: true, unsupportedReason: null,
+        );
+
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        self::assertSame(CompatibilityDisposition::Unsupported, $planner->select($pack, [$egg], EggCompatibilityEngine::CONTEXT_CREATE)->disposition);
+    }
+
+    public function test_unknown_curseforge_compatibility_allows_an_explicit_loader_with_a_warning(): void
+    {
+        $fabric = $this->engine->classify(1, 'Fabric', 'fabric-uuid', null, ['MC_VERSION']);
+        $paper = $this->engine->classify(2, 'Paper', 'paper-uuid', null, []);
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        $pack = new ModpackDescriptor(
+            provider: 'curseforge',
+            id: '10',
+            title: 'Unknown Loader Pack',
+            versionId: '20',
+            versionName: '2.0',
+            minecraftVersion: '1.21.1',
+            loader: null,
+            loaderVersion: null,
+            iconUrl: null,
+            provisioningProfileId: null,
+            variables: [],
+            archiveAllowed: true,
+            unsupportedReason: null,
+            hasServerPack: true,
+        );
+
+        $result = $planner->select($pack, [$fabric, $paper], EggCompatibilityEngine::CONTEXT_CREATE);
+        self::assertSame(CompatibilityDisposition::Ambiguous, $result->disposition);
+        self::assertSame([$fabric], $result->alternatives);
+        self::assertSame('server_compatibility_unknown', $result->compatibilityWarning);
+        self::assertSame('server_pack_unavailable', $result->serverFileStatus);
+
+        $selected = $planner->select($pack, [$fabric, $paper], EggCompatibilityEngine::CONTEXT_CREATE, explicitEggId: 1);
+        self::assertSame(ProvisioningMode::Archive, $selected->mode);
+        self::assertSame('1.21.1', $selected->variables['MC_VERSION']);
+        $rejected = $planner->select($pack, [$fabric, $paper], EggCompatibilityEngine::CONTEXT_CREATE, explicitEggId: 2);
+        self::assertSame(CompatibilityDisposition::Unsupported, $rejected->disposition);
+    }
+
+    public function test_forge_archive_uses_the_full_maven_coordinate_required_by_the_official_egg(): void
+    {
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        foreach ([
+            ['1.12.2', '14.23.5.2860', '1.12.2-14.23.5.2860'], // RLCraft 2.9.3
+            ['1.20.1', '47.4.20', '1.20.1-47.4.20'], // Better MC Forge v63 HF
+            ['1.7.10', '10.13.4.1614', '1.7.10-10.13.4.1614-1.7.10'],
+            ['1.20.1', '1.20.1-47.4.20', '1.20.1-47.4.20'],
+        ] as [$minecraft, $build, $coordinate]) {
+            $pack = new ModpackDescriptor('curseforge', '10', 'Forge pack', '20', '2.0', $minecraft, 'forge', $build, null, null, [], true, null);
+            self::assertSame($coordinate, $planner->requirement($pack)->archiveVariables['FORGE_VERSION']);
+        }
+    }
+
+    public function test_neoforge_1201_uses_the_prefixed_coordinate_and_matches_unprefixed_builds(): void
+    {
+        $planner = new ModpackProvisioningPlanner($this->engine);
+        $legacyNeo = new ModpackDescriptor('ftb', '119', 'Direwolf20 1.20', '100051', '1.16.1', '1.20.1', 'neoforge', '47.1.84', null, null, [], true, null);
+        $modernNeo = new ModpackDescriptor('curseforge', '925200', 'ATM10', '9620701', '8.6', '1.21.1', 'neoforge', '21.1.266', null, null, [], true, null);
+
+        self::assertSame('1.20.1-47.1.84', $planner->requirement($legacyNeo)->archiveVariables['NEOFORGE_VERSION']);
+        self::assertSame('21.1.266', $planner->requirement($modernNeo)->archiveVariables['NEOFORGE_VERSION']);
+        self::assertTrue(ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '1.20.1-47.1.84']));
+        self::assertFalse(ModpackLoader::hasBuild('neoforge', '47.1.84', '1.20.1', ['NEOFORGE_VERSION' => '47.1.85']));
     }
 
     public function test_one_high_confidence_fabric_egg_is_selected_for_creation(): void
@@ -243,12 +320,21 @@ final class EggCompatibilityEngineTest extends TestCase
             'Java 8' => 'ghcr.io/example/java_8',
             'Java 17' => 'ghcr.io/example/java_17',
             'Java 21' => 'ghcr.io/example/java_21',
+            'Java 25' => 'ghcr.io/example/java_25',
         ];
 
+        self::assertSame('ghcr.io/example/java_25', JavaRuntimeImage::fromEggImages($images, '26.1'));
+        self::assertTrue(JavaRuntimeImage::isTooOld('ghcr.io/pelican-eggs/yolks:java_21', '26.1'));
+        self::assertFalse(JavaRuntimeImage::isTooOld('ghcr.io/pelican-eggs/yolks:java_25', '26.1'));
         self::assertSame('ghcr.io/example/java_21', JavaRuntimeImage::fromEggImages($images, '1.21.1'));
         self::assertSame('ghcr.io/example/java_17', JavaRuntimeImage::fromEggImages($images, '1.20.1'));
         self::assertSame('ghcr.io/example/java_8', JavaRuntimeImage::fromEggImages($images, '1.12.2'));
         self::assertNull(JavaRuntimeImage::fromEggImages(['Java 8' => 'ghcr.io/example/java_8'], '1.21.1'));
+        self::assertTrue(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_17', '1.12.2', 'forge'));
+        self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_8', '1.12.2', 'forge'));
+        self::assertTrue(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_21', '1.16.5', 'forge'));
+        self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_16', '1.16.5', 'forge'));
+        self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_21', '1.20.1', 'forge'));
     }
 
     public function test_technic_bindings_read_the_version_token_from_the_server_archive_url(): void

@@ -140,9 +140,15 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
      *
      * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
      */
-    public function searchModpacks(Server $server, int $page = 1, ?string $search = null, bool $constrainToServer = true): array
-    {
-        $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer));
+    public function searchModpacks(
+        Server $server,
+        int $page = 1,
+        ?string $search = null,
+        bool $constrainToServer = true,
+        ?string $minecraft = null,
+        ?string $loader = null,
+    ): array {
+        $result = $this->cachedSearch->search($this->buildModpackSearchSpec($server, $page, $search, $constrainToServer, $minecraft, $loader));
 
         return is_array($result) && is_array($result['hits'] ?? null)
             ? ['hits' => $result['hits'], 'total_hits' => (int) ($result['total_hits'] ?? 0)]
@@ -255,7 +261,8 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             ->get(self::BASE_URL.'/version/'.$versionId)
             ->json();
 
-        if (!is_array($version) || (string) ($version['project_id'] ?? '') !== $projectId) {
+        if (!is_array($version) || ($version['id'] ?? null) !== $versionId
+            || ($version['project_id'] ?? null) !== $projectId) {
             return null;
         }
 
@@ -549,19 +556,17 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         return $this->spec(self::OPERATION_SEARCH, ['query' => $data]);
     }
 
-    private function buildModpackSearchSpec(Server $server, int $page, ?string $search, bool $constrainToServer = true): SourceFetchSpec
+    private function buildModpackSearchSpec(Server $server, int $page, ?string $search, bool $constrainToServer, ?string $minecraft, ?string $loader): SourceFetchSpec
     {
         $page = max(1, $page);
         $facetGroups = [['project_type:modpack']];
-        if ($constrainToServer) {
-            $version = MinecraftVersionResolver::resolve($server);
-            if ($version !== null) {
-                $facetGroups[] = ["versions:{$version}"];
-            }
-            $loader = MinecraftLoader::fromServer($server)?->value;
-            if (in_array($loader, ['fabric', 'forge', 'neoforge', 'quilt'], true)) {
-                $facetGroups[] = ["categories:{$loader}"];
-            }
+        $minecraft ??= $constrainToServer ? MinecraftVersionResolver::resolve($server) : null;
+        if ($minecraft !== null) {
+            $facetGroups[] = ["versions:{$minecraft}"];
+        }
+        $loader ??= $constrainToServer ? MinecraftLoader::fromServer($server)?->value : null;
+        if (in_array($loader, ['fabric', 'forge', 'neoforge', 'quilt'], true)) {
+            $facetGroups[] = ["categories:{$loader}"];
         }
 
         $data = [
