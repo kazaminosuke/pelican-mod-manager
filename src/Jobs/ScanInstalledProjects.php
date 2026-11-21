@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Jobs;
 use App\Models\Server;
 use App\Models\User;
 use App\Repositories\Daemon\DaemonFileRepository;
+use Closure;
 use Illuminate\Container\Container;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectType;
@@ -27,6 +28,9 @@ final class ScanInstalledProjects
 
     private ?int $releaseAfterSeconds = null;
 
+    /**
+     * @param  (Closure(): bool)|null  $heartbeat
+     */
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
@@ -34,6 +38,8 @@ final class ScanInstalledProjects
         public readonly bool $force = false,
         public readonly ?int $actorUserId = null,
         public readonly ?string $dispatchToken = null,
+        public readonly ?int $claimEpoch = null,
+        private readonly ?Closure $heartbeat = null,
     ) {}
 
     /**
@@ -64,7 +70,7 @@ final class ScanInstalledProjects
         if ($this->dispatchToken === null) {
             // A job queued by an older release held its lease from dispatch.
             // It must never run under a replacement owner's lease.
-            if ($this->leaseToken !== null && $leases->refresh($this->serverId, $type, $this->leaseToken)) {
+            if ($this->leaseToken !== null && $leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
                 $this->scan($fileRepository, $service, $operations, $leases, $authorizer, $type, $force);
             }
 
@@ -85,6 +91,10 @@ final class ScanInstalledProjects
             }
 
             $this->leaseToken = $claim['lease_token'];
+            if ($this->leaseToken !== null && $this->claimEpoch !== null
+                && !$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
+                return;
+            }
             // An explicit rescan may have taken over this queued dispatch.
             $force = $force || ($claim['state']?->result['force'] ?? false) === true;
             $this->scan($fileRepository, $service, $operations, $leases, $authorizer, $type, $force);
@@ -119,6 +129,7 @@ final class ScanInstalledProjects
                 InstalledOperationManager::OPERATION_SCAN,
                 'server_not_found',
                 leaseToken: $this->leaseToken,
+                leaseEpoch: $this->claimEpoch,
             );
 
             return;
@@ -135,6 +146,7 @@ final class ScanInstalledProjects
                 InstalledOperationManager::OPERATION_SCAN,
                 'scan_unauthorized',
                 leaseToken: $this->leaseToken,
+                leaseEpoch: $this->claimEpoch,
             );
 
             return;
@@ -187,6 +199,13 @@ final class ScanInstalledProjects
                 return;
             }
 
+            if ($this->heartbeat !== null && !($this->heartbeat)()) {
+                return;
+            }
+            if ($this->leaseToken !== null && !$leases->owns($this->serverId, $type, $this->leaseToken, $this->claimEpoch)) {
+                return;
+            }
+
             $operations->progress(
                 $server,
                 $type,
@@ -200,6 +219,7 @@ final class ScanInstalledProjects
                 InstalledOperationManager::OPERATION_SCAN,
                 $summary,
                 $this->leaseToken,
+                $this->claimEpoch,
             );
         } catch (Throwable $exception) {
             report($exception);
@@ -210,6 +230,7 @@ final class ScanInstalledProjects
                 InstalledOperationManager::OPERATION_SCAN,
                 'scan_exception',
                 leaseToken: $this->leaseToken,
+                leaseEpoch: $this->claimEpoch,
             );
         }
     }
@@ -251,7 +272,7 @@ final class ScanInstalledProjects
         $container = Container::getInstance();
         $leases = $container->make(InstalledOperationLease::class);
         $operations = $container->make(InstalledOperationManager::class);
-        $ownsLease = $this->leaseToken !== null && $leases->owns($this->serverId, $type, $this->leaseToken);
+        $ownsLease = $this->leaseToken !== null && $leases->owns($this->serverId, $type, $this->leaseToken, $this->claimEpoch);
         $ownsDispatch = $this->dispatchToken !== null && $operations->ownsPendingDispatch(
             $this->serverId,
             $type,
@@ -270,6 +291,7 @@ final class ScanInstalledProjects
                 InstalledOperationManager::OPERATION_SCAN,
                 $exception === null ? 'scan_job_failed' : 'scan_job_exception',
                 leaseToken: $ownsLease ? $this->leaseToken : null,
+                leaseEpoch: $ownsLease ? $this->claimEpoch : null,
             );
         } finally {
             if ($this->dispatchToken !== null) {

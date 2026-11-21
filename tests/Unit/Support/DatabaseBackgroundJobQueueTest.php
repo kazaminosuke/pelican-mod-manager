@@ -103,4 +103,45 @@ class DatabaseBackgroundJobQueueTest extends TestCase
 
         self::assertNull($queue->claim());
     }
+
+    public function test_heartbeat_extends_reservation_and_stale_attempt_cannot_ack_retry_or_release(): void
+    {
+        $queue = new DatabaseBackgroundJobQueue();
+        $queue->push(BackgroundJob::BULK_UPDATE, ['server_id' => 9]);
+
+        $firstAttempt = $queue->claim();
+        self::assertIsArray($firstAttempt);
+        self::assertSame(1, $firstAttempt['attempts']);
+
+        // Simulate a slow job keeping its reservation alive via heartbeat past the initial reclaim window.
+        ModManagerBackgroundJob::query()
+            ->whereKey($firstAttempt['id'])
+            ->update(['reserved_at' => gmdate('Y-m-d H:i:s', time() - 240)]);
+
+        self::assertTrue($queue->heartbeat($firstAttempt['id'], 1));
+        self::assertNull($queue->claim(), 'A live job whose heartbeat renewed reserved_at must not be reclaimed.');
+
+        // If the worker actually stalls without heartbeat past STALE_RESERVATION_MINUTES, a replacement worker reclaims it.
+        ModManagerBackgroundJob::query()
+            ->whereKey($firstAttempt['id'])
+            ->update(['reserved_at' => gmdate('Y-m-d H:i:s', time() - 360)]);
+
+        $secondAttempt = $queue->claim();
+        self::assertIsArray($secondAttempt);
+        self::assertSame(2, $secondAttempt['attempts']);
+
+        // The fenced first attempt must no longer acknowledge, retry, release, or heartbeat the row.
+        self::assertFalse($queue->heartbeat($firstAttempt['id'], 1));
+        $queue->retry($firstAttempt['id'], 0, 1);
+        $queue->release($firstAttempt['id'], 0, 1);
+        $queue->ack($firstAttempt['id'], 1);
+
+        $row = ModManagerBackgroundJob::query()->find($secondAttempt['id']);
+        self::assertNotNull($row);
+        self::assertSame(2, (int) $row->attempts);
+        self::assertNotNull($row->reserved_at);
+
+        $queue->ack($secondAttempt['id'], 2);
+        self::assertSame(0, ModManagerBackgroundJob::query()->count());
+    }
 }

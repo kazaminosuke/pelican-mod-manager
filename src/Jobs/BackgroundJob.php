@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Jobs;
 
+use Closure;
 use Illuminate\Container\Container;
 use InvalidArgumentException;
 use Kazaminosuke\ModManager\Support\CacheProfile;
@@ -43,21 +44,22 @@ final class BackgroundJob
      * any work. Idempotent cache jobs still rethrow and use queue retries.
      *
      * @param  array<string, mixed>  $payload
+     * @param  (Closure(): bool)|null  $heartbeat
      */
-    public static function execute(string $type, array $payload): ?int
+    public static function execute(string $type, array $payload, ?int $claimEpoch = null, ?Closure $heartbeat = null): ?int
     {
         unset($payload['_unique_key']);
 
         if ($type === self::SCAN) {
-            return self::executeScan($payload);
+            return self::executeScan($payload, $claimEpoch, $heartbeat);
         }
 
         if ($type === self::MODPACK) {
-            return self::executeModpack($payload);
+            return self::executeModpack($payload, $claimEpoch, $heartbeat);
         }
 
         match ($type) {
-            self::BULK_UPDATE => self::executeBulkUpdate($payload),
+            self::BULK_UPDATE => self::executeBulkUpdate($payload, $claimEpoch, $heartbeat),
             self::RESET_METADATA => self::executeResetMetadata($payload),
             self::WARM_SEARCH => self::executeWarmSearch($payload),
             self::WARM_PROJECT_METADATA => self::executeWarmProjectMetadata($payload),
@@ -70,8 +72,9 @@ final class BackgroundJob
 
     /**
      * @param  array<string, mixed>  $payload
+     * @param  (Closure(): bool)|null  $heartbeat
      */
-    private static function executeScan(array $payload): ?int
+    private static function executeScan(array $payload, ?int $claimEpoch = null, ?Closure $heartbeat = null): ?int
     {
         $dispatchToken = self::optionalString($payload, 'dispatch_token');
         $leaseToken = self::optionalString($payload, 'lease_token');
@@ -87,6 +90,8 @@ final class BackgroundJob
             force: (bool) ($payload['force'] ?? false),
             actorUserId: isset($payload['actor_user_id']) ? (int) $payload['actor_user_id'] : null,
             dispatchToken: $dispatchToken,
+            claimEpoch: $claimEpoch,
+            heartbeat: $heartbeat,
         );
 
         try {
@@ -103,13 +108,16 @@ final class BackgroundJob
 
     /**
      * @param  array<string, mixed>  $payload
+     * @param  (Closure(): bool)|null  $heartbeat
      */
-    private static function executeBulkUpdate(array $payload): void
+    private static function executeBulkUpdate(array $payload, ?int $claimEpoch = null, ?Closure $heartbeat = null): void
     {
         $job = new BulkUpdateInstalledProjects(
             serverId: self::int($payload, 'server_id'),
             projectType: self::string($payload, 'project_type'),
             leaseToken: self::string($payload, 'lease_token'),
+            claimEpoch: $claimEpoch,
+            heartbeat: $heartbeat,
         );
 
         try {
@@ -122,11 +130,9 @@ final class BackgroundJob
 
     /**
      * @param  array<string, mixed>  $payload
+     * @param  (Closure(): bool)|null  $heartbeat
      */
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    private static function executeModpack(array $payload): ?int
+    private static function executeModpack(array $payload, ?int $claimEpoch = null, ?Closure $heartbeat = null): ?int
     {
         $job = new InstallModpack(
             serverId: self::int($payload, 'server_id'),
@@ -137,6 +143,8 @@ final class BackgroundJob
             versionId: self::optionalString($payload, 'version_id') ?? '',
             deferUntil: is_numeric($payload['defer_until'] ?? null) ? (int) $payload['defer_until'] : 0,
             selection: is_array($payload['selection'] ?? null) ? $payload['selection'] : null,
+            claimEpoch: $claimEpoch,
+            heartbeat: $heartbeat,
         );
 
         try {

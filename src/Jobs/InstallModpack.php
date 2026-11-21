@@ -7,6 +7,7 @@ use App\Models\Server;
 use App\Models\User;
 use App\Repositories\Daemon\DaemonFileRepository;
 use App\Repositories\Daemon\DaemonServerRepository;
+use Closure;
 use Illuminate\Container\Container;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -36,9 +37,12 @@ final class InstallModpack
 {
     public int $uniqueFor = 1200;
 
-    private const LEASE_REFRESH_SECONDS = 60;
+    private const LEASE_REFRESH_SECONDS = 30;
 
-    /** @param array<string, mixed>|null $selection */
+    /**
+     * @param  array<string, mixed>|null  $selection
+     * @param  (Closure(): bool)|null  $heartbeat
+     */
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
@@ -48,6 +52,8 @@ final class InstallModpack
         public readonly string $versionId = '',
         public readonly int $deferUntil = 0,
         public readonly ?array $selection = null,
+        public readonly ?int $claimEpoch = null,
+        private readonly ?Closure $heartbeat = null,
     ) {}
 
     public function uniqueId(): string
@@ -67,7 +73,7 @@ final class InstallModpack
             return null;
         }
 
-        if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
+        if (!$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
             return null;
         }
 
@@ -80,6 +86,7 @@ final class InstallModpack
                 InstalledOperationManager::OPERATION_MODPACK,
                 'server_not_found',
                 leaseToken: $this->leaseToken,
+                leaseEpoch: $this->claimEpoch,
             );
 
             return null;
@@ -95,6 +102,7 @@ final class InstallModpack
                     'server_install_unfinished',
                     ['message' => 'The server install did not finish, so the modpack files were not written.'],
                     $this->leaseToken,
+                    $this->claimEpoch,
                 );
 
                 return null;
@@ -106,7 +114,14 @@ final class InstallModpack
         $operations->start($server, $type, InstalledOperationManager::OPERATION_MODPACK);
         $temp = tempnam(sys_get_temp_dir(), 'modpack');
         if ($temp === false) {
-            $operations->fail($server, $type, InstalledOperationManager::OPERATION_MODPACK, 'temp_file', leaseToken: $this->leaseToken);
+            $operations->fail(
+                $server,
+                $type,
+                InstalledOperationManager::OPERATION_MODPACK,
+                'temp_file',
+                leaseToken: $this->leaseToken,
+                leaseEpoch: $this->claimEpoch,
+            );
 
             return null;
         }
@@ -162,9 +177,26 @@ final class InstallModpack
             if (!$cached) {
                 try {
                     $response = Http::timeout(180)
-                        ->withOptions(['sink' => $temp, 'allow_redirects' => ['protocols' => ['https']]])
+                        ->withOptions([
+                            'sink' => $temp,
+                            'allow_redirects' => ['protocols' => ['https']],
+                            'progress' => function () use ($type, $leases, &$leaseRefreshedAt): void {
+                                if (microtime(true) - $leaseRefreshedAt < self::LEASE_REFRESH_SECONDS) {
+                                    return;
+                                }
+                                if ($this->heartbeat !== null && !($this->heartbeat)()) {
+                                    throw new ModpackException('The modpack background job reservation was superseded.');
+                                }
+                                if (!$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
+                                    throw new ModpackException('The server operation lease expired.');
+                                }
+                                $leaseRefreshedAt = microtime(true);
+                            },
+                        ])
                         ->get($file['url']);
                     $response->throw();
+                } catch (ModpackException $exception) {
+                    throw $exception;
                 } catch (Throwable $exception) {
                     if ($isFtb) {
                         throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.ftb_manifest_unavailable'), previous: $exception);
@@ -173,7 +205,9 @@ final class InstallModpack
                     throw $exception;
                 } finally {
                     if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
-                        $leases->refresh($this->serverId, $type, $this->leaseToken);
+                        if ($this->heartbeat === null || ($this->heartbeat)()) {
+                            $leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch);
+                        }
                         $leaseRefreshedAt = microtime(true);
                     }
                 }
@@ -236,11 +270,17 @@ final class InstallModpack
                 ]));
             }
             $lastCheck = 0.0;
-            $guard = function (bool $force = true) use ($server, $type, $leases, $workflow, &$lastCheck, $backup, $review): void {
+            $guard = function (bool $force = true) use ($server, $type, $leases, $workflow, &$lastCheck, &$leaseRefreshedAt, $backup, $review): void {
                 if (!$force && microtime(true) - $lastCheck < 5) {
                     return;
                 }
-                if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
+                if ($force || microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
+                    if ($this->heartbeat !== null && !($this->heartbeat)()) {
+                        throw new ModpackException('The modpack background job reservation was superseded.');
+                    }
+                    $leaseRefreshedAt = microtime(true);
+                }
+                if (!$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
                     throw new ModpackException('The server operation lease expired.');
                 }
                 $workflow->assertStopped($server);
@@ -323,10 +363,18 @@ final class InstallModpack
                 InstalledOperationManager::OPERATION_MODPACK,
                 $result,
                 $this->leaseToken,
+                $this->claimEpoch,
             );
         } catch (CurseForgeDependenciesPending $pending) {
             if (!$isCurseForge || $file === null || !is_string($archiveHash) || $file['version_id'] === '') {
-                $operations->fail($server, $type, InstalledOperationManager::OPERATION_MODPACK, 'modpack_rejected', leaseToken: $this->leaseToken);
+                $operations->fail(
+                    $server,
+                    $type,
+                    InstalledOperationManager::OPERATION_MODPACK,
+                    'modpack_rejected',
+                    leaseToken: $this->leaseToken,
+                    leaseEpoch: $this->claimEpoch,
+                );
 
                 return null;
             }
@@ -350,6 +398,7 @@ final class InstallModpack
                 $exception instanceof ModpackException ? 'modpack_rejected' : 'modpack_failed',
                 ['message' => $exception->getMessage()],
                 $this->leaseToken,
+                $this->claimEpoch,
             );
         } finally {
             if (is_file($temp)) {
@@ -426,7 +475,7 @@ final class InstallModpack
 
         $container = Container::getInstance();
         $leases = $container->make(InstalledOperationLease::class);
-        if (!$leases->owns($this->serverId, $type, $this->leaseToken)) {
+        if (!$leases->owns($this->serverId, $type, $this->leaseToken, $this->claimEpoch)) {
             return;
         }
 
@@ -436,6 +485,7 @@ final class InstallModpack
             InstalledOperationManager::OPERATION_MODPACK,
             $exception === null ? 'modpack_job_failed' : 'modpack_job_exception',
             leaseToken: $this->leaseToken,
+            leaseEpoch: $this->claimEpoch,
         );
     }
 }

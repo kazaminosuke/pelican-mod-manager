@@ -540,10 +540,11 @@ final class InstalledOperationManager
         string $operation,
         array $result = [],
         ?string $leaseToken = null,
+        ?int $leaseEpoch = null,
     ): InstalledOperationState {
         $serverId = $this->serverId($server);
 
-        if ($leaseToken !== null && !$this->leases->owns($serverId, $projectType, $leaseToken)) {
+        if ($leaseToken !== null && !$this->leases->owns($serverId, $projectType, $leaseToken, $leaseEpoch)) {
             return $this->state($serverId, $projectType, $operation)
                 ?? InstalledOperationState::queued($operation, $serverId, $projectType);
         }
@@ -570,10 +571,11 @@ final class InstalledOperationManager
         string $error,
         array $result = [],
         ?string $leaseToken = null,
+        ?int $leaseEpoch = null,
     ): InstalledOperationState {
         $serverId = $this->serverId($server);
 
-        if ($leaseToken !== null && !$this->leases->owns($serverId, $projectType, $leaseToken)) {
+        if ($leaseToken !== null && !$this->leases->owns($serverId, $projectType, $leaseToken, $leaseEpoch)) {
             return $this->state($serverId, $projectType, $operation)
                 ?? InstalledOperationState::queued($operation, $serverId, $projectType);
         }

@@ -11,7 +11,7 @@ use Throwable;
  */
 final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
 {
-    private const STALE_RESERVATION_MINUTES = 15;
+    private const STALE_RESERVATION_MINUTES = 5;
 
     public function push(string $type, array $payload): bool
     {
@@ -70,19 +70,27 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
         }
     }
 
-    public function ack(int|string $id): void
+    public function ack(int|string $id, ?int $expectedAttempts = null): void
     {
         try {
-            ModManagerBackgroundJob::query()->whereKey($id)->delete();
+            $query = ModManagerBackgroundJob::query()->whereKey($id);
+            if ($expectedAttempts !== null) {
+                $query->where('attempts', $expectedAttempts);
+            }
+            $query->delete();
         } catch (Throwable) {
             // The row is retried after the reservation TTL if delete fails.
         }
     }
 
-    public function retry(int|string $id, int $delaySeconds = 30): void
+    public function retry(int|string $id, int $delaySeconds = 30, ?int $expectedAttempts = null): void
     {
         try {
-            ModManagerBackgroundJob::query()->whereKey($id)->update([
+            $query = ModManagerBackgroundJob::query()->whereKey($id);
+            if ($expectedAttempts !== null) {
+                $query->where('attempts', $expectedAttempts);
+            }
+            $query->update([
                 'reserved_at' => null,
                 'available_at' => now()->addSeconds(max(0, $delaySeconds)),
             ]);
@@ -91,18 +99,34 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
         }
     }
 
-    public function release(int|string $id, int $delaySeconds): void
+    public function release(int|string $id, int $delaySeconds, ?int $expectedAttempts = null): void
     {
         try {
-            ModManagerBackgroundJob::query()
+            $query = ModManagerBackgroundJob::query()
                 ->whereKey($id)
-                ->where('attempts', '>', 0)
-                ->decrement('attempts', 1, [
-                    'reserved_at' => null,
-                    'available_at' => now()->addSeconds(max(0, $delaySeconds)),
-                ]);
+                ->where('attempts', '>', 0);
+            if ($expectedAttempts !== null) {
+                $query->where('attempts', $expectedAttempts);
+            }
+            $query->decrement('attempts', 1, [
+                'reserved_at' => null,
+                'available_at' => now()->addSeconds(max(0, $delaySeconds)),
+            ]);
         } catch (Throwable) {
             // The stale-reservation reclaim path will pick the row up later.
+        }
+    }
+
+    public function heartbeat(int|string $id, int $expectedAttempts): bool
+    {
+        try {
+            return ModManagerBackgroundJob::query()
+                ->whereKey($id)
+                ->where('attempts', $expectedAttempts)
+                ->whereNotNull('reserved_at')
+                ->update(['reserved_at' => now()]) === 1;
+        } catch (Throwable) {
+            return false;
         }
     }
 
