@@ -145,8 +145,18 @@ class ModManagerServiceProvider extends ServiceProvider
         $this->app->booted(function (): void {
             $schedule = $this->app->make(Schedule::class);
             $schedule->command(ProcessBackgroundJobsCommand::class)
-                ->everyMinute()
+                ->everyTwoSeconds()
+                ->when(function (): bool {
+                    try {
+                        $queue = $this->app->make(BackgroundJobQueue::class);
+
+                        return !($queue instanceof DatabaseBackgroundJobQueue) || $queue->hasPending();
+                    } catch (\Throwable) {
+                        return false;
+                    }
+                })
                 ->withoutOverlapping(10)
+                ->runInBackground()
                 ->name('mod-manager:process-jobs');
             $schedule->command(WarmCatalogCacheCommand::class)
                 ->everyTenMinutes()

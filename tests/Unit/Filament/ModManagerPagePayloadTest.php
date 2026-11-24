@@ -1014,6 +1014,31 @@ class ModManagerPagePayloadTest extends TestCase
         self::assertStringNotContainsString("ProjectType::Datapack->value => 'texture-packs'", $source);
     }
 
+    public function test_initial_installed_tab_shows_checking_status_before_scan_data_is_ready(): void
+    {
+        $page = $this->pageWithSources([]);
+        $page->activeTab = 'installed';
+        $page->installedOperation = null;
+        $page->installedScanDataReady = false;
+        $page->pollInstalledOperations = true;
+
+        self::assertTrue($page->shouldShowOperationStatusForTest());
+
+        // Once scan data is ready and no active operation is running, hide it.
+        $page->installedScanDataReady = true;
+        self::assertFalse($page->shouldShowOperationStatusForTest());
+
+        // Queue-warning state also remains visible when data is not ready.
+        $page->installedScanDataReady = false;
+        $page->pollInstalledOperations = false;
+        $page->operationQueueWarningShown = true;
+        self::assertTrue($page->shouldShowOperationStatusForTest());
+
+        // Catalog tabs stay free of scan status indicators.
+        $page->activeTab = 'modrinth';
+        self::assertFalse($page->shouldShowOperationStatusForTest());
+    }
+
     /** @param array<int, ProjectSourceInterface> $sources */
     private function pageWithSources(array $sources): TestableModManagerPage
     {

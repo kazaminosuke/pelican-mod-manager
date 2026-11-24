@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Support;
 
 use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
+use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Models\ModManagerBackgroundJob;
 use Throwable;
 
@@ -12,6 +13,23 @@ use Throwable;
 final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
 {
     private const STALE_RESERVATION_MINUTES = 5;
+
+    /**
+     * Interactive user-facing jobs (scans, installed metadata fills, resets)
+     * must not wait behind speculative catalog warming or background cache
+     * revalidation.
+     *
+     * @var array<string, int>
+     */
+    private const TYPE_PRIORITIES = [
+        BackgroundJob::SCAN => 1,
+        BackgroundJob::WARM_PROJECT_METADATA => 1,
+        BackgroundJob::RESET_METADATA => 1,
+        BackgroundJob::BULK_UPDATE => 2,
+        BackgroundJob::MODPACK => 2,
+        BackgroundJob::REVALIDATE => 3,
+        BackgroundJob::WARM_SEARCH => 4,
+    ];
 
     public function push(string $type, array $payload): bool
     {
@@ -34,16 +52,43 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
         return true;
     }
 
+    public function hasPending(): bool
+    {
+        try {
+            return ModManagerBackgroundJob::query()
+                ->where('available_at', '<=', now())
+                ->where(function ($query): void {
+                    $query->whereNull('reserved_at')
+                        ->orWhere('reserved_at', '<', now()->subMinutes(self::STALE_RESERVATION_MINUTES));
+                })
+                ->exists();
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
     public function claim(): ?array
     {
         try {
             return ModManagerBackgroundJob::query()->getConnection()->transaction(function (): ?array {
+                $caseParts = [];
+                $bindings = [];
+
+                foreach (self::TYPE_PRIORITIES as $type => $priority) {
+                    $caseParts[] = 'WHEN ? THEN ?';
+                    $bindings[] = $type;
+                    $bindings[] = $priority;
+                }
+
+                $prioritySql = 'CASE type '.implode(' ', $caseParts).' ELSE 5 END ASC';
+
                 $job = ModManagerBackgroundJob::query()
                     ->where('available_at', '<=', now())
                     ->where(function ($query): void {
                         $query->whereNull('reserved_at')
                             ->orWhere('reserved_at', '<', now()->subMinutes(self::STALE_RESERVATION_MINUTES));
                     })
+                    ->orderByRaw($prioritySql, $bindings)
                     ->orderBy('id')
                     ->lockForUpdate()
                     ->first();

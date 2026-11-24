@@ -5259,6 +5259,11 @@ class ModManagerPage extends Page implements HasTable
 
         $operation = $this->getInstalledOperationDisplayPayload();
 
+        if ($operation === null) {
+            return !$this->installedScanDataReady
+                && ($this->pollInstalledOperations || $this->operationQueueWarningShown);
+        }
+
         if (($operation['operation'] ?? null) !== InstalledOperationManager::OPERATION_SCAN
             // A background revalidation refreshes data already on screen.
             || (($operation['result']['background'] ?? false) === true)) {

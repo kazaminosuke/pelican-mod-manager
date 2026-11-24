@@ -976,6 +976,84 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         return is_string($username) && $username !== '' ? $username : null;
     }
 
+    /**
+     * Batch-prime Modrinth usernames for multiple author IDs via GET /v2/users
+     * so cold scans avoid N sequential /v2/user/{id} round trips.
+     *
+     * @param  array<int, string>  $userIds
+     */
+    public function primeAuthorsByUserIds(array $userIds): void
+    {
+        $userIds = array_values(array_unique(array_filter(
+            array_map(static fn (mixed $id): string => trim((string) $id), $userIds),
+            static fn (string $id): bool => $id !== '',
+        )));
+
+        if (count($userIds) < 2) {
+            return;
+        }
+
+        $specsByUserId = [];
+        foreach ($userIds as $userId) {
+            $specsByUserId[$userId] = $this->spec(self::OPERATION_USER, ['user_id' => $userId]);
+        }
+
+        $peeked = $this->sourceCache->peekMany($specsByUserId);
+        $missingIds = [];
+        foreach ($specsByUserId as $userId => $_spec) {
+            $probe = $peeked[$userId] ?? null;
+            if (!is_array($probe) || (!$probe['hit'] && !$probe['retry_delayed'])) {
+                $missingIds[] = $userId;
+            }
+        }
+
+        if (count($missingIds) < 2) {
+            return;
+        }
+
+        $timeoutSeconds = CacheProfile::Identity->backgroundTimeoutSeconds();
+        $toPrime = [];
+
+        foreach (array_chunk($missingIds, 50) as $chunk) {
+            try {
+                $users = $this->http($timeoutSeconds)
+                    ->throw()
+                    ->get(self::BASE_URL.'/users', [
+                        'ids' => json_encode($chunk, JSON_THROW_ON_ERROR),
+                    ])
+                    ->json();
+            } catch (Throwable $exception) {
+                report($exception);
+
+                continue;
+            }
+
+            if (!is_array($users)) {
+                continue;
+            }
+
+            foreach ($users as $user) {
+                if (!is_array($user)) {
+                    continue;
+                }
+
+                $id = is_string($user['id'] ?? null) ? $user['id'] : '';
+                $username = is_string($user['username'] ?? null) ? $user['username'] : '';
+
+                if ($id !== '' && $username !== '' && isset($specsByUserId[$id])) {
+                    $toPrime[] = [
+                        'spec' => $specsByUserId[$id],
+                        'data' => $username,
+                    ];
+                }
+            }
+        }
+
+        if ($toPrime !== []) {
+            $this->sourceCache->primeMany($toPrime, CacheProfile::Identity);
+        }
+    }
+
     protected function fetchUsernameByUserId(string $userId): ?string
     {
         $username = $this->sourceCache->swr(
@@ -1376,7 +1454,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
 
         return UpstreamHttp::json($headers)
             ->timeout($timeoutSeconds)
-            ->connectTimeout(min(1.0, $timeoutSeconds));
+            ->connectTimeout(min(3.0, $timeoutSeconds));
     }
 
     protected function getModManagerTimingElapsedMs(?float $timestamp = null): ?int

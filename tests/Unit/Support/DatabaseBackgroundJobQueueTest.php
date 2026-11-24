@@ -144,4 +144,60 @@ class DatabaseBackgroundJobQueueTest extends TestCase
         $queue->ack($secondAttempt['id'], 2);
         self::assertSame(0, ModManagerBackgroundJob::query()->count());
     }
+
+    public function test_claim_prioritizes_interactive_jobs_ahead_of_speculative_warm_search(): void
+    {
+        $queue = new DatabaseBackgroundJobQueue();
+
+        $queue->push(BackgroundJob::WARM_SEARCH, ['page' => 1]);
+        $queue->push(BackgroundJob::WARM_SEARCH, ['page' => 2]);
+        $queue->push(BackgroundJob::REVALIDATE, ['source' => 'hangar']);
+        $queue->push(BackgroundJob::BULK_UPDATE, ['server_id' => 1]);
+        $queue->push(BackgroundJob::MODPACK, ['server_id' => 2]);
+        $queue->push(BackgroundJob::WARM_PROJECT_METADATA, ['project' => 'via']);
+        $queue->push(BackgroundJob::SCAN, ['server_id' => 3]);
+
+        $order = [];
+        while (($job = $queue->claim()) !== null) {
+            $order[] = $job['type'];
+            $queue->ack($job['id'], $job['attempts']);
+        }
+
+        self::assertSame([
+            BackgroundJob::WARM_PROJECT_METADATA,
+            BackgroundJob::SCAN,
+            BackgroundJob::BULK_UPDATE,
+            BackgroundJob::MODPACK,
+            BackgroundJob::REVALIDATE,
+            BackgroundJob::WARM_SEARCH,
+            BackgroundJob::WARM_SEARCH,
+        ], $order);
+    }
+
+    public function test_has_pending_tracks_claimable_jobs(): void
+    {
+        $queue = new DatabaseBackgroundJobQueue();
+
+        self::assertFalse($queue->hasPending());
+
+        $queue->push(BackgroundJob::SCAN, ['server_id' => 7]);
+        self::assertTrue($queue->hasPending());
+
+        $claimed = $queue->claim();
+        self::assertIsArray($claimed);
+        self::assertFalse($queue->hasPending());
+
+        // A delayed release is not yet claimable.
+        $queue->release($claimed['id'], 120, $claimed['attempts']);
+        self::assertFalse($queue->hasPending());
+
+        // A stale reservation becomes claimable again.
+        ModManagerBackgroundJob::query()
+            ->whereKey($claimed['id'])
+            ->update([
+                'available_at' => gmdate('Y-m-d H:i:s', time() - 10),
+                'reserved_at' => gmdate('Y-m-d H:i:s', time() - 360),
+            ]);
+        self::assertTrue($queue->hasPending());
+    }
 }

@@ -158,10 +158,46 @@ final class ScanInstalledProjects
             InstalledOperationManager::OPERATION_SCAN,
         );
 
+        $heartbeat = function () use ($leases, $type): bool {
+            if ($this->heartbeat !== null && !($this->heartbeat)()) {
+                return false;
+            }
+
+            if ($this->leaseToken !== null
+                && !$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
+                return false;
+            }
+
+            return true;
+        };
+
+        $onProgress = static function (int $completed, int $total) use ($operations, $server, $type): void {
+            $operations->progress(
+                $server,
+                $type,
+                InstalledOperationManager::OPERATION_SCAN,
+                $completed,
+                $total,
+            );
+        };
+
         try {
             // A forced scan bypasses the fresh result instead of deleting it,
             // so the page keeps its data if this scan fails.
-            $result = $service->scanAndImportModsResult($server, $fileRepository, $type, $force);
+            $result = $service->scanAndImportModsResult(
+                $server,
+                $fileRepository,
+                $type,
+                $force,
+                $onProgress,
+                $heartbeat,
+            );
+
+            if (!$result->successful && $result->failure === 'scan_ownership_lost') {
+                // Another worker or operation replaced this claim; stop without
+                // touching shared operation state.
+                return;
+            }
 
             if (!$result->successful && $result->failure === 'scan_in_progress') {
                 // Another process holds the scan lock. Give the lease back so
@@ -194,15 +230,13 @@ final class ScanInstalledProjects
                     $result->failure ?? 'scan_failed',
                     $summary,
                     $this->leaseToken,
+                    $this->claimEpoch,
                 );
 
                 return;
             }
 
-            if ($this->heartbeat !== null && !($this->heartbeat)()) {
-                return;
-            }
-            if ($this->leaseToken !== null && !$leases->owns($this->serverId, $type, $this->leaseToken, $this->claimEpoch)) {
+            if (!$heartbeat()) {
                 return;
             }
 

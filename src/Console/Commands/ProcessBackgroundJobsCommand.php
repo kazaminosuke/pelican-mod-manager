@@ -23,7 +23,7 @@ final class ProcessBackgroundJobsCommand extends Command
 
     public const TIME_BUDGET_SECONDS = 50;
 
-    public const MAX_JOBS_PER_RUN = 25;
+    public const MAX_JOBS_PER_RUN = 50;
 
     protected $signature = 'mod-manager:process-jobs';
 
