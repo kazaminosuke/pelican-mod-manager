@@ -4270,8 +4270,7 @@ class ModManagerPage extends Page implements HasTable
                                 ->label(trans('pelican-mod-manager::strings.modpacks.catalog_search'))
                                 ->maxLength(100)
                                 ->live(debounce: 500)
-                                ->dehydrated(false)
-                                ->afterStateUpdated(fn (Set $set) => $set('page', 1)),
+                                ->dehydrated(false),
                             Select::make('provider')
                                 ->label(trans('pelican-mod-manager::strings.table.columns.source'))
                                 ->options(fn (): array => app(ModpackCatalog::class)->archiveProviders())
@@ -4285,7 +4284,6 @@ class ModManagerPage extends Page implements HasTable
                                 ->live()
                                 ->dehydrated(false)
                                 ->afterStateUpdated(function (Set $set): void {
-                                    $set('page', 1);
                                     $set('project', null);
                                     $set('project_title', null);
                                     $set('version', null);
@@ -4297,29 +4295,32 @@ class ModManagerPage extends Page implements HasTable
                                 ->searchable()
                                 ->live()
                                 ->dehydrated(false)
-                                ->visible(fn (Get $get): bool => ModpackCatalog::supportsCatalogFilters($get('provider')))
-                                ->afterStateUpdated(fn (Set $set) => $set('page', 1)),
+                                ->visible(fn (Get $get): bool => ModpackCatalog::supportsCatalogFilters($get('provider'))),
                             Select::make('loader')
                                 ->label(trans('pelican-mod-manager::strings.table.filters.loader'))
                                 ->options(fn (): array => app(ModpackCatalog::class)->loaders())
                                 ->live()
                                 ->dehydrated(false)
-                                ->visible(fn (Get $get): bool => ModpackCatalog::supportsCatalogFilters($get('provider')))
-                                ->afterStateUpdated(fn (Set $set) => $set('page', 1)),
+                                ->visible(fn (Get $get): bool => ModpackCatalog::supportsCatalogFilters($get('provider'))),
                         ]),
-                    Hidden::make('page')->default(1)->dehydrated(false),
                     Hidden::make('project_title')
                         ->default(fn () => $this->currentModpackTitle($server))
                         ->dehydrated(false),
                     ViewField::make('project')
                         ->label(trans('pelican-mod-manager::strings.modpacks.pack'))
-                        ->view('pelican-mod-manager::components.modpack-catalog')
+                        ->view('pelican-mod-manager::components.modpack-catalog-field')
                         ->viewData(fn (Get $get, ViewField $component): array => $this->modpackCatalogViewData($server, $get, $component))
                         ->default(fn () => $this->currentModpackSelection($server))
                         ->required()
                         ->afterStateUpdated(function (Set $set, Get $get, mixed $state) use ($server): void {
-                            $titles = array_column($this->modpackCatalogPage($server, $get)['hits'], 'title', 'key');
-                            $set('project_title', is_string($state) ? ($titles[$state] ?? null) : null);
+                            if (!is_string($state) || $state === '') {
+                                $set('project_title', null);
+                            } else {
+                                $titles = array_column($this->modpackCatalogPage($server, $get)['hits'], 'title', 'key');
+                                if (isset($titles[$state])) {
+                                    $set('project_title', $titles[$state]);
+                                }
+                            }
                             $set('version', null);
                             $set('confirm_server_compatibility', false);
                         }),
@@ -4584,25 +4585,21 @@ class ModManagerPage extends Page implements HasTable
     /** @return array<string, mixed> */
     private function modpackCatalogViewData(Server $server, Get $get, ViewField $component): array
     {
-        $page = min(500, max(1, (int) $get('page')));
-        $result = $this->modpackCatalogPage($server, $get);
-        $hasFilters = ModpackCatalog::supportsCatalogFilters($get('provider'));
-        $message = match (true) {
-            $result['error'] => 'catalog_unavailable',
-            !$hasFilters && blank($get('query')) => 'catalog_search_prompt',
-            default => 'catalog_empty',
-        };
+        $provider = ModpackProvider::tryFrom((string) $get('provider')) ?? ModpackProvider::Modrinth;
+        $hasFilters = ModpackCatalog::supportsCatalogFilters($provider);
+        $query = (string) $get('query');
+        $minecraft = $hasFilters && is_string($get('minecraft')) && $get('minecraft') !== '' ? $get('minecraft') : null;
+        $loader = $hasFilters && is_string($get('loader')) && $get('loader') !== '' ? $get('loader') : null;
+        $serverKey = $server->getKey();
 
         return [
-            'hits' => $result['hits'],
-            'selectedTitle' => $get('project_title'),
-            'page' => $page,
-            'pageSize' => ModpackCatalog::PAGE_SIZE,
-            'totalHits' => $result['total_hits'],
-            'pageStatePath' => $component->resolveRelativeStatePath('page'),
-            'hasNext' => $page * ModpackCatalog::PAGE_SIZE < $result['total_hits'],
-            'isError' => $result['error'],
-            'emptyMessage' => trans('pelican-mod-manager::strings.modpacks.'.$message),
+            'provider' => $provider->value,
+            'query' => $query,
+            'minecraft' => $minecraft,
+            'loader' => $loader,
+            'serverId' => is_numeric($serverKey) ? (int) $serverKey : null,
+            'titleStatePath' => $component->resolveRelativeStatePath('project_title'),
+            'tableKey' => 'server-modpack-'.hash('sha256', serialize([$serverKey, $provider->value, $query, $minecraft, $loader])),
         ];
     }
 
@@ -4612,10 +4609,9 @@ class ModManagerPage extends Page implements HasTable
         $provider = ModpackProvider::tryFrom((string) $get('provider')) ?? ModpackProvider::Modrinth;
         $hasFilters = ModpackCatalog::supportsCatalogFilters($provider);
         $query = (string) $get('query');
-        $page = (int) $get('page');
-        $minecraft = $hasFilters ? $get('minecraft') : null;
-        $loader = $hasFilters ? $get('loader') : null;
-        $key = 'server-modpack-catalog:'.hash('sha256', serialize([$server->getKey(), $provider->value, $query, $page, $minecraft, $loader]));
+        $minecraft = $hasFilters && is_string($get('minecraft')) && $get('minecraft') !== '' ? $get('minecraft') : null;
+        $loader = $hasFilters && is_string($get('loader')) && $get('loader') !== '' ? $get('loader') : null;
+        $key = 'modpack-catalog-table:'.hash('sha256', serialize([$server->getKey(), $provider->value, $query, 1, $minecraft, $loader]));
         $attributes = request()->attributes;
 
         if (!$attributes->has($key)) {
@@ -4623,9 +4619,9 @@ class ModManagerPage extends Page implements HasTable
                 $server,
                 $provider,
                 $query,
-                $page,
-                is_string($minecraft) ? $minecraft : null,
-                is_string($loader) ? $loader : null,
+                1,
+                $minecraft,
+                $loader,
             ));
         }
 

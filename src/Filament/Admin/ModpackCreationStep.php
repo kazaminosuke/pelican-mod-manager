@@ -66,8 +66,7 @@ final class ModpackCreationStep
                             ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.catalog_search'))
                             ->maxLength(100)
                             ->live(debounce: 500)
-                            ->dehydrated(false)
-                            ->afterStateUpdated(fn (Set $set) => $set('mm_page', 1)),
+                            ->dehydrated(false),
                         Select::make('mm_provider')
                             ->label(fn (): string => trans('pelican-mod-manager::strings.table.columns.source'))
                             ->default(ModpackProvider::Modrinth->value)
@@ -76,7 +75,6 @@ final class ModpackCreationStep
                             ->live()
                             ->dehydrated(false)
                             ->afterStateUpdated(function (Set $set, Get $get): void {
-                                $set('mm_page', 1);
                                 $set('mm_project', null);
                                 $set('mm_project_title', null);
                                 $set('mm_version', null);
@@ -90,27 +88,30 @@ final class ModpackCreationStep
                             ->searchable()
                             ->live()
                             ->dehydrated(false)
-                            ->visible(self::hasCatalogFilters(...))
-                            ->afterStateUpdated(fn (Set $set) => $set('mm_page', 1)),
+                            ->visible(self::hasCatalogFilters(...)),
                         Select::make('mm_loader')
                             ->label(fn (): string => trans('pelican-mod-manager::strings.table.filters.loader'))
                             ->options(fn (): array => app(ModpackCatalog::class)->loaders())
                             ->live()
                             ->dehydrated(false)
-                            ->visible(self::hasCatalogFilters(...))
-                            ->afterStateUpdated(fn (Set $set) => $set('mm_page', 1)),
+                            ->visible(self::hasCatalogFilters(...)),
                     ]),
-                Hidden::make('mm_page')->default(1)->dehydrated(false),
                 Hidden::make('mm_project_title')->dehydrated(false),
                 ViewField::make('mm_project')
                     ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.pack'))
-                    ->view('pelican-mod-manager::components.modpack-catalog')
+                    ->view('pelican-mod-manager::components.modpack-catalog-field')
                     ->viewData(fn (Get $get, ViewField $component): array => self::catalogViewData($get, $component))
                     ->required(fn (Get $get): bool => (bool) $get('mm_modpack'))
                     ->visible(fn (Get $get): bool => (bool) $get('mm_modpack'))
                     ->afterStateUpdated(function (Set $set, Get $get, mixed $state): void {
-                        $titles = array_column(self::catalogPage($get)['hits'], 'title', 'key');
-                        $set('mm_project_title', is_string($state) ? ($titles[$state] ?? null) : null);
+                        if (!is_string($state) || $state === '') {
+                            $set('mm_project_title', null);
+                        } else {
+                            $titles = array_column(self::catalogPage($get)['hits'], 'title', 'key');
+                            if (isset($titles[$state])) {
+                                $set('mm_project_title', $titles[$state]);
+                            }
+                        }
                         self::restore($set, $get);
                         $set('mm_version', null);
                         $set('mm_egg', null);
@@ -219,24 +220,20 @@ final class ModpackCreationStep
     /** @return array<string, mixed> */
     private static function catalogViewData(Get $get, ViewField $component): array
     {
-        $page = min(500, max(1, (int) $get('mm_page')));
-        $result = self::catalogPage($get);
-        $message = match (true) {
-            $result['error'] => 'catalog_unavailable',
-            !self::hasCatalogFilters($get) && blank($get('mm_query')) => 'catalog_search_prompt',
-            default => 'catalog_empty',
-        };
+        $provider = ModpackProvider::tryFrom((string) $get('mm_provider')) ?? ModpackProvider::Modrinth;
+        $filters = self::hasCatalogFilters($get);
+        $query = (string) $get('mm_query');
+        $minecraft = $filters && is_string($get('mm_minecraft')) && $get('mm_minecraft') !== '' ? $get('mm_minecraft') : null;
+        $loader = $filters && is_string($get('mm_loader')) && $get('mm_loader') !== '' ? $get('mm_loader') : null;
 
         return [
-            'hits' => $result['hits'],
-            'selectedTitle' => $get('mm_project_title'),
-            'page' => $page,
-            'pageSize' => ModpackCatalog::PAGE_SIZE,
-            'totalHits' => $result['total_hits'],
-            'pageStatePath' => $component->resolveRelativeStatePath('mm_page'),
-            'hasNext' => $page * ModpackCatalog::PAGE_SIZE < $result['total_hits'],
-            'isError' => $result['error'],
-            'emptyMessage' => trans('pelican-mod-manager::strings.modpacks.'.$message),
+            'provider' => $provider->value,
+            'query' => $query,
+            'minecraft' => $minecraft,
+            'loader' => $loader,
+            'serverId' => null,
+            'titleStatePath' => $component->resolveRelativeStatePath('mm_project_title'),
+            'tableKey' => 'create-modpack-'.hash('sha256', serialize([$provider->value, $query, $minecraft, $loader])),
         ];
     }
 
@@ -246,16 +243,19 @@ final class ModpackCreationStep
         $provider = ModpackProvider::tryFrom((string) $get('mm_provider')) ?? ModpackProvider::Modrinth;
         $filters = self::hasCatalogFilters($get);
         $query = (string) $get('mm_query');
-        $page = (int) $get('mm_page');
-        $minecraft = $filters ? $get('mm_minecraft') : null;
-        $loader = $filters ? $get('mm_loader') : null;
-        $key = 'modpack-catalog:'.hash('sha256', serialize([$provider->value, $query, $page, $minecraft, $loader]));
+        $minecraft = $filters && is_string($get('mm_minecraft')) && $get('mm_minecraft') !== '' ? $get('mm_minecraft') : null;
+        $loader = $filters && is_string($get('mm_loader')) && $get('mm_loader') !== '' ? $get('mm_loader') : null;
+        $server = new Server();
+        $key = 'modpack-catalog-table:'.hash('sha256', serialize([$server->getKey(), $provider->value, $query, 1, $minecraft, $loader]));
         $attributes = request()->attributes;
         if (!$attributes->has($key)) {
             $attributes->set($key, app(ModpackCatalog::class)->searchPage(
-                new Server(), $provider, $query, $page,
-                is_string($minecraft) ? $minecraft : null,
-                is_string($loader) ? $loader : null,
+                $server,
+                $provider,
+                $query,
+                1,
+                $minecraft,
+                $loader,
             ));
         }
 

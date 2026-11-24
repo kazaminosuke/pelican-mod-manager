@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Services;
 use App\Models\Server;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
@@ -101,9 +102,16 @@ final class ModpackCatalog
             }
 
             $hit['key'] = $provider->value.':'.$hit['project_id'];
+            $hit['provider'] = $provider->value;
             $hit['title'] = (string) ($hit['title'] ?? '');
             $hit['description'] = $this->shortDescription($hit['description'] ?? null);
             $hit['source'] = $provider->getLabel();
+            $hit['url'] = self::externalProjectUrl(
+                $provider,
+                (string) $hit['project_id'],
+                is_string($hit['slug'] ?? null) ? $hit['slug'] : null,
+                $hit['title'],
+            );
             $hit['minecraft_versions'] = $this->normalizeMinecraftVersions($hit['minecraft_versions'] ?? []);
             $hit['loaders'] = $this->normalizeLoaders($hit['loaders'] ?? []);
             $hit['downloads'] = isset($hit['downloads']) && is_numeric($hit['downloads']) ? (int) $hit['downloads'] : null;
@@ -121,6 +129,63 @@ final class ModpackCatalog
         }
 
         return ['hits' => $hits, 'total_hits' => min((int) $result['total_hits'], 10000), 'error' => false];
+    }
+
+    public static function externalProjectUrl(
+        ModpackProvider $provider,
+        string $projectId,
+        ?string $slug = null,
+        ?string $title = null,
+    ): ?string {
+        $id = trim($projectId);
+        $cleanSlug = is_string($slug) ? trim($slug) : '';
+
+        return match ($provider) {
+            ModpackProvider::Modrinth => self::modrinthProjectUrl($id, $cleanSlug),
+            ModpackProvider::CurseForge => self::curseForgeProjectUrl($cleanSlug),
+            ModpackProvider::Ftb => self::ftbProjectUrl($id, $title),
+            ModpackProvider::Technic => preg_match('/^[a-z0-9][a-z0-9._-]{0,127}$/D', $id) === 1
+                ? "https://www.technicpack.net/modpack/{$id}"
+                : null,
+            ModpackProvider::Atlauncher => preg_match('/^[A-Za-z0-9_-]{1,128}$/D', $id) === 1
+                ? "https://atlauncher.com/pack/{$id}"
+                : null,
+        };
+    }
+
+    private static function modrinthProjectUrl(string $projectId, string $slug): ?string
+    {
+        if ($slug !== '' && preg_match('/^[A-Za-z0-9._-]{1,128}$/D', $slug) === 1) {
+            return "https://modrinth.com/modpack/{$slug}";
+        }
+
+        if (preg_match('/^[A-Za-z0-9]{1,64}$/D', $projectId) === 1) {
+            return "https://modrinth.com/modpack/{$projectId}";
+        }
+
+        return null;
+    }
+
+    private static function curseForgeProjectUrl(string $slug): ?string
+    {
+        if ($slug === '' || preg_match('/^[A-Za-z0-9._-]{1,200}$/D', $slug) !== 1) {
+            return null;
+        }
+
+        return "https://www.curseforge.com/minecraft/modpacks/{$slug}";
+    }
+
+    private static function ftbProjectUrl(string $projectId, ?string $title): ?string
+    {
+        if (preg_match('/^[1-9]\d*$/D', $projectId) !== 1) {
+            return null;
+        }
+
+        $titleSlug = is_string($title) ? Str::slug($title) : '';
+
+        return $titleSlug !== ''
+            ? "https://www.feed-the-beast.com/modpacks/{$projectId}-{$titleSlug}"
+            : "https://www.feed-the-beast.com/modpacks/{$projectId}";
     }
 
     public static function supportsCatalogFilters(ModpackProvider|string|null $provider): bool

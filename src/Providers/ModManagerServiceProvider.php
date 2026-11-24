@@ -13,6 +13,7 @@ use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
 use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Filament\Admin\QueueCreatedServerModpack;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
@@ -46,6 +47,7 @@ use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchExecutor;
 use Kazaminosuke\ModManager\Support\WarmRequestThrottle;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use Livewire\Livewire;
 
 class ModManagerServiceProvider extends ServiceProvider
 {
@@ -124,6 +126,10 @@ class ModManagerServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if ($this->app->bound('livewire')) {
+            Livewire::component('pelican-mod-manager.modpack-catalog-table', ModpackCatalogTable::class);
+        }
+
         $this->app['events']->listen(RecordCreated::class, QueueCreatedServerModpack::class);
 
         // Pelican's Admin > Roles screen discovers third-party permissions
