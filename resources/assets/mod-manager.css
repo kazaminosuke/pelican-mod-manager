@@ -5,6 +5,9 @@
 .mmr-table-scroll-ctn .fi-ta-main>*{flex:0 0 auto;}
 .mmr-table-scroll-ctn .fi-ta-content-ctn,.mmr-table-scroll-ctn .fi-ta-empty-state{flex:1 1 auto;min-height:0;}
 .mmr-table-scroll-ctn .fi-ta-content-ctn{overflow-y:auto;}
+.mmr-table-scroll-ctn .fi-ta-content-ctn:has(>.fi-ta-table-loading-ctn){display:flex;flex-direction:column;}
+.mmr-table-scroll-ctn .fi-ta-table-loading-ctn{flex:1 1 auto;height:100%;min-height:8rem;}
+.mmr-table-scroll-ctn .fi-ta-empty-state{display:flex;align-items:center;justify-content:center;}
 .mmr-table-scroll-ctn .fi-pagination{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);}
 .mmr-table-scroll-ctn .fi-pagination-overview{grid-column:1;min-inline-size:0;min-block-size:2.5rem;white-space:normal;overflow-wrap:normal;word-break:normal;line-break:strict;}
 .mmr-table-scroll-ctn .mmr-pagination-overview-content{min-inline-size:0;}

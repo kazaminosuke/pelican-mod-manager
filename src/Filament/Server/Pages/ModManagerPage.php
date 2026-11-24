@@ -12,7 +12,6 @@ use App\Traits\Filament\BlockAccessInConflict;
 use Exception;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
@@ -32,6 +31,7 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Support\ArrayRecord;
+use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\TextSize;
 use Filament\Support\Enums\Width;
 use Filament\Tables\Columns\ImageColumn;
@@ -87,14 +87,12 @@ use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
-use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
-use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
@@ -306,6 +304,9 @@ class ModManagerPage extends Page implements HasTable
 
     /** Whether a still-valid scan result already exists, independent of background-operation state. */
     public bool $installedScanDataReady = false;
+
+    /** Whether reading installed metadata failed during this request (Wings/read error). */
+    protected bool $installedMetadataReadFailed = false;
 
     /**
      * The scan result read during this request. Not a Livewire property: it
@@ -1592,12 +1593,14 @@ class ModManagerPage extends Page implements HasTable
                     $this->installedModsMetadata = $cached;
                     $this->installedFilesCount = count($cached);
                     $this->installedScanDataReady = true;
+                    $this->installedMetadataReadFailed = false;
                 } else {
                     try {
                         $installed = app(ResourcePackService::class)->getInstalled($server, $fileRepository);
                         $this->installedModsMetadata = $installed === null ? [] : [$installed];
                         $this->installedFilesCount = $installed === null ? 0 : 1;
                         $this->installedScanDataReady = true;
+                        $this->installedMetadataReadFailed = false;
                         Cache::put($cacheKey, $this->installedModsMetadata, now()->addHour());
                     } catch (Exception $exception) {
                         if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
@@ -1606,6 +1609,7 @@ class ModManagerPage extends Page implements HasTable
                         $this->installedModsMetadata = [];
                         $this->installedFilesCount = -1;
                         $this->installedScanDataReady = false;
+                        $this->installedMetadataReadFailed = true;
                     }
                 }
 
@@ -1633,10 +1637,12 @@ class ModManagerPage extends Page implements HasTable
 
             if ($cacheHit) {
                 $this->installedModsMetadata = $cached;
+                $this->installedMetadataReadFailed = false;
             } else {
                 $metadataResult = ModManager::getInstalledMetadataReadResult($server, $fileRepository, $type);
                 $this->installedModsMetadata = $metadataResult->document->installedMods();
                 $metadataStatus = $metadataResult->status->value;
+                $this->installedMetadataReadFailed = !$metadataResult->isAuthoritative();
 
                 // Never turn a transient Wings/metadata read failure into an
                 // hour of an apparently empty Installed tab. A valid empty
@@ -3138,19 +3144,34 @@ class ModManagerPage extends Page implements HasTable
                     ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarTagOptions() !== []),
             ])
-            ->emptyStateHeading(function () {
+            ->emptyStateIcon(function (): ?string {
+                if ($this->activeTab === 'installed') {
+                    return $this->installedEmptyStateIcon();
+                }
+
+                return null;
+            })
+            ->emptyStateHeading(function (): ?string {
+                if ($this->activeTab === 'installed') {
+                    return $this->installedEmptyStateHeading();
+                }
+
                 $currentSource = $this->getCurrentSource();
 
-                if ($this->activeTab !== 'installed' && $currentSource && !$currentSource->isConfigured()) {
+                if ($currentSource && !$currentSource->isConfigured()) {
                     return trans('pelican-mod-manager::strings.page.source_not_configured_heading');
                 }
 
                 return null;
             })
-            ->emptyStateDescription(function () {
+            ->emptyStateDescription(function (): ?string {
+                if ($this->activeTab === 'installed') {
+                    return $this->installedEmptyStateDescription();
+                }
+
                 $currentSource = $this->getCurrentSource();
 
-                if ($this->activeTab !== 'installed' && $currentSource && !$currentSource->isConfigured()) {
+                if ($currentSource && !$currentSource->isConfigured()) {
                     return trans('pelican-mod-manager::strings.page.source_not_configured');
                 }
 
@@ -3251,6 +3272,7 @@ class ModManagerPage extends Page implements HasTable
                         ->toggleable(),
                 ])
             ->contentGrid(fn (): ?array => $this->isCatalogTileView() ? CatalogTileColumns::contentGrid() : null)
+            ->recordActionsAlignment(Alignment::End->value)
             ->recordUrl(function (array $record) {
                 if (!empty($record['unavailable']) || ($record['untracked'] ?? false)) {
                     return null;
@@ -4324,7 +4346,7 @@ class ModManagerPage extends Page implements HasTable
                 ->modalWidth(Width::FiveExtraLarge)
                 ->modalHeading(trans('pelican-mod-manager::strings.modpack_updates.choose'))
                 ->modalDescription(trans('pelican-mod-manager::strings.modpack_updates.setup_warning'))
-                ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.modpack_updates.preview'))
+                ->modalSubmitAction(false)
                 ->schema([
                     Hidden::make('provider')
                         ->default(function () use ($server): string {
@@ -4332,14 +4354,7 @@ class ModManagerPage extends Page implements HasTable
 
                             return array_key_exists($provider, app(ModpackCatalog::class)->archiveProviders()) ? $provider : 'modrinth';
                         })
-                        ->live()
-                        ->dehydrated(false)
-                        ->afterStateUpdated(function (Set $set): void {
-                            $set('project', null);
-                            $set('project_title', null);
-                            $set('version', null);
-                            $set('confirm_server_compatibility', false);
-                        }),
+                        ->dehydrated(false),
                     Hidden::make('project_title')
                         ->default(fn () => $this->currentModpackTitle($server))
                         ->dehydrated(false),
@@ -4350,46 +4365,9 @@ class ModManagerPage extends Page implements HasTable
                         ->default(fn () => $this->currentModpackSelection($server))
                         ->required(),
                     Hidden::make('version')
-                        ->required()
-                        ->live()
-                        ->afterStateUpdated(function (Set $set): void {
-                            $set('confirm_server_compatibility', false);
-                        }),
-                    TextEntry::make('modpack_plan')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.plan'))
-                        ->visible(fn (Get $get): bool => filled($get('project')) && filled($get('version')))
-                        ->state(function (Get $get) use ($server): string {
-                            $result = $this->modpackPreview($server, $get);
-                            if ($result === null) {
-                                return trans('pelican-mod-manager::strings.modpacks.plan_unavailable');
-                            }
-                            $java = JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava);
-
-                            return implode(' ', array_filter([
-                                $result->reasonDetail,
-                                $result->selected?->name,
-                                $result->loader,
-                                $java,
-                                JavaRuntimeImage::isTooOld($server->image, $result->minecraftVersion, $result->minimumJava)
-                                    ? trans('pelican-mod-manager::strings.modpacks.java_too_old', ['java' => $java]) : null,
-                                JavaRuntimeImage::isTooNew($server->image, $result->minecraftVersion, $result->loader)
-                                    ? trans('pelican-mod-manager::strings.modpacks.java_too_new', [
-                                        'loader' => $result->loader ?? 'Minecraft',
-                                        'java' => JavaRuntimeImage::maximumLabel($result->minecraftVersion, $result->loader),
-                                    ]) : null,
-                                $result->serverFileStatus !== null
-                                    ? trans('pelican-mod-manager::strings.modpacks.'.$result->serverFileStatus) : null,
-                            ]));
-                        }),
-                    Checkbox::make('confirm_server_compatibility')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.confirm_server_compatibility'))
-                        ->helperText(function (Get $get) use ($server): string {
-                            $warning = $this->modpackPreview($server, $get)?->compatibilityWarning;
-
-                            return $warning !== null ? trans('pelican-mod-manager::strings.modpacks.'.$warning) : '';
-                        })
-                        ->visible(fn (Get $get): bool => $this->modpackPreview($server, $get)?->compatibilityWarning !== null)
-                        ->accepted(fn (Get $get): bool => $this->modpackPreview($server, $get)?->compatibilityWarning !== null),
+                        ->required(),
+                    Hidden::make('confirm_server_compatibility')
+                        ->default(false),
                 ])
                 ->action(function (array $data) use ($server): void {
                     try {
@@ -4535,34 +4513,6 @@ class ModManagerPage extends Page implements HasTable
         ];
     }
 
-    /** @var array<string, CompatibilityResult|null> */
-    private array $modpackPreviews = [];
-
-    private function modpackPreview(Server $server, Get $get, mixed $explicitEggId = null): ?CompatibilityResult
-    {
-        $project = (string) $get('project');
-        $version = $get('version');
-        if ($project === '' || $version === null || $version === '') {
-            return null;
-        }
-
-        $key = $project.'|'.$version.'|'.(is_scalar($explicitEggId) ? (string) $explicitEggId : '');
-        if (array_key_exists($key, $this->modpackPreviews)) {
-            return $this->modpackPreviews[$key];
-        }
-
-        try {
-            return $this->modpackPreviews[$key] = app(ModpackInstallCoordinator::class)->preview(
-                $server,
-                $project,
-                (string) $version,
-                is_scalar($explicitEggId) && (string) $explicitEggId !== '' ? $explicitEggId : null,
-            )['result'];
-        } catch (Exception) {
-            return $this->modpackPreviews[$key] = null;
-        }
-    }
-
     private ?array $modpackInventoryForRequest = null;
 
     public bool $confirmModpackSwitch = false;
@@ -4604,8 +4554,12 @@ class ModManagerPage extends Page implements HasTable
         return $name !== '' ? $name : $current['pack_id'];
     }
 
-    public function selectModpackRelease(string $projectKey, string $title, string $versionId): void
-    {
+    public function selectModpackRelease(
+        string $projectKey,
+        string $title,
+        string $versionId,
+        bool $confirmCompatibility = false,
+    ): void {
         $mountedIndex = null;
         foreach ($this->mountedActions as $index => $action) {
             if (($action['name'] ?? null) === 'install_modpack') {
@@ -4621,22 +4575,111 @@ class ModManagerPage extends Page implements HasTable
         $this->mountedActions[$mountedIndex]['data']['project'] = $projectKey;
         $this->mountedActions[$mountedIndex]['data']['project_title'] = $title;
         $this->mountedActions[$mountedIndex]['data']['version'] = $versionId;
-        $this->mountedActions[$mountedIndex]['data']['confirm_server_compatibility'] = false;
+        $this->mountedActions[$mountedIndex]['data']['confirm_server_compatibility'] = $confirmCompatibility;
+
+        $this->callMountedAction();
+    }
+
+    protected function isInstalledScanInProgress(): bool
+    {
+        if (is_array($this->installedOperation)
+            && ($this->installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_SCAN
+            && in_array($this->installedOperation['status'] ?? null, [
+                InstalledOperationState::STATUS_QUEUED,
+                InstalledOperationState::STATUS_RUNNING,
+            ], true)) {
+            return true;
+        }
 
         /** @var Server|null $server */
         $server = Filament::getTenant();
-        if (!$server instanceof Server) {
-            return;
+        $type = $server instanceof Server ? static::detectProjectType($server) : null;
+
+        return $type !== ProjectType::ResourcePack
+            && !$this->installedScanDataReady
+            && $this->pollInstalledOperations;
+    }
+
+    protected function isInstalledScanFailed(): bool
+    {
+        if (is_array($this->installedOperation)
+            && ($this->installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_SCAN
+            && ($this->installedOperation['status'] ?? null) === InstalledOperationState::STATUS_FAILED) {
+            return true;
         }
 
-        try {
-            $preview = app(ModpackInstallCoordinator::class)->preview($server, $projectKey, $versionId)['result'];
-            if ($preview->compatibilityWarning === null) {
-                $this->callMountedAction();
-            }
-        } catch (Throwable) {
-            // Keep the modal open so the operator can inspect the plan or warning.
+        return is_array($this->installedScanCompletion)
+            && ($this->installedScanCompletion['status'] ?? null) === InstalledOperationState::STATUS_FAILED;
+    }
+
+    protected function installedEmptyStateIcon(): string
+    {
+        if ($this->isInstalledScanInProgress()) {
+            return 'tabler-loader-2';
         }
+
+        if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
+            return 'tabler-alert-triangle';
+        }
+
+        if (filled(trim((string) $this->getTableSearch()))) {
+            return 'tabler-search';
+        }
+
+        /** @var Server|null $server */
+        $server = Filament::getTenant();
+        $type = $server instanceof Server ? static::detectProjectType($server) : null;
+
+        return match ($type) {
+            ProjectType::Datapack => 'tabler-file-zip',
+            ProjectType::ResourcePack => 'tabler-photo',
+            default => 'tabler-packages',
+        };
+    }
+
+    protected function installedEmptyStateHeading(): string
+    {
+        if ($this->isInstalledScanInProgress()) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_scanning_heading');
+        }
+
+        if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_error_heading');
+        }
+
+        if (filled(trim((string) $this->getTableSearch()))) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_search_heading');
+        }
+
+        /** @var Server|null $server */
+        $server = Filament::getTenant();
+        $type = $server instanceof Server ? static::detectProjectType($server) : null;
+
+        $key = match ($type) {
+            ProjectType::Plugin => 'installed_plugin',
+            ProjectType::Datapack => 'installed_datapack',
+            ProjectType::ResourcePack => 'installed_resourcepack',
+            default => 'installed_mod',
+        };
+
+        return trans('pelican-mod-manager::strings.table.empty.'.$key);
+    }
+
+    protected function installedEmptyStateDescription(): string
+    {
+        if ($this->isInstalledScanInProgress()) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_scanning_description');
+        }
+
+        if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_error_description');
+        }
+
+        if (filled(trim((string) $this->getTableSearch()))) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_search_description');
+        }
+
+        return trans('pelican-mod-manager::strings.table.empty.installed_description');
     }
 
     /** @return array<string, mixed> */

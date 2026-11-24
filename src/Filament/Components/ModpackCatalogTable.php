@@ -7,12 +7,16 @@ use Exception;
 use Filament\Actions\Action;
 use Filament\Actions\Concerns\InteractsWithActions;
 use Filament\Actions\Contracts\HasActions;
+use Filament\Forms\Components\Checkbox;
+use Filament\Forms\Components\Select;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Concerns\InteractsWithSchemas;
 use Filament\Schemas\Contracts\HasSchemas;
 use Filament\Support\ArrayRecord;
+use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 use Filament\Tables\Columns\Column;
 use Filament\Tables\Columns\ImageColumn;
@@ -31,12 +35,20 @@ use Illuminate\Support\Str;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
+use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
+use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
+use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
+use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
+use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
+use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 use Livewire\Attributes\Reactive;
 use Livewire\Component;
+use Throwable;
 
 /**
  * Filament-native modpack catalog table shared by server creation and
@@ -68,6 +80,10 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
 
     public ?string $versionStatePath = null;
 
+    public ?string $eggStatePath = null;
+
+    public ?string $confirmStatePath = null;
+
     public string $catalogView = CatalogTileColumns::VIEW_LIST;
 
     #[Reactive]
@@ -96,6 +112,8 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
         string $targetStatePath = '',
         ?string $titleStatePath = null,
         ?string $versionStatePath = null,
+        ?string $eggStatePath = null,
+        ?string $confirmStatePath = null,
     ): void {
         $this->mode = $mode === self::MODE_SERVER ? self::MODE_SERVER : self::MODE_CREATE;
         $available = $this->providerTabs();
@@ -109,6 +127,8 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
         $this->targetStatePath = $targetStatePath;
         $this->titleStatePath = $titleStatePath;
         $this->versionStatePath = $versionStatePath;
+        $this->eggStatePath = $eggStatePath;
+        $this->confirmStatePath = $confirmStatePath;
         $this->catalogView = CatalogTileColumns::resolveInitialView();
 
         if ($query !== '') {
@@ -137,6 +157,17 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
         return $this->mode === self::MODE_SERVER
             ? $catalog->archiveProviders()
             : $catalog->providers();
+    }
+
+    public function updatedProvider(string $value): void
+    {
+        $available = $this->providerTabs();
+        if (!array_key_exists($value, $available)) {
+            $this->provider = (string) (array_key_first($available) ?? ModpackProvider::Modrinth->value);
+        }
+
+        $this->tableFilters = [];
+        $this->resetTable();
     }
 
     public function setProvider(string $provider): void
@@ -237,6 +268,7 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
                 : $this->listColumns($table))
             ->recordUrl(fn (array $record): ?string => is_string($record['url'] ?? null) && $record['url'] !== '' ? $record['url'] : null, true)
             ->recordClasses(fn (array $record): ?string => $this->isSelected($record) ? 'fi-striped' : null)
+            ->recordActionsAlignment(Alignment::End->value)
             ->recordActions([
                 CatalogRowAction::compact('versions', 'info')
                     ->tooltip(trans('pelican-mod-manager::strings.actions.versions'))
@@ -259,7 +291,7 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
                             return;
                         }
 
-                        $this->commitRelease($record, $latest['id']);
+                        $this->openPlanModal($record, $latest['id'], $latest['label']);
                     }),
             ]);
 
@@ -268,6 +300,188 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
         }
 
         return $table;
+    }
+
+    public function reviewModpackPlanAction(): Action
+    {
+        return Action::make('reviewModpackPlan')
+            ->modalHeading(fn (array $arguments): string => (string) ($arguments['title'] ?? trans('pelican-mod-manager::strings.modpacks.plan')))
+            ->modalDescription(fn (array $arguments): ?string => is_string($arguments['version_label'] ?? null) && $arguments['version_label'] !== '' ? $arguments['version_label'] : null)
+            ->modalWidth(Width::Large)
+            ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.actions.install'))
+            ->modalSubmitAction(function (Action $action, array $arguments): Action {
+                $selection = (string) ($arguments['key'] ?? '');
+                $versionId = (string) ($arguments['version_id'] ?? '');
+                $result = $this->evaluatePlan($selection, $versionId, null);
+
+                return $this->planBlockingError($result, allowAmbiguous: true) !== null
+                    ? $action->disabled()
+                    : $action;
+            })
+            ->schema(function (array $arguments): array {
+                $selection = (string) ($arguments['key'] ?? '');
+                $versionId = (string) ($arguments['version_id'] ?? '');
+                $server = $this->mode === self::MODE_SERVER ? $this->resolveServer() : null;
+
+                return [
+                    Section::make(trans('pelican-mod-manager::strings.modpacks.plan'))
+                        ->columns(2)
+                        ->schema([
+                            TextEntry::make('plan_provider')
+                                ->label(trans('pelican-mod-manager::strings.table.columns.source'))
+                                ->state(function (Get $get) use ($selection, $versionId): string {
+                                    $result = $this->evaluatePlan($selection, $versionId, $get('egg_id'));
+
+                                    return $result !== null
+                                        ? (ModpackProvider::tryFrom($result->provider)?->getLabel() ?? ucfirst($result->provider))
+                                        : '—';
+                                }),
+                            TextEntry::make('plan_minecraft')
+                                ->label(trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
+                                ->state(fn (Get $get): string => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->minecraftVersion ?? '—'),
+                            TextEntry::make('plan_loader')
+                                ->label(trans('pelican-mod-manager::strings.table.filters.loader'))
+                                ->state(function (Get $get) use ($selection, $versionId): string {
+                                    $loader = $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->loader;
+                                    if (!is_string($loader) || trim($loader) === '') {
+                                        return '—';
+                                    }
+
+                                    return MinecraftLoader::tryFrom(strtolower($loader))?->getLabel() ?? ucfirst($loader);
+                                }),
+                            TextEntry::make('plan_java')
+                                ->label(trans('pelican-mod-manager::strings.modpacks.java_runtime'))
+                                ->state(function (Get $get) use ($selection, $versionId, $server): string {
+                                    $result = $this->evaluatePlan($selection, $versionId, $get('egg_id'));
+                                    if ($result === null) {
+                                        return '—';
+                                    }
+
+                                    $java = JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava);
+                                    $parts = [$java];
+
+                                    if ($server !== null && $server->exists) {
+                                        if (JavaRuntimeImage::isTooOld($server->image, $result->minecraftVersion, $result->minimumJava)) {
+                                            $parts[] = trans('pelican-mod-manager::strings.modpacks.java_too_old', ['java' => $java]);
+                                        }
+                                        if (JavaRuntimeImage::isTooNew($server->image, $result->minecraftVersion, $result->loader)) {
+                                            $parts[] = trans('pelican-mod-manager::strings.modpacks.java_too_new', [
+                                                'loader' => $result->loader ?? 'Minecraft',
+                                                'java' => JavaRuntimeImage::maximumLabel($result->minecraftVersion, $result->loader),
+                                            ]);
+                                        }
+                                    }
+
+                                    return implode(' ', array_filter($parts));
+                                }),
+                            TextEntry::make('plan_egg')
+                                ->label(trans('pelican-mod-manager::strings.modpacks.egg_compatibility'))
+                                ->columnSpanFull()
+                                ->state(function (Get $get) use ($selection, $versionId): string {
+                                    $result = $this->evaluatePlan($selection, $versionId, $get('egg_id'));
+                                    if ($result === null) {
+                                        return trans('pelican-mod-manager::strings.modpacks.plan_unavailable');
+                                    }
+
+                                    $parts = array_filter([
+                                        $result->selected?->name,
+                                        $result->reasonDetail,
+                                    ]);
+
+                                    return $parts !== [] ? implode(' — ', $parts) : '—';
+                                }),
+                            TextEntry::make('plan_server_pack')
+                                ->label(trans('pelican-mod-manager::strings.modpacks.server_pack'))
+                                ->columnSpanFull()
+                                ->visible(fn (Get $get): bool => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->serverFileStatus !== null)
+                                ->state(function (Get $get) use ($selection, $versionId): string {
+                                    $status = $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->serverFileStatus;
+
+                                    return $status !== null ? trans('pelican-mod-manager::strings.modpacks.'.$status) : '';
+                                }),
+                            TextEntry::make('plan_archive_startup')
+                                ->hiddenLabel()
+                                ->columnSpanFull()
+                                ->color('gray')
+                                ->visible(fn (Get $get): bool => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->mode === ProvisioningMode::Archive)
+                                ->state(trans('pelican-mod-manager::strings.modpacks.archive_startup')),
+                        ]),
+                    Select::make('egg_id')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.choose_egg'))
+                        ->helperText(trans('pelican-mod-manager::strings.modpacks.choose_egg_helper'))
+                        ->live()
+                        ->visible(function () use ($selection, $versionId): bool {
+                            if ($this->mode !== self::MODE_CREATE) {
+                                return false;
+                            }
+
+                            return $this->evaluatePlan($selection, $versionId, null)?->disposition === CompatibilityDisposition::Ambiguous;
+                        })
+                        ->required(function () use ($selection, $versionId): bool {
+                            if ($this->mode !== self::MODE_CREATE) {
+                                return false;
+                            }
+
+                            return $this->evaluatePlan($selection, $versionId, null)?->disposition === CompatibilityDisposition::Ambiguous;
+                        })
+                        ->options(function () use ($selection, $versionId): array {
+                            $result = $this->evaluatePlan($selection, $versionId, null);
+                            $options = [];
+                            foreach ($result->alternatives ?? [] as $egg) {
+                                $options[(string) $egg->id] = $egg->name.' · '.($egg->profileId ?? $egg->loader ?? 'custom').' · '.$egg->confidence;
+                            }
+
+                            return $options;
+                        }),
+                    TextEntry::make('plan_error')
+                        ->hiddenLabel()
+                        ->color('danger')
+                        ->visible(function (Get $get) use ($selection, $versionId): bool {
+                            $result = $this->evaluatePlan($selection, $versionId, $get('egg_id'));
+
+                            return $this->planBlockingError($result, allowAmbiguous: true) !== null;
+                        })
+                        ->state(function (Get $get) use ($selection, $versionId): string {
+                            $result = $this->evaluatePlan($selection, $versionId, $get('egg_id'));
+
+                            return $this->planBlockingError($result, allowAmbiguous: true) ?? '';
+                        }),
+                    TextEntry::make('compatibility_warning')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.compatibility_warning'))
+                        ->color('warning')
+                        ->visible(fn (Get $get): bool => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->compatibilityWarning !== null)
+                        ->state(function (Get $get) use ($selection, $versionId): string {
+                            $warning = $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->compatibilityWarning;
+
+                            return $warning !== null ? trans('pelican-mod-manager::strings.modpacks.'.$warning) : '';
+                        }),
+                    Checkbox::make('confirm_compatibility')
+                        ->label(trans('pelican-mod-manager::strings.modpacks.confirm_server_compatibility'))
+                        ->visible(fn (Get $get): bool => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->compatibilityWarning !== null)
+                        ->accepted(fn (Get $get): bool => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->compatibilityWarning !== null)
+                        ->required(fn (Get $get): bool => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->compatibilityWarning !== null),
+                ];
+            })
+            ->action(function (array $data, array $arguments): void {
+                $key = (string) ($arguments['key'] ?? '');
+                $title = (string) ($arguments['title'] ?? '');
+                $versionId = (string) ($arguments['version_id'] ?? '');
+                $eggId = is_scalar($data['egg_id'] ?? null) && (string) $data['egg_id'] !== '' ? (string) $data['egg_id'] : null;
+                $confirmed = (bool) ($data['confirm_compatibility'] ?? false);
+
+                $result = $this->evaluatePlan($key, $versionId, $eggId);
+                $blockingError = $this->planBlockingError($result, allowAmbiguous: false);
+                if ($blockingError !== null) {
+                    Notification::make()
+                        ->title($blockingError)
+                        ->warning()
+                        ->send();
+
+                    return;
+                }
+
+                $this->commitRelease($key, $title, $versionId, $eggId, $confirmed);
+            });
     }
 
     public function render(): View
@@ -394,9 +608,8 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
                     ->label(trans('pelican-mod-manager::strings.actions.install'))
                     ->icon('tabler-download')
                     ->action(function () use ($record, $version): void {
-                        $this->commitRelease($record, $version['id']);
-                    })
-                    ->cancelParentActions();
+                        $this->openPlanModal($record, $version['id'], $version['label']);
+                    });
 
             $section = Section::make($version['label'])
                 ->headerActions([$headerAction])
@@ -415,7 +628,7 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
     }
 
     /** @param array<string, mixed> $record */
-    private function commitRelease(array $record, string $versionId): void
+    private function openPlanModal(array $record, string $versionId, string $versionLabel = ''): void
     {
         $key = (string) ($record['key'] ?? '');
         $title = (string) ($record['title'] ?? '');
@@ -424,8 +637,75 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
             return;
         }
 
+        $this->replaceMountedAction('reviewModpackPlan', [
+            'key' => $key,
+            'title' => $title,
+            'version_id' => $versionId,
+            'version_label' => $versionLabel,
+        ]);
+    }
+
+    private function evaluatePlan(string $selection, string $versionId, mixed $explicitEggId): ?CompatibilityResult
+    {
+        if ($selection === '' || $versionId === '') {
+            return null;
+        }
+
+        if ($this->mode === self::MODE_CREATE) {
+            return ModpackCreationStep::evaluateSelection($selection, $versionId, $explicitEggId);
+        }
+
+        $server = $this->resolveServer();
+        $cacheKey = 'modpack-server-plan:'.hash('sha256', serialize([$server->getKey(), $selection, $versionId]));
+        $attributes = request()->attributes;
+        if ($attributes->has($cacheKey)) {
+            return $attributes->get($cacheKey);
+        }
+        $attributes->set($cacheKey, null);
+
+        try {
+            $result = app(ModpackInstallCoordinator::class)->preview($server, $selection, $versionId)['result'];
+            $attributes->set($cacheKey, $result);
+
+            return $result;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function planBlockingError(?CompatibilityResult $result, bool $allowAmbiguous): ?string
+    {
+        if ($result === null) {
+            return trans('pelican-mod-manager::strings.modpacks.plan_unavailable');
+        }
+
+        if ($allowAmbiguous && $this->mode === self::MODE_CREATE && $result->disposition === CompatibilityDisposition::Ambiguous) {
+            return null;
+        }
+
+        $allowed = $this->mode === self::MODE_SERVER
+            ? [CompatibilityDisposition::Compatible]
+            : [CompatibilityDisposition::Compatible, CompatibilityDisposition::EggChange];
+
+        if ($result->selected === null || !in_array($result->disposition, $allowed, true)) {
+            return $result->reasonDetail ?: trans('pelican-mod-manager::strings.modpacks.plan_unavailable');
+        }
+
+        if ($result->mode === ProvisioningMode::Archive && !app(InstalledOperationManager::class)->supportsAsyncDispatch()) {
+            return trans('pelican-mod-manager::strings.operations.queue_required');
+        }
+
+        return null;
+    }
+
+    private function commitRelease(string $key, string $title, string $versionId, ?string $eggId = null, bool $confirmCompatibility = false): void
+    {
+        if ($key === '' || $versionId === '') {
+            return;
+        }
+
         if ($this->mode === self::MODE_SERVER) {
-            $this->js('$wire.$parent.selectModpackRelease('.Js::from($key).', '.Js::from($title).', '.Js::from($versionId).')');
+            $this->js('$wire.$parent.selectModpackRelease('.Js::from($key).', '.Js::from($title).', '.Js::from($versionId).', '.Js::from($confirmCompatibility).')');
 
             return;
         }
@@ -437,6 +717,12 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
         $steps[] = 'await $wire.$parent.$set('.Js::from($this->targetStatePath).', '.Js::from($key).');';
         if (is_string($this->versionStatePath) && $this->versionStatePath !== '') {
             $steps[] = 'await $wire.$parent.$set('.Js::from($this->versionStatePath).', '.Js::from($versionId).');';
+        }
+        if ($eggId !== null && is_string($this->eggStatePath) && $this->eggStatePath !== '') {
+            $steps[] = 'await $wire.$parent.$set('.Js::from($this->eggStatePath).', '.Js::from($eggId).');';
+        }
+        if ($confirmCompatibility && is_string($this->confirmStatePath) && $this->confirmStatePath !== '') {
+            $steps[] = 'await $wire.$parent.$set('.Js::from($this->confirmStatePath).', true);';
         }
         $steps[] = "const wizard = \$wire.\$el.closest('.fi-sc-wizard'); if (wizard && window.Alpine) { window.Alpine.\$data(wizard)?.requestNextStep?.(); }";
 

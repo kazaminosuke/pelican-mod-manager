@@ -11,5 +11,7 @@
         'targetStatePath' => $getStatePath(),
         'titleStatePath' => $titleStatePath,
         'versionStatePath' => $versionStatePath,
+        'eggStatePath' => $eggStatePath ?? null,
+        'confirmStatePath' => $confirmStatePath ?? null,
     ], key($tableKey))
 </x-dynamic-component>

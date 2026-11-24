@@ -259,6 +259,19 @@ return [
             'switch_to_list' => 'Zur Listenansicht wechseln',
             'switch_to_panel' => 'Zur Panelansicht wechseln',
         ],
+        'empty' => [
+            'installed_mod' => 'Keine Mods installiert',
+            'installed_plugin' => 'Keine Plugins installiert',
+            'installed_datapack' => 'Keine Datapacks installiert',
+            'installed_resourcepack' => 'Keine Ressourcenpakete installiert',
+            'installed_description' => 'Durchsuche die Katalog-Tabs oben, um einen Eintrag zu installieren.',
+            'installed_scanning_heading' => 'Installierte Dateien werden gescannt...',
+            'installed_scanning_description' => 'Das Serververzeichnis wird überprüft und installierte Einträge werden erkannt.',
+            'installed_search_heading' => 'Keine passenden installierten Einträge',
+            'installed_search_description' => 'Versuche einen anderen Suchbegriff oder setze die Suche zurück.',
+            'installed_error_heading' => 'Installierte Einträge konnten nicht geladen werden',
+            'installed_error_description' => 'Die Serverdateien konnten nicht gelesen werden. Prüfe die Verbindung zum Server-Daemon und scanne erneut.',
+        ],
     ],
 
     'version' => [
@@ -394,6 +407,10 @@ return [
         'server_compatibility_unknown' => 'Die Serverkompatibilität dieser Version konnte nicht bestätigt werden. Prüfe die Anleitung des Packs sowie die Minecraft- und Loader-Versionen.',
         'confirm_server_compatibility' => 'Ich möchte die Installation dieser Version versuchen.',
         'provision_queued' => 'Modpack-Bereitstellung gestartet',
+        'java_runtime' => 'Java',
+        'egg_compatibility' => 'Egg-Kompatibilität',
+        'server_pack' => 'Dediziertes Server-Paket',
+        'compatibility_warning' => 'Kompatibilitätswarnung',
     ],
 
     'diagnostics' => [

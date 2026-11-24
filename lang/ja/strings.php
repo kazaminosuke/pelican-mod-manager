@@ -259,6 +259,19 @@ return [
             'switch_to_list' => 'リスト表示に切り替え',
             'switch_to_panel' => 'パネル表示に切り替え',
         ],
+        'empty' => [
+            'installed_mod' => 'インストール済みのModはありません',
+            'installed_plugin' => 'インストール済みのプラグインはありません',
+            'installed_datapack' => 'インストール済みのデータパックはありません',
+            'installed_resourcepack' => 'インストール済みのリソースパックはありません',
+            'installed_description' => '上部のカタログタブから検索してインストールできます。',
+            'installed_scanning_heading' => 'インストール済みファイルをスキャン中...',
+            'installed_scanning_description' => 'サーバー内のファイルを確認し、導入済みの項目を識別しています。',
+            'installed_search_heading' => '検索結果に一致する項目はありません',
+            'installed_search_description' => '検索キーワードを変更するか、検索条件をクリアしてください。',
+            'installed_error_heading' => 'インストール済み一覧を取得できませんでした',
+            'installed_error_description' => 'サーバーのファイル情報を読み込めませんでした。接続状況を確認して再スキャンをお試しください。',
+        ],
     ],
 
     'version' => [
@@ -394,6 +407,10 @@ return [
         'server_compatibility_unknown' => 'このリリースのサーバー互換性を確認できませんでした。続行する前に、配布元の手順とMinecraft・ローダーのバージョンを確認してください。',
         'confirm_server_compatibility' => 'このリリースの導入を試す',
         'provision_queued' => 'Modpackの導入を開始しました',
+        'java_runtime' => 'Java',
+        'egg_compatibility' => 'Egg互換性',
+        'server_pack' => '専用サーバーパック',
+        'compatibility_warning' => '互換性の警告',
     ],
 
     'diagnostics' => [

@@ -4,12 +4,9 @@ namespace Kazaminosuke\ModManager\Filament\Admin;
 
 use App\Models\Egg;
 use App\Models\Server;
-use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\Hidden;
-use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\ViewField;
-use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Components\Wizard\Step;
@@ -103,68 +100,29 @@ final class ModpackCreationStep
                         $set('mm_confirm_compatibility', false);
                         self::apply($set, $get, null);
                     }),
-                Select::make('mm_egg')
-                    ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.choose_egg'))
-                    ->helperText(fn (): string => trans('pelican-mod-manager::strings.modpacks.choose_egg_helper'))
+                Hidden::make('mm_egg')
                     ->live()
                     ->required(function (Get $get): bool {
                         $result = self::result($get, null);
 
                         return $result !== null && $result->disposition === CompatibilityDisposition::Ambiguous;
                     })
-                    ->visible(function (Get $get): bool {
-                        $result = self::result($get, null);
-
-                        return $result !== null && $result->disposition === CompatibilityDisposition::Ambiguous;
-                    })
-                    ->options(function (Get $get): array {
-                        $result = self::result($get, null);
-                        $options = [];
-                        foreach ($result->alternatives ?? [] as $egg) {
-                            $options[(string) $egg->id] = $egg->name.' · '.($egg->profileId ?? $egg->loader ?? 'custom').' · '.$egg->confidence;
-                        }
-
-                        return $options;
-                    })
                     ->afterStateUpdated(function (Set $set, Get $get, $state): void {
                         self::restore($set, $get);
                         $set('mm_confirm_compatibility', false);
                         self::apply($set, $get, $state);
                     }),
-                TextEntry::make('mm_summary')
-                    ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.plan'))
-                    ->visible(fn (Get $get): bool => (bool) $get('mm_modpack') && filled($get('mm_project')))
-                    ->state(function (Get $get): string {
-                        $result = self::result($get, $get('mm_egg'));
-                        if ($result === null) {
-                            return trans('pelican-mod-manager::strings.modpacks.plan_unavailable');
-                        }
-
-                        $lines = array_filter([
-                            $result->provider,
-                            $result->minecraftVersion !== null ? 'Minecraft '.$result->minecraftVersion : null,
-                            $result->loader,
-                            JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava),
-                            $result->selected?->name,
-                            $result->reasonDetail,
-                            $result->serverFileStatus !== null
-                                ? trans('pelican-mod-manager::strings.modpacks.'.$result->serverFileStatus) : null,
-                            $result->mode === ProvisioningMode::Archive
-                                ? trans('pelican-mod-manager::strings.modpacks.archive_startup') : null,
-                        ]);
-
-                        return implode("\n", $lines);
-                    }),
-                Checkbox::make('mm_confirm_compatibility')
-                    ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.confirm_server_compatibility'))
-                    ->helperText(function (Get $get): string {
-                        $warning = self::result($get, $get('mm_egg'))?->compatibilityWarning;
-
-                        return $warning !== null ? trans('pelican-mod-manager::strings.modpacks.'.$warning) : '';
-                    })
-                    ->visible(fn (Get $get): bool => self::result($get, $get('mm_egg'))?->compatibilityWarning !== null)
-                    ->accepted(fn (Get $get): bool => self::result($get, $get('mm_egg'))?->compatibilityWarning !== null)
-                    ->dehydrated(false),
+                Hidden::make('mm_confirm_compatibility')
+                    ->default(false)
+                    ->dehydrated(false)
+                    ->rules([
+                        fn (Get $get): \Closure => function (string $attribute, mixed $value, \Closure $fail) use ($get): void {
+                            $warning = self::result($get, $get('mm_egg'))?->compatibilityWarning;
+                            if ($warning !== null && !(bool) $value) {
+                                $fail(trans('pelican-mod-manager::strings.modpacks.'.$warning));
+                            }
+                        },
+                    ]),
                 Hidden::make('mm_guard')
                     ->default(true)
                     ->dehydrated(false)
@@ -211,6 +169,8 @@ final class ModpackCreationStep
             'selectedVersion' => is_scalar($selectedVersion) && (string) $selectedVersion !== '' ? (string) $selectedVersion : null,
             'titleStatePath' => $component->resolveRelativeStatePath('mm_project_title'),
             'versionStatePath' => $component->resolveRelativeStatePath('mm_version'),
+            'eggStatePath' => $component->resolveRelativeStatePath('mm_egg'),
+            'confirmStatePath' => $component->resolveRelativeStatePath('mm_confirm_compatibility'),
             'tableKey' => 'create-modpack-'.hash('sha256', serialize([$provider->value, $query, $minecraft, $loader])),
         ];
     }
@@ -425,11 +385,9 @@ final class ModpackCreationStep
         $set('environment', $environment);
     }
 
-    private static function result(Get $get, mixed $explicitEggId): ?CompatibilityResult
+    public static function evaluateSelection(string $project, string $version, mixed $explicitEggId = null): ?CompatibilityResult
     {
-        $project = (string) $get('mm_project');
-        $version = $get('mm_version');
-        if (!(bool) $get('mm_modpack') || $project === '' || $version === null || $version === '') {
+        if ($project === '' || $version === '') {
             return null;
         }
 
@@ -442,7 +400,7 @@ final class ModpackCreationStep
         $attributes->set($key, null);
 
         try {
-            $descriptor = self::descriptor($project, (string) $version);
+            $descriptor = self::descriptor($project, $version);
             if ($descriptor === null) {
                 return null;
             }
@@ -464,6 +422,17 @@ final class ModpackCreationStep
 
             return null;
         }
+    }
+
+    private static function result(Get $get, mixed $explicitEggId): ?CompatibilityResult
+    {
+        $project = (string) $get('mm_project');
+        $version = $get('mm_version');
+        if (!(bool) $get('mm_modpack') || $project === '' || $version === null || $version === '') {
+            return null;
+        }
+
+        return self::evaluateSelection($project, (string) $version, $explicitEggId);
     }
 
     private static function descriptor(string $project, string $version): ?ModpackDescriptor

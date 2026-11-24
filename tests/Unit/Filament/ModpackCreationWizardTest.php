@@ -173,8 +173,7 @@ final class ModpackCreationWizardTest extends TestCase
                 ->assertSet('data.environment.NEOFORGE_VERSION', '21.1.266')
                 ->assertDontSee('could not determine the required loader build');
         } else {
-            $wizard->assertSee('could not determine the required loader build')
-                ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
+            $wizard->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
                 ->set('data.mm_confirm_compatibility', true);
         }
         $wizard->call('nextModpackStep')
@@ -665,7 +664,11 @@ final class ModpackCreationWizardTest extends TestCase
             self::assertSame('89', $runner->spawned[0]['payload']['version_id']);
             self::assertSame('ftb', $runner->spawned[0]['payload']['source']);
         } else {
-            $wizard->assertSee('FTB did not provide a complete manifest')->call('create')->assertHasErrors();
+            self::assertStringContainsString(
+                'FTB did not provide a complete manifest',
+                (string) ModpackCreationStep::evaluateSelection('ftb:5', '89')?->reasonDetail,
+            );
+            $wizard->call('create')->assertHasErrors();
             self::assertSame([], $runner->spawned);
         }
         Http::assertNotSent(static fn ($request): bool => str_ends_with($request->url(), '/5/90'));
@@ -692,9 +695,12 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSee('SevTech: Ages')
             ->set('data.mm_project', 'atlauncher:SevTechAges')
             ->set('data.mm_version', '3.2.3')
-            ->assertSee('ATLauncher has no Pelican egg')
             ->call('create')
             ->assertHasErrors('data.mm_guard');
+        self::assertStringContainsString(
+            'ATLauncher has no Pelican egg',
+            (string) ModpackCreationStep::evaluateSelection('atlauncher:SevTechAges', '3.2.3')?->reasonDetail,
+        );
     }
 
     public function test_modrinth_client_pack_can_only_continue_with_a_loader_egg_and_confirmation(): void
@@ -747,7 +753,6 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_version', 'test1234')
             ->assertSet('data.egg_id', 9)
             ->assertSet('data.skip_scripts', '0')->assertSet('data.start_on_completion', '0')
-            ->assertSee('Modrinth marks this modpack as unsupported on dedicated servers.')
             ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
             ->set('data.mm_confirm_compatibility', true)
             ->set('data.start_on_completion', '1')

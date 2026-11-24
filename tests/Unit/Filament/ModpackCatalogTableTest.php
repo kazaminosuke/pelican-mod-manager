@@ -3,8 +3,12 @@
 namespace Kazaminosuke\ModManager\Tests\Unit\Filament;
 
 use Filament\Facades\Filament;
+use Filament\Support\Facades\FilamentView;
+use Filament\Tables\View\TablesRenderHook;
 use Illuminate\Foundation\Testing\TestCase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\View;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
@@ -12,6 +16,7 @@ use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
+use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -30,11 +35,22 @@ final class ModpackCatalogTableTest extends TestCase
             'database.connections.sqlite.database' => ':memory:',
             'session.driver' => 'array',
             'pelican-mod-manager.curseforge_api_key' => 'test-curseforge-credential',
+            'queue.default' => 'database',
         ]);
         $this->app->register(ModManagerServiceProvider::class);
         View::addNamespace('pelican-mod-manager', dirname(__DIR__, 3).'/resources/views');
         $this->app['translator']->addNamespace('pelican-mod-manager', dirname(__DIR__, 3).'/lang');
         Filament::setCurrentPanel(Filament::getPanel('admin'));
+        FilamentView::registerRenderHook(
+            TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+            fn () => view('pelican-mod-manager::components.modpack-provider-select'),
+            [ModpackCatalogTable::class],
+        );
+        FilamentView::registerRenderHook(
+            TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
+            fn () => view('pelican-mod-manager::components.catalog-view-toggle'),
+            [ModpackCatalogTable::class],
+        );
         Http::preventStrayRequests();
     }
 
@@ -68,7 +84,7 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertSame($expectedUrl, ModpackCatalog::externalProjectUrl($provider, $projectId, $slug, $title));
     }
 
-    public function test_renders_unified_table_with_scroll_container_tabs_plain_metadata_external_links_and_download_actions(): void
+    public function test_renders_unified_table_with_provider_dropdown_view_toggle_column_manager_and_right_aligned_tile_actions(): void
     {
         Http::fake([
             'api.modrinth.com/v2/tag/game_version' => Http::response([
@@ -116,9 +132,12 @@ final class ModpackCatalogTableTest extends TestCase
 
         $html = $component->html();
 
-        // Shared scroll container, provider tabs, Filament table, no source column.
+        // Shared scroll container, provider dropdown (not tabs), view toggle, column manager, Filament table, no source column.
         self::assertStringContainsString('mmr-table-scroll-ctn', $html);
-        self::assertStringContainsString('fi-tabs', $html);
+        self::assertStringNotContainsString('fi-tabs', $html);
+        self::assertStringContainsString('wire:model.live="provider"', $html);
+        self::assertStringContainsString('data-mmr-view-toggle', $html);
+        self::assertStringContainsString('fi-ta-col-manager', $html);
         self::assertStringContainsString('fi-ta-table', $html);
         self::assertStringNotContainsString('>Source<', $html);
 
@@ -132,23 +151,64 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('Fabric', $html);
         self::assertStringNotContainsString('fi-ta-text-has-badges', $html);
 
-        // Existing Mod catalog compact row actions (versions + install_latest download button) replace old select button.
+        // Existing Mod catalog compact row actions (versions + install_latest download button).
         self::assertStringContainsString('data-mmr-swr-row-action="versions"', $html);
         self::assertStringContainsString('data-mmr-swr-row-action="install_latest"', $html);
 
-        // Switching to tile view uses Filament's contentGrid (Stack/Split) and omits Minecraft version and loader from tiles.
+        // Switching to tile view uses Filament's contentGrid, keeps view toggle & column manager visible,
+        // right-aligns row actions, moves author into the bottom metadata row, and omits MC version/loader.
         $component->call('toggleCatalogView');
         self::assertSame(CatalogTileColumns::VIEW_PANEL, $component->get('catalogView'));
         $tileHtml = $component->html();
         self::assertStringContainsString('fi-ta-content-grid', $tileHtml);
         self::assertStringContainsString('fi-ta-split', $tileHtml);
         self::assertStringContainsString('fi-ta-stack', $tileHtml);
+        self::assertStringContainsString('fi-align-end', $tileHtml);
+        self::assertStringContainsString('data-mmr-view-toggle', $tileHtml);
+        self::assertStringContainsString('fi-ta-col-manager', $tileHtml);
         self::assertStringContainsString('Fabulously Optimized', $tileHtml);
+        self::assertStringContainsString('robotkoer', $tileHtml);
         self::assertStringNotContainsString('1.21.1, 1.20.4 (+1)', $tileHtml);
+
+        // Switching back to table view restores the standard Filament table cleanly.
+        $component->call('toggleCatalogView');
+        self::assertSame(CatalogTileColumns::VIEW_LIST, $component->get('catalogView'));
+        self::assertStringContainsString('fi-ta-table', $component->html());
+        self::assertStringNotContainsString('fi-ta-content-grid', $component->html());
     }
 
-    public function test_download_action_and_versions_modal_advance_to_next_step(): void
+    public function test_download_action_opens_filament_plan_modal_and_submitting_advances_to_next_step(): void
     {
+        $this->app->instance(PluginBackgroundRunner::class, PluginBackgroundRunner::fake());
+        Schema::create('eggs', function ($table): void {
+            $table->id();
+            $table->string('uuid')->nullable();
+            $table->string('name');
+            $table->text('description')->nullable();
+            $table->text('startup')->nullable();
+            $table->text('docker_images')->nullable();
+            $table->timestamps();
+        });
+        Schema::create('egg_variables', function ($table): void {
+            $table->id();
+            $table->unsignedBigInteger('egg_id');
+            $table->string('name');
+            $table->string('env_variable');
+            $table->string('default_value')->nullable();
+            $table->timestamps();
+        });
+        DB::table('eggs')->insert([
+            'id' => 7,
+            'uuid' => 'neoforge-egg-uuid',
+            'name' => 'NeoForge Server',
+            'startup' => 'java -jar server.jar',
+            'docker_images' => json_encode(['Java 21' => 'ghcr.io/pelican-eggs/yolks:java_21']),
+        ]);
+        DB::table('egg_variables')->insert([
+            ['egg_id' => 7, 'name' => 'MC Version', 'env_variable' => 'MC_VERSION', 'default_value' => 'latest'],
+            ['egg_id' => 7, 'name' => 'NeoForge Version', 'env_variable' => 'NEOFORGE_VERSION', 'default_value' => 'latest'],
+        ]);
+
         Http::fake([
             'api.modrinth.com/v2/tag/game_version' => Http::response([
                 ['version' => '1.21.1', 'version_type' => 'release'],
@@ -164,6 +224,14 @@ final class ModpackCatalogTableTest extends TestCase
                 ]],
                 'pagination' => ['totalCount' => 1],
             ]),
+            'api.curseforge.com/v1/mods/925200' => Http::response([
+                'data' => [
+                    'id' => 925200,
+                    'slug' => 'all-the-mods-10',
+                    'name' => 'All the Mods 10',
+                    'summary' => 'Kitchen sink pack.',
+                ],
+            ]),
             'api.curseforge.com/v1/mods/925200/files?*' => Http::response([
                 'data' => [[
                     'id' => 9620701,
@@ -173,11 +241,23 @@ final class ModpackCatalogTableTest extends TestCase
                     'downloadCount' => 12345,
                     'fileDate' => '2026-10-01T12:00:00Z',
                     'gameVersions' => ['1.21.1', 'NeoForge'],
+                    'downloadUrl' => 'https://edge.forgecdn.net/files/9620/701/ATM10-8.6.zip',
                 ]],
             ]),
+            'api.curseforge.com/v1/mods/925200/files/9620701' => Http::response([
+                'data' => [
+                    'id' => 9620701,
+                    'fileName' => 'ATM10-8.6.zip',
+                    'displayName' => 'ATM10-8.6.zip',
+                    'releaseType' => 1,
+                    'gameVersions' => ['1.21.1', 'NeoForge'],
+                    'downloadUrl' => 'https://edge.forgecdn.net/files/9620/701/ATM10-8.6.zip',
+                ],
+            ]),
+            'edge.forgecdn.net/*' => Http::response('', 404),
         ]);
 
-        // Create mode: install_latest sets parent project + version and advances Filament Wizard step.
+        // Create mode: clicking install_latest opens the Filament reviewModpackPlan modal instead of appending below catalog.
         $create = Livewire::test(ModpackCatalogTable::class, [
             'mode' => ModpackCatalogTable::MODE_CREATE,
             'provider' => ModpackProvider::CurseForge->value,
@@ -185,6 +265,8 @@ final class ModpackCatalogTableTest extends TestCase
             'targetStatePath' => 'data.mm_project',
             'titleStatePath' => 'data.mm_project_title',
             'versionStatePath' => 'data.mm_version',
+            'eggStatePath' => 'data.mm_egg',
+            'confirmStatePath' => 'data.mm_confirm_compatibility',
         ]);
 
         // Versions modal lists releases like the Mod catalog.
@@ -194,28 +276,77 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('install_version_0', $modalHtml);
         $create->unmountAction();
 
-        // Clicking install_latest selects the latest release and triggers requestNextStep().
+        // Clicking install_latest mounts Filament's reviewModpackPlan modal with plan details & compatibility warning.
         $create->callTableAction('install_latest', 'curseforge:925200');
+        self::assertSame('reviewModpackPlan', $create->instance()->getMountedAction()?->getName());
+        $planHtml = $create->getMountedActionModalHtml();
+        self::assertStringContainsString('All the Mods 10', $planHtml);
+        self::assertStringContainsString('1.21.1', $planHtml);
+        self::assertStringContainsString('NeoForge', $planHtml);
+        self::assertStringContainsString('Java 21', $planHtml);
+        self::assertStringContainsString('NeoForge Server', $planHtml);
+        self::assertStringContainsString('Server compatibility could not be verified for this release.', $planHtml);
+        self::assertStringContainsString('I want to try installing this release.', $planHtml);
+
+        // Submitting the plan modal with Egg selection & confirmation sets parent fields and advances Filament Wizard step.
+        $create->set('mountedActions.0.data.egg_id', '7')
+            ->set('mountedActions.0.data.confirm_compatibility', true)
+            ->callMountedAction()
+            ->assertHasNoErrors();
+        self::assertNull($create->instance()->getMountedAction());
         $jsCalls = $create->effects['xjs'] ?? [];
         $joinedJs = implode("\n", array_map(static fn (mixed $item): string => is_array($item) ? (string) ($item['expression'] ?? '') : (string) $item, $jsCalls));
         self::assertStringContainsString('curseforge:925200', $joinedJs);
         self::assertStringContainsString('9620701', $joinedJs);
+        self::assertStringContainsString('data.mm_egg', $joinedJs);
+        self::assertStringContainsString('data.mm_confirm_compatibility', $joinedJs);
         self::assertStringContainsString('requestNextStep', $joinedJs);
 
-        // Server mode: install_latest calls parent ModManagerPage::selectModpackRelease().
+        // Server mode: install_latest opens reviewModpackPlan modal and submitting calls ModManagerPage::selectModpackRelease().
+        Schema::create('servers', function ($table): void {
+            $table->id();
+            $table->unsignedBigInteger('egg_id')->nullable();
+            $table->string('image')->nullable();
+            $table->string('startup')->nullable();
+            $table->timestamps();
+        });
+        Schema::create('server_variables', function ($table): void {
+            $table->id();
+            $table->unsignedBigInteger('server_id');
+            $table->unsignedBigInteger('variable_id');
+            $table->string('variable_value')->nullable();
+            $table->timestamps();
+        });
+        DB::table('servers')->insert([
+            'id' => 10,
+            'egg_id' => 7,
+            'image' => 'ghcr.io/pelican-eggs/yolks:java_21',
+            'startup' => 'java -jar server.jar',
+        ]);
+
         $server = Livewire::test(ModpackCatalogTable::class, [
             'mode' => ModpackCatalogTable::MODE_SERVER,
             'provider' => ModpackProvider::CurseForge->value,
             'query' => 'All the Mods',
+            'serverId' => 10,
             'targetStatePath' => 'mountedActions.0.data.project',
             'titleStatePath' => 'mountedActions.0.data.project_title',
             'versionStatePath' => 'mountedActions.0.data.version',
         ]);
         $server->callTableAction('install_latest', 'curseforge:925200');
+        self::assertSame('reviewModpackPlan', $server->instance()->getMountedAction()?->getName());
+        $serverPlanHtml = $server->getMountedActionModalHtml();
+        self::assertStringContainsString('All the Mods 10', $serverPlanHtml);
+        self::assertStringContainsString('NeoForge Server', $serverPlanHtml);
+        self::assertStringContainsString('No dedicated server ZIP was listed.', $serverPlanHtml);
+        $server->set('mountedActions.0.data.confirm_compatibility', true)
+            ->callMountedAction()
+            ->assertHasNoErrors();
         $serverJsCalls = $server->effects['xjs'] ?? [];
         $serverJoinedJs = implode("\n", array_map(static fn (mixed $item): string => is_array($item) ? (string) ($item['expression'] ?? '') : (string) $item, $serverJsCalls));
         self::assertStringContainsString('selectModpackRelease', $serverJoinedJs);
         self::assertStringContainsString('9620701', $serverJoinedJs);
+        self::assertStringContainsString('true', $serverJoinedJs);
     }
 
     public function test_explicit_all_version_filter_omits_minecraft_version_constraint(): void

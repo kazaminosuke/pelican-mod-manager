@@ -81,19 +81,11 @@ final class CatalogTileColumns
                         ->square()
                         ->grow(false)
                         ->extraImgAttributes($iconImgAttributes),
-                    Stack::make([
-                        TextColumn::make('title')
-                            ->label('')
-                            ->searchable()
-                            ->weight(FontWeight::SemiBold)
-                            ->lineClamp(1),
-                        TextColumn::make('author')
-                            ->label('')
-                            ->color('gray')
-                            ->size(TextSize::Small)
-                            ->lineClamp(1)
-                            ->url($authorUrl, true),
-                    ])->space(1),
+                    TextColumn::make('title')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.title'))
+                        ->searchable()
+                        ->weight(FontWeight::SemiBold)
+                        ->lineClamp(1),
                 ]),
                 TextColumn::make('description')
                     ->label('')
@@ -114,20 +106,31 @@ final class CatalogTileColumns
                         return Str::limit($description, CatalogFields::DESCRIPTION_MAX_LENGTH, '...');
                     }),
                 Split::make([
+                    TextColumn::make('author')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.author'))
+                        ->icon('tabler-user')
+                        ->color('gray')
+                        ->size(TextSize::Small)
+                        ->lineClamp(1)
+                        ->url($authorUrl, true)
+                        ->toggleable(),
                     TextColumn::make('downloads')
-                        ->label('')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
                         ->numeric()
                         ->icon('tabler-download')
                         ->color('gray')
-                        ->size(TextSize::Small),
+                        ->size(TextSize::Small)
+                        ->grow(false)
+                        ->toggleable(),
                     TextColumn::make('date_modified')
-                        ->label('')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
                         ->icon('tabler-calendar')
                         ->color('gray')
                         ->size(TextSize::Small)
-                        ->alignEnd()
+                        ->grow(false)
                         ->formatStateUsing($formatDate)
-                        ->tooltip($dateTooltip),
+                        ->tooltip($dateTooltip)
+                        ->toggleable(),
                 ]),
             ])->space(3),
         ];

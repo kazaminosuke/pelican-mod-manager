@@ -63,6 +63,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             if (class_exists(CreateServer::class) && class_exists(StepPosition::class)) {
                 CreateServer::registerCustomSteps(StepPosition::Before, ModpackCreationStep::step());
                 $panel->renderHook(
+                    TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+                    fn () => view('pelican-mod-manager::components.modpack-provider-select'),
+                    [ModpackCatalogTable::class],
+                );
+                $panel->renderHook(
                     TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
                     fn () => view('pelican-mod-manager::components.catalog-view-toggle'),
                     [ModpackCatalogTable::class],
@@ -122,6 +127,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
             fn () => view('pelican-mod-manager::components.catalog-sort-select'),
             $pageClasses,
+        );
+        $panel->renderHook(
+            TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+            fn () => view('pelican-mod-manager::components.modpack-provider-select'),
+            [ModpackCatalogTable::class],
         );
         // Filament renders this hook inside the same toolbar group, directly
         // before its column-manager trigger. This gives us the required DOM
