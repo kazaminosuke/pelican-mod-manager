@@ -32,6 +32,10 @@ final class ModpackDescriptor
         public readonly ?string $compatibilityWarning = null,
         public readonly ?int $minimumJava = null,
         public readonly ?string $manifestFingerprint = null,
+        public readonly ?string $description = null,
+        public readonly ?int $downloads = null,
+        public readonly ?string $dateModified = null,
+        public readonly ?string $author = null,
     ) {}
 
     public function optionKey(): string

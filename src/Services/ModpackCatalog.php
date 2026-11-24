@@ -102,14 +102,32 @@ final class ModpackCatalog
 
             $hit['key'] = $provider->value.':'.$hit['project_id'];
             $hit['title'] = (string) ($hit['title'] ?? '');
+            $hit['description'] = $this->shortDescription($hit['description'] ?? null);
             $hit['source'] = $provider->getLabel();
-            if ($provider === ModpackProvider::CurseForge && $hit['title'] !== '') {
+            $hit['minecraft_versions'] = $this->normalizeMinecraftVersions($hit['minecraft_versions'] ?? []);
+            $hit['loaders'] = $this->normalizeLoaders($hit['loaders'] ?? []);
+            $hit['downloads'] = isset($hit['downloads']) && is_numeric($hit['downloads']) ? (int) $hit['downloads'] : null;
+            $hit['date_modified'] = is_string($hit['date_modified'] ?? null) && trim($hit['date_modified']) !== ''
+                ? trim($hit['date_modified'])
+                : null;
+            $hit['author'] = is_string($hit['author'] ?? null) && trim($hit['author']) !== ''
+                ? trim($hit['author'])
+                : null;
+
+            if ($provider === ModpackProvider::CurseForge && $hit['title'] !== '' && app()->bound('cache')) {
                 Cache::put('mod-manager:cf-title:'.$hit['project_id'], $hit['title'], 600);
             }
             $hits[] = $hit;
         }
 
         return ['hits' => $hits, 'total_hits' => min((int) $result['total_hits'], 10000), 'error' => false];
+    }
+
+    public static function supportsCatalogFilters(ModpackProvider|string|null $provider): bool
+    {
+        $value = $provider instanceof ModpackProvider ? $provider->value : (is_string($provider) ? $provider : '');
+
+        return in_array($value, [ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value], true);
     }
 
     /**
@@ -123,10 +141,78 @@ final class ModpackCatalog
                 'project_id' => $pack->id,
                 'title' => $pack->title,
                 'icon_url' => $pack->iconUrl,
-                'description' => $pack->minecraftVersion !== null ? 'Minecraft '.$pack->minecraftVersion : '',
+                'description' => (string) ($pack->description ?? ''),
+                'minecraft_versions' => $pack->minecraftVersion !== null ? [$pack->minecraftVersion] : [],
+                'loaders' => $pack->loader !== null ? [$pack->loader] : [],
+                'downloads' => $pack->downloads,
+                'date_modified' => $pack->dateModified,
+                'author' => $pack->author,
             ], $packs),
             'total_hits' => count($packs),
         ];
+    }
+
+    private function shortDescription(mixed $value): string
+    {
+        if (!is_string($value)) {
+            return '';
+        }
+
+        $normalized = trim((string) preg_replace('/\s+/u', ' ', $value));
+        if ($normalized === '') {
+            return '';
+        }
+
+        if (mb_strlen($normalized) <= 120) {
+            return $normalized;
+        }
+
+        return rtrim(mb_substr($normalized, 0, 119)).'…';
+    }
+
+    /** @return list<string> */
+    private function normalizeMinecraftVersions(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $versions = [];
+        foreach ($raw as $item) {
+            if (!is_string($item)) {
+                continue;
+            }
+            $trimmed = trim($item);
+            if (preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $trimmed) === 1) {
+                $versions[$trimmed] = $trimmed;
+            }
+        }
+
+        $list = array_values($versions);
+        usort($list, static fn (string $a, string $b): int => version_compare($b, $a));
+
+        return $list;
+    }
+
+    /** @return list<string> */
+    private function normalizeLoaders(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $loaders = [];
+        foreach ($raw as $item) {
+            if (!is_string($item)) {
+                continue;
+            }
+            $slug = strtolower(trim($item));
+            if (in_array($slug, ['forge', 'neoforge', 'fabric', 'quilt'], true)) {
+                $loaders[$slug] = $slug;
+            }
+        }
+
+        return array_values($loaders);
     }
 
     /** @return array<string, string> */

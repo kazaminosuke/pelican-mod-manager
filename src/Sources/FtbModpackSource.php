@@ -232,6 +232,17 @@ final class FtbModpackSource
             }
         }
 
+        $synopsis = trim((string) ($pack['synopsis'] ?? ''));
+        $downloads = isset($pack['plays']) && is_numeric($pack['plays'])
+            ? (int) $pack['plays']
+            : (isset($pack['installs']) && is_numeric($pack['installs']) ? (int) $pack['installs'] : null);
+        $updated = isset($pack['updated']) && is_numeric($pack['updated']) && (int) $pack['updated'] > 0
+            ? gmdate('c', (int) $pack['updated'])
+            : null;
+        $author = is_string($pack['authors'][0]['name'] ?? null) && trim($pack['authors'][0]['name']) !== ''
+            ? trim($pack['authors'][0]['name'])
+            : null;
+
         return new ModpackDescriptor(
             provider: ModpackProvider::Ftb->value,
             id: $id,
@@ -250,6 +261,10 @@ final class FtbModpackSource
             artifactId: $manifest === null ? null : $versionId,
             minimumJava: $manifest?->minimumJava,
             manifestFingerprint: $manifest === null ? null : FtbReleaseManifest::fingerprint($manifest),
+            description: $synopsis !== '' ? $synopsis : null,
+            downloads: $downloads,
+            dateModified: $updated,
+            author: $author,
         );
     }
 

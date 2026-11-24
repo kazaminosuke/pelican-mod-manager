@@ -60,6 +60,15 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             EditServer::registerCustomTabs(TabPosition::After, ServerModManagerTab::make());
             if (class_exists(CreateServer::class) && class_exists(StepPosition::class)) {
                 CreateServer::registerCustomSteps(StepPosition::Before, ModpackCreationStep::step());
+                $panel->renderHook(
+                    PanelsRenderHook::HEAD_END,
+                    fn () => new HtmlString(
+                        '<link rel="preconnect" href="https://cdn.modrinth.com" crossorigin>'
+                        .'<link rel="preconnect" href="https://media.forgecdn.net" crossorigin>'
+                        .'<link rel="stylesheet" href="'.e(ModManagerAssets::url('modpack-catalog.css')).'" data-navigate-track>',
+                    ),
+                    [CreateServer::class],
+                );
             }
 
             return;
@@ -154,6 +163,13 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                 .'<link rel="stylesheet" href="'.e(ModManagerAssets::url('mod-manager.css')).'" data-navigate-track>',
             ),
             $pageClasses,
+        );
+        $panel->renderHook(
+            PanelsRenderHook::HEAD_END,
+            fn () => new HtmlString(
+                '<link rel="stylesheet" href="'.e(ModManagerAssets::url('modpack-catalog.css')).'" data-navigate-track>',
+            ),
+            [ModManagerPage::class],
         );
         $panel->renderHook(
             PanelsRenderHook::BODY_END,

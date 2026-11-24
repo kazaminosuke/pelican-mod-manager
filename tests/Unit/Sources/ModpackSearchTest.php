@@ -346,6 +346,102 @@ final class ModpackSearchTest extends TestCase
         self::assertSame(DownloadUnavailableException::DISTRIBUTION, $versions[0]['download_unavailable']);
     }
 
+    public function test_modpack_search_preserves_api_versions_and_loaders_without_guessing(): void
+    {
+        Http::fake([
+            'api.modrinth.com/v2/search*' => Http::response([
+                'hits' => [[
+                    'project_id' => 'fo-pack',
+                    'slug' => 'fabulously-optimized',
+                    'title' => 'Fabulously Optimized',
+                    'description' => 'Fast performance modpack',
+                    'author' => 'robotkoer',
+                    'downloads' => 5000000,
+                    'date_modified' => '2026-11-20T00:00:00Z',
+                    'versions' => ['1.20.1', '1.21.4', '24w14a', '1.21.1'],
+                    'display_categories' => ['fabric', 'quilt', 'optimization'],
+                    'categories' => ['fabric', 'optimization'],
+                ]],
+                'total_hits' => 1,
+            ]),
+            'api.curseforge.com/v1/mods/search*' => Http::response([
+                'data' => [[
+                    'id' => 925200,
+                    'slug' => 'atm10',
+                    'name' => 'All the Mods 10',
+                    'summary' => 'Kitchen sink pack',
+                    'authors' => [['name' => 'ATMTeam']],
+                    'downloadCount' => 1200000,
+                    'dateModified' => '2026-11-19T00:00:00Z',
+                    'latestFilesIndexes' => [
+                        ['gameVersion' => '1.21.1', 'modLoader' => 6],
+                        ['gameVersion' => '1.20.1', 'modLoader' => 1],
+                    ],
+                ]],
+                'pagination' => ['totalCount' => 1],
+            ]),
+            'api.technicpack.net/search*' => Http::response([
+                'modpacks' => [[
+                    'slug' => 'tekkit-2',
+                    'name' => 'Tekkit 2',
+                    'iconUrl' => 'https://cdn.technicpack.net/icon.png',
+                ]],
+            ]),
+        ]);
+
+        $container = Container::getInstance();
+        $cacheRepo = new LaravelCacheRepository(new ArrayStore());
+        $container->instance('cache', $cacheRepo);
+
+        $executor = new class implements SourceFetchExecutorInterface
+        {
+            public ?ModrinthSource $modrinth = null;
+
+            public ?CurseForgeSource $curseForge = null;
+
+            public function fetch(SourceFetchSpec $spec, float $timeoutSeconds): mixed
+            {
+                return $spec->sourceKey === 'modrinth'
+                    ? $this->modrinth?->fetchSourceData($spec, $timeoutSeconds)
+                    : $this->curseForge?->fetchSourceData($spec, $timeoutSeconds);
+            }
+
+            public function emptyResult(SourceFetchSpec $spec): mixed
+            {
+                return ['hits' => [], 'total_hits' => 0];
+            }
+        };
+        $sourceCache = new SourceCache($cacheRepo, new InstalledOperationManager($cacheRepo, app('config')), $executor);
+
+        $modrinth = new ModrinthSource($sourceCache);
+        $curseForge = new CurseForgeSource($sourceCache);
+        $executor->modrinth = $modrinth;
+        $executor->curseForge = $curseForge;
+
+        $catalog = new ModpackCatalog(
+            $modrinth,
+            $curseForge,
+            new FtbModpackSource(),
+            new TechnicModpackSource(),
+            new AtlauncherModpackSource(),
+        );
+
+        $modrinthPage = $catalog->searchPage(new Server(), ModpackProvider::Modrinth, 'fabulously', 1);
+        self::assertCount(1, $modrinthPage['hits']);
+        self::assertSame(['1.21.4', '1.21.1', '1.20.1'], $modrinthPage['hits'][0]['minecraft_versions']);
+        self::assertSame(['fabric', 'quilt'], $modrinthPage['hits'][0]['loaders']);
+
+        $curseForgePage = $catalog->searchPage(new Server(), ModpackProvider::CurseForge, 'atm', 1);
+        self::assertCount(1, $curseForgePage['hits']);
+        self::assertSame(['1.21.1', '1.20.1'], $curseForgePage['hits'][0]['minecraft_versions']);
+        self::assertSame(['neoforge', 'forge'], $curseForgePage['hits'][0]['loaders']);
+
+        $technicPage = $catalog->searchPage(new Server(), ModpackProvider::Technic, 'tekkit', 1);
+        self::assertCount(1, $technicPage['hits']);
+        self::assertSame([], $technicPage['hits'][0]['minecraft_versions']);
+        self::assertSame([], $technicPage['hits'][0]['loaders']);
+    }
+
     private function cache(SourceFetchExecutorInterface $executor): SourceCache
     {
         $cache = new LaravelCacheRepository(new ArrayStore());

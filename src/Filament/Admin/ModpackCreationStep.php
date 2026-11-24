@@ -213,7 +213,7 @@ final class ModpackCreationStep
 
     private static function hasCatalogFilters(Get $get): bool
     {
-        return in_array($get('mm_provider'), [ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value], true);
+        return ModpackCatalog::supportsCatalogFilters($get('mm_provider'));
     }
 
     /** @return array<string, mixed> */
@@ -231,8 +231,11 @@ final class ModpackCreationStep
             'hits' => $result['hits'],
             'selectedTitle' => $get('mm_project_title'),
             'page' => $page,
+            'pageSize' => ModpackCatalog::PAGE_SIZE,
+            'totalHits' => $result['total_hits'],
             'pageStatePath' => $component->resolveRelativeStatePath('mm_page'),
             'hasNext' => $page * ModpackCatalog::PAGE_SIZE < $result['total_hits'],
+            'isError' => $result['error'],
             'emptyMessage' => trans('pelican-mod-manager::strings.modpacks.'.$message),
         ];
     }

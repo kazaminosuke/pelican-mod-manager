@@ -235,6 +235,33 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString('ModManagerAssets::url(', $registrationPrefix);
     }
 
+    public function test_modpack_catalog_ui_is_unified_across_create_and_server_screens_without_source_column(): void
+    {
+        $blade = (string) file_get_contents(dirname(__DIR__, 3).'/resources/views/components/modpack-catalog.blade.php');
+        $css = $this->asset('modpack-catalog.css');
+        $plugin = (string) file_get_contents(dirname(__DIR__, 3).'/src/ModManagerPlugin.php');
+        $createStep = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Admin/ModpackCreationStep.php');
+        $serverPage = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+
+        // Source column and per-row source badge are removed because the provider is already selected.
+        self::assertStringNotContainsString('strings.table.columns.source', $blade);
+        self::assertStringNotContainsString("\$hit['source']", $blade);
+
+        // Uses Filament table & pagination classes matching the existing Mod catalog without nested vertical scroll.
+        self::assertStringContainsString('mmr-modpack-catalog', $blade);
+        self::assertStringContainsString('fi-ta-table', $blade);
+        self::assertStringContainsString('fi-pagination', $blade);
+        self::assertStringContainsString('fi-ta-empty-state', $blade);
+        self::assertStringContainsString('overflow-x:clip;overflow-y:visible;', $css);
+        self::assertStringNotContainsString('overflow-y:auto', $css);
+        self::assertStringNotContainsString('overflow-y:scroll', $css);
+
+        // Both new-server creation and existing-server modpack modal share the same catalog Blade view & stylesheet.
+        self::assertStringContainsString("->view('pelican-mod-manager::components.modpack-catalog')", $createStep);
+        self::assertStringContainsString("->view('pelican-mod-manager::components.modpack-catalog')", $serverPage);
+        self::assertSame(2, substr_count($plugin, "ModManagerAssets::url('modpack-catalog.css')"));
+    }
+
     private function asset(string $name): string
     {
         $contents = file_get_contents(dirname(__DIR__, 3).'/resources/assets/'.$name);

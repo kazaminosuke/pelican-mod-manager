@@ -20,6 +20,10 @@ final class ModManagerAssets
             'path' => 'resources/assets/mod-manager.css',
             'content_type' => 'text/css; charset=UTF-8',
         ],
+        'modpack-catalog.css' => [
+            'path' => 'resources/assets/modpack-catalog.css',
+            'content_type' => 'text/css; charset=UTF-8',
+        ],
         'mod-manager-runtime.js' => [
             'path' => 'resources/assets/mod-manager-runtime.js',
             'content_type' => 'text/javascript; charset=UTF-8',

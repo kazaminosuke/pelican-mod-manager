@@ -1934,7 +1934,90 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             'downloads' => (int) ($mod['downloadCount'] ?? 0),
             'date_modified' => $mod['dateModified'] ?? null,
             'project_type' => $type?->value ?? '',
+            'minecraft_versions' => $this->extractProjectMinecraftVersions($mod),
+            'loaders' => $this->extractProjectLoaders($mod),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $mod
+     * @return list<string>
+     */
+    private function extractProjectMinecraftVersions(array $mod): array
+    {
+        $versions = [];
+
+        foreach (is_array($mod['latestFilesIndexes'] ?? null) ? $mod['latestFilesIndexes'] : [] as $index) {
+            if (!is_array($index) || !is_string($index['gameVersion'] ?? null)) {
+                continue;
+            }
+            $version = trim($index['gameVersion']);
+            if (preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $version) === 1) {
+                $versions[$version] = $version;
+            }
+        }
+
+        foreach (is_array($mod['latestFiles'] ?? null) ? $mod['latestFiles'] : [] as $file) {
+            if (!is_array($file) || !is_array($file['gameVersions'] ?? null)) {
+                continue;
+            }
+            foreach ($file['gameVersions'] as $gv) {
+                if (!is_string($gv)) {
+                    continue;
+                }
+                $version = trim($gv);
+                if (preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $version) === 1) {
+                    $versions[$version] = $version;
+                }
+            }
+        }
+
+        $list = array_values($versions);
+        usort($list, static fn (string $a, string $b): int => version_compare($b, $a));
+
+        return $list;
+    }
+
+    /**
+     * @param  array<string, mixed>  $mod
+     * @return list<string>
+     */
+    private function extractProjectLoaders(array $mod): array
+    {
+        $loaders = [];
+
+        foreach (is_array($mod['latestFilesIndexes'] ?? null) ? $mod['latestFilesIndexes'] : [] as $index) {
+            if (!is_array($index)) {
+                continue;
+            }
+            $loader = match ($index['modLoader'] ?? null) {
+                1 => 'forge',
+                4 => 'fabric',
+                5 => 'quilt',
+                6 => 'neoforge',
+                default => null,
+            };
+            if ($loader !== null) {
+                $loaders[$loader] = $loader;
+            }
+        }
+
+        foreach (is_array($mod['latestFiles'] ?? null) ? $mod['latestFiles'] : [] as $file) {
+            if (!is_array($file) || !is_array($file['gameVersions'] ?? null)) {
+                continue;
+            }
+            foreach ($file['gameVersions'] as $gv) {
+                if (!is_string($gv)) {
+                    continue;
+                }
+                $slug = strtolower(trim($gv));
+                if (in_array($slug, ['forge', 'neoforge', 'fabric', 'quilt'], true)) {
+                    $loaders[$slug] = $slug;
+                }
+            }
+        }
+
+        return array_values($loaders);
     }
 
     /**
