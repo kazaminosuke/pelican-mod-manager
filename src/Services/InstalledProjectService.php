@@ -752,6 +752,8 @@ class InstalledProjectService
                 }
             }
 
+            $projectsToPrime = [];
+
             foreach ($matchedVersions as $filename => $versionData) {
                 if (!isset($versionData['project_id'], $versionData['id'], $versionData['version_number'])) {
                     continue;
@@ -781,7 +783,25 @@ class InstalledProjectService
                     $entry['author'] = $author;
                 }
 
+                if (is_array($project)) {
+                    $primedProject = $project;
+                    if (($primedProject['author'] ?? null) === null || $primedProject['author'] === '') {
+                        if ($author !== null) {
+                            $primedProject['author'] = $author;
+                        }
+                    }
+                    $projectsToPrime[$projectId] = $primedProject;
+                }
+
                 $matchedEntries[$filename] = $entry;
+            }
+
+            if ($projectsToPrime !== []) {
+                try {
+                    $hashSource->primeProjects($projectsToPrime);
+                } catch (Exception $exception) {
+                    report($exception);
+                }
             }
 
             $remainingFilenames = array_values(array_diff($remainingFilenames, array_keys($matchedEntries)));

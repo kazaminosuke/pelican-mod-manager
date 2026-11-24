@@ -902,15 +902,59 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
      */
     private function getProjectsByIdsUsingCache(array $projectIds, bool $authoritative, bool $freshRequired = false): array
     {
-        if (empty($projectIds)) {
+        $projectIds = array_values(array_unique(array_filter(
+            array_map(static fn (mixed $id): string => trim((string) $id), $projectIds),
+            static fn (string $id): bool => $id !== '',
+        )));
+
+        if ($projectIds === []) {
             return [];
         }
 
-        $projectIds = array_values(array_unique($projectIds));
-        sort($projectIds);
-        $spec = $this->spec(self::OPERATION_PROJECTS, ['project_ids' => $projectIds]);
+        $projects = [];
+        $pendingIds = $projectIds;
 
-        return $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
+        if (!$freshRequired) {
+            $peeked = $this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...));
+            $pendingIds = [];
+
+            foreach ($projectIds as $projectId) {
+                $probe = $peeked[$projectId] ?? null;
+                if (is_array($probe['data'] ?? null)) {
+                    $projects[$projectId] = $probe['data'];
+
+                    continue;
+                }
+
+                $pendingIds[] = $projectId;
+            }
+        }
+
+        if ($pendingIds === []) {
+            return $projects;
+        }
+
+        sort($pendingIds);
+        $fetchedToPrime = [];
+
+        foreach (array_chunk($pendingIds, 100) as $chunk) {
+            $spec = $this->spec(self::OPERATION_PROJECTS, ['project_ids' => $chunk]);
+            $batch = $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
+
+            foreach ($batch as $id => $project) {
+                if (is_array($project)) {
+                    $key = (string) $id;
+                    $projects[$key] = $project;
+                    $fetchedToPrime[$key] = $project;
+                }
+            }
+        }
+
+        if ($fetchedToPrime !== []) {
+            $this->primeProjects($fetchedToPrime);
+        }
+
+        return $projects;
     }
 
     /** @return array<string, mixed>|null */
@@ -1214,6 +1258,12 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         if (!is_array($project)) {
             throw new Exception('Invalid Modrinth project response.');
         }
+
+        $project['project_id'] = (string) ($project['project_id'] ?? $project['id'] ?? $projectId);
+        if (!array_key_exists('date_modified', $project)) {
+            $project['date_modified'] = $project['updated'] ?? null;
+        }
+        $project['downloads'] = (int) ($project['downloads'] ?? 0);
 
         return $project;
     }

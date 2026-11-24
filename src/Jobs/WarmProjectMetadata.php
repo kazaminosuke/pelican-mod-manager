@@ -158,6 +158,20 @@ final class WarmProjectMetadata
      */
     private function includeConfirmedMissingProjects(array $projectIds, array $projects): array
     {
+        $byLowerIdentifier = [];
+        foreach ($projects as $key => $project) {
+            $byLowerIdentifier[strtolower((string) $key)] = $project;
+            if (!is_array($project)) {
+                continue;
+            }
+            foreach (['project_id', 'id', 'slug'] as $field) {
+                $value = $project[$field] ?? null;
+                if ((is_string($value) || is_int($value)) && (string) $value !== '') {
+                    $byLowerIdentifier[strtolower((string) $value)] = $project;
+                }
+            }
+        }
+
         $primed = [];
 
         foreach ($projectIds as $projectId) {
@@ -170,8 +184,15 @@ final class WarmProjectMetadata
             // CurseForge canonicalizes numeric ids for its batch endpoint;
             // retain the id used by the per-project cache spec on the left.
             $canonicalNumericId = ctype_digit($projectId) ? (string) (int) $projectId : null;
-            $primed[$projectId] = $canonicalNumericId !== null && array_key_exists($canonicalNumericId, $projects)
-                ? $projects[$canonicalNumericId]
+            if ($canonicalNumericId !== null && array_key_exists($canonicalNumericId, $projects)) {
+                $primed[$projectId] = $projects[$canonicalNumericId];
+
+                continue;
+            }
+
+            $lowerId = strtolower($projectId);
+            $primed[$projectId] = array_key_exists($lowerId, $byLowerIdentifier)
+                ? $byLowerIdentifier[$lowerId]
                 : null;
         }
 

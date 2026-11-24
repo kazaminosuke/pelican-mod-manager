@@ -258,10 +258,12 @@ class ProjectSourceRegistry
                 if ($peeked['retry_delayed'] ?? false) {
                     // The source-cache failure cooldown is not evidence that
                     // this installed project disappeared. Keep the locally
-                    // known metadata visible, but do not keep the 500 ms
-                    // enrichment poll or warm job alive until the cooldown
-                    // expires.
-                    $results[] = $this->metadataOnlyEntry($mod, $sourceKey);
+                    // known metadata visible without dispatching another warm
+                    // job until the cooldown expires, while signaling the page
+                    // to re-check after the cooldown window.
+                    $results[] = $this->metadataOnlyEntry($mod, $sourceKey) + [
+                        'retry_delayed' => true,
+                    ];
 
                     continue;
                 }

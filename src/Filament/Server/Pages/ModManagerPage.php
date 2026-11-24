@@ -261,6 +261,14 @@ class ModManagerPage extends Page implements HasTable
     public bool $pollEnrichment = false;
 
     /**
+     * Gentle follow-up poll while installed rows are in a short source-cache
+     * failure cooldown (`retry_delayed`). Does not dispatch upstream requests
+     * during cooldown; once the cooldown expires, pollEnrichment() re-peeks,
+     * queues one retry warm job, and refreshes the table when metadata lands.
+     */
+    public bool $pollEnrichmentRetry = false;
+
+    /**
      * Hash of the visible enrichment payload. Compared on pollEnrichment()
      * so an unchanged pending fill does not remorph the table every five
      * seconds. Shared by Installed and Catalog.
@@ -2479,9 +2487,11 @@ class ModManagerPage extends Page implements HasTable
                 (string) ($project['project_id'] ?? ''),
                 (string) ($project['source'] ?? ''),
                 (string) ($project['icon_url'] ?? ''),
+                (string) ($project['description'] ?? ''),
                 (string) ($project['downloads'] ?? ''),
                 (string) ($project['date_modified'] ?? ''),
                 !empty($project['enrichment_pending']) ? '1' : '0',
+                !empty($project['retry_delayed']) ? '1' : '0',
             ]);
         }
 
@@ -2688,16 +2698,19 @@ class ModManagerPage extends Page implements HasTable
             ? app(ProjectSourceRegistry::class)->peekInstalled($pagedInstalledMods, $server)
             : [];
 
+        $enrichmentRetryDelayed = false;
         foreach ($projects as $project) {
             if ($project['enrichment_pending'] ?? false) {
                 $enrichmentPending = true;
-
-                break;
+            }
+            if ($project['retry_delayed'] ?? false) {
+                $enrichmentRetryDelayed = true;
             }
         }
 
-        $this->pollEnrichment = $enrichmentPending
-            && app(InstalledOperationManager::class)->supportsAsyncDispatch();
+        $supportsAsync = app(InstalledOperationManager::class)->supportsAsyncDispatch();
+        $this->pollEnrichment = $enrichmentPending && $supportsAsync;
+        $this->pollEnrichmentRetry = !$this->pollEnrichment && $enrichmentRetryDelayed && $supportsAsync;
         $this->installedEnrichmentSignature = $this->enrichmentSignatureFromProjects(
             $projects,
             $this->pendingLatestVersionKeys !== [],
@@ -2800,18 +2813,22 @@ class ModManagerPage extends Page implements HasTable
                         ? app(ProjectSourceRegistry::class)->peekInstalled($pagedInstalledMods, $server)
                         : [];
 
+                    $enrichmentRetryDelayed = false;
                     foreach ($projects as $project) {
                         if ($project['enrichment_pending'] ?? false) {
                             $enrichmentPending = true;
-
-                            break;
+                        }
+                        if ($project['retry_delayed'] ?? false) {
+                            $enrichmentRetryDelayed = true;
                         }
                     }
 
                     // A missing background dispatcher cannot complete a deferred
                     // metadata fill, so polling it would only repeat the same
                     // cache reads and table render indefinitely.
-                    $this->pollEnrichment = $enrichmentPending && $operations->supportsAsyncDispatch();
+                    $supportsAsync = $operations->supportsAsyncDispatch();
+                    $this->pollEnrichment = $enrichmentPending && $supportsAsync;
+                    $this->pollEnrichmentRetry = !$this->pollEnrichment && $enrichmentRetryDelayed && $supportsAsync;
                     $this->installedEnrichmentSignature = $this->enrichmentSignatureFromProjects(
                         $projects,
                         $this->pendingLatestVersionKeys !== [],
@@ -2843,6 +2860,7 @@ class ModManagerPage extends Page implements HasTable
 
                 if (!$type || !$currentSource || !$currentSource->isConfigured() || !$currentSource->supportsSearch()) {
                     $this->pollEnrichment = false;
+                    $this->pollEnrichmentRetry = false;
                     $this->catalogEnrichmentPeekKeys = [];
                     $this->installedEnrichmentSignature = null;
 
@@ -2904,6 +2922,7 @@ class ModManagerPage extends Page implements HasTable
                 $versionPending = $this->peekVisibleLatestVersions($hits, $server, $type);
                 $this->pollEnrichment = $versionPending
                     && app(InstalledOperationManager::class)->supportsAsyncDispatch();
+                $this->pollEnrichmentRetry = false;
                 $this->catalogEnrichmentPeekKeys = $this->catalogEnrichmentPeekKeysFromHits($hits);
                 $this->installedEnrichmentSignature = $this->catalogEnrichmentSignatureFromHits($hits);
 
@@ -4827,6 +4846,10 @@ class ModManagerPage extends Page implements HasTable
             return ['wire:poll.5s' => 'pollEnrichment'];
         }
 
+        if ($this->pollEnrichmentRetry) {
+            return ['wire:poll.10s' => 'pollEnrichment'];
+        }
+
         return [];
     }
 
@@ -5151,7 +5174,7 @@ class ModManagerPage extends Page implements HasTable
         }
 
         $signature = $this->peekInstalledEnrichmentSignature();
-        if ($this->pollEnrichment
+        if (($this->pollEnrichment || $this->pollEnrichmentRetry)
             && $signature !== null
             && $signature === $this->installedEnrichmentSignature) {
             $this->skipRender();
