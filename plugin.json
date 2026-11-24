@@ -14,5 +14,6 @@
         "admin"
     ],
     "panel_version": null,
+    "api_version": 1,
     "composer_packages": null
 }
