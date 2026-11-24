@@ -233,7 +233,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     }
 
     /**
-     * @return list<array{id: string, label: string, minecraft: ?string, loader: ?string}>
+     * @return list<array{id: string, label: string, version_number: string, version_type: ?string, downloads: ?int, date_published: ?string, minecraft: ?string, loader: ?string}>
      */
     public function listModpackVersions(string $projectId): array
     {
@@ -260,9 +260,20 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
                 $label .= ' · '.$loader;
             }
 
+            $releaseType = match ((int) ($file['releaseType'] ?? 0)) {
+                1 => 'release',
+                2 => 'beta',
+                3 => 'alpha',
+                default => null,
+            };
+
             $choices[] = [
                 'id' => $id,
                 'label' => $label,
+                'version_number' => $display !== '' ? $display : (string) $file['fileName'],
+                'version_type' => $releaseType,
+                'downloads' => isset($file['downloadCount']) && is_numeric($file['downloadCount']) ? (int) $file['downloadCount'] : null,
+                'date_published' => is_string($file['fileDate'] ?? null) ? $file['fileDate'] : null,
                 'minecraft' => $minecraft,
                 'loader' => $loader,
             ];
@@ -586,9 +597,9 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $page = min(max(1, $page), intdiv(self::MAX_SEARCH_RESULTS, self::SEARCH_PAGE_SIZE));
 
         $hasVersionList = array_key_exists('versions', $filters);
-        $requestedVersions = $this->versionFilterValues(
-            $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []),
-        );
+        $rawVersions = $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
         $automaticVersion = MinecraftVersionResolver::resolve($server);
         $params = [
             'gameId' => self::GAME_ID,
@@ -597,7 +608,9 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             'pageSize' => self::SEARCH_PAGE_SIZE,
         ];
 
-        if ($hasVersionList) {
+        if ($disableVersionFilter) {
+            // Explicit "All" selected: omit gameVersion/gameVersions completely.
+        } elseif ($hasVersionList) {
             if ($requestedVersions !== []) {
                 // CurseForge's official API accepts up to four game versions
                 // in the gameVersions list, with OR semantics.

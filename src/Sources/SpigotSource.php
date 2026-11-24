@@ -199,12 +199,14 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return null;
         }
 
-        $requestedVersions = $this->versionFilterValues(
-            array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []),
-        );
-        $version = count($requestedVersions) === 1
-            ? $requestedVersions[0]
-            : (count($requestedVersions) === 0 ? MinecraftVersionResolver::resolve($server) : null);
+        $rawVersions = array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
+        $version = $disableVersionFilter
+            ? null
+            : (count($requestedVersions) === 1
+                ? $requestedVersions[0]
+                : (count($requestedVersions) === 0 ? MinecraftVersionResolver::resolve($server) : null));
 
         $sort = (string) ($filters['sort'] ?? 'downloads');
         if (!in_array($sort, ['downloads', 'updated', 'newest'], true)) {

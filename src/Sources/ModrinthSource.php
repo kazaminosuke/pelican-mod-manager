@@ -190,7 +190,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
      * Server creation does not have a loader yet, and an explicit version
      * must stay the version the operator chose.
      *
-     * @return list<array{id: string, label: string, minecraft: ?string, loader: ?string}>
+     * @return list<array{id: string, label: string, version_number: string, version_type: ?string, downloads: ?int, date_published: ?string, featured: bool, minecraft: ?string, loader: ?string}>
      */
     public function listModpackVersions(string $projectId): array
     {
@@ -235,6 +235,11 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             $choices[] = [
                 'id' => $id,
                 'label' => $label,
+                'version_number' => $number,
+                'version_type' => is_string($version['version_type'] ?? null) ? $version['version_type'] : null,
+                'downloads' => isset($version['downloads']) && is_numeric($version['downloads']) ? (int) $version['downloads'] : null,
+                'date_published' => is_string($version['date_published'] ?? null) ? $version['date_published'] : null,
+                'featured' => (bool) ($version['featured'] ?? false),
                 'minecraft' => $minecraft !== '' ? $minecraft : null,
                 'loader' => $loader,
             ];
@@ -442,16 +447,18 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $projectType = in_array($type, [ProjectType::Plugin, ProjectType::Datapack], true)
             ? ProjectType::Mod->value
             : $type->value;
-        $requestedVersions = $this->versionFilterValues(
-            array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []),
-        );
+        $rawVersions = array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
         $minecraftVersion = MinecraftVersionResolver::resolve($server);
         $selectedLoaders = $this->slugFilterValues($filters['loaders'] ?? []);
         $selectedPlatforms = $this->slugFilterValues($filters['platforms'] ?? []);
 
-        $versionFacetValues = $requestedVersions !== []
-            ? $requestedVersions
-            : ($minecraftVersion !== null ? [$minecraftVersion] : []);
+        $versionFacetValues = $disableVersionFilter
+            ? []
+            : ($requestedVersions !== []
+                ? $requestedVersions
+                : ($minecraftVersion !== null ? [$minecraftVersion] : []));
 
         if ($type === ProjectType::ResourcePack) {
             $facetGroups = [

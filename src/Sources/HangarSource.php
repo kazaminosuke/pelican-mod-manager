@@ -174,9 +174,9 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         }
 
         $hasVersionList = array_key_exists('versions', $filters);
-        $requestedVersions = $this->versionFilterValues(
-            $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []),
-        );
+        $rawVersions = $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
         $explicitVersion = $hasVersionList
             ? (count($requestedVersions) === 1 ? $requestedVersions[0] : null)
             : ($requestedVersions[0] ?? null);
@@ -186,7 +186,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         // Minecraft version across an explicit platform change creates a
         // contradictory query. An explicitly selected version remains
         // authoritative for the selected platform.
-        $automaticVersion = !$hasVersionList || $requestedVersions === []
+        $automaticVersion = !$disableVersionFilter && (!$hasVersionList || $requestedVersions === [])
             ? (($selectedPlatform === '' || $selectedPlatform === $automaticPlatform)
             ? $this->automaticPlatformVersion($server, $platform)
             : null)

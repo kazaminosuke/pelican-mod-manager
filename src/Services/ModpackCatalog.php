@@ -320,16 +320,15 @@ final class ModpackCatalog
     }
 
     /**
-     * @return array<string, string>
+     * @return list<array{id: string, label: string, version_number: string, version_type: ?string, downloads: ?int, date_published: ?string, minecraft: ?string, loader: ?string, featured: bool}>
      */
-    public function versionOptions(string $selection): array
+    public function versionList(string $selection): array
     {
         [$source, $projectId] = $this->splitSelection($selection);
         if ($source === null) {
             return [];
         }
 
-        $options = [];
         try {
             $versions = match ($source) {
                 ProjectSourceKey::Modrinth->value => $this->modrinth->listModpackVersions($projectId),
@@ -347,7 +346,8 @@ final class ModpackCatalog
             return [];
         }
 
-        foreach ($versions as $version) {
+        $normalized = [];
+        foreach ($versions as $index => $version) {
             if (!is_array($version)) {
                 continue;
             }
@@ -355,7 +355,41 @@ final class ModpackCatalog
             if ($id === '') {
                 continue;
             }
-            $options[$id] = (string) ($version['label'] ?? $id);
+
+            $label = trim((string) ($version['label'] ?? $id));
+            $versionNumber = trim((string) ($version['version_number'] ?? $label));
+            $normalized[] = [
+                'id' => $id,
+                'label' => $label !== '' ? $label : $id,
+                'version_number' => $versionNumber !== '' ? $versionNumber : $id,
+                'version_type' => is_string($version['version_type'] ?? null) && trim($version['version_type']) !== ''
+                    ? strtolower(trim($version['version_type']))
+                    : null,
+                'downloads' => isset($version['downloads']) && is_numeric($version['downloads']) ? (int) $version['downloads'] : null,
+                'date_published' => is_string($version['date_published'] ?? null) && trim($version['date_published']) !== ''
+                    ? trim($version['date_published'])
+                    : null,
+                'minecraft' => is_string($version['minecraft'] ?? null) && trim($version['minecraft']) !== ''
+                    ? trim($version['minecraft'])
+                    : null,
+                'loader' => is_string($version['loader'] ?? null) && trim($version['loader']) !== ''
+                    ? trim($version['loader'])
+                    : null,
+                'featured' => (bool) ($version['featured'] ?? ($index === 0)),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function versionOptions(string $selection): array
+    {
+        $options = [];
+        foreach ($this->versionList($selection) as $version) {
+            $options[$version['id']] = $version['label'];
         }
 
         return $options;

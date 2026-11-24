@@ -94,16 +94,26 @@ final class FtbModpackSource
     }
 
     /**
-     * @return list<array{id: string, label: string}>
+     * @return list<array{id: string, label: string, version_number: string, version_type: ?string, date_published: ?string, minecraft: ?string, loader: ?string}>
      */
     public function versions(string $packId): array
     {
         $pack = $this->fetchPack($packId);
         $versions = [];
         foreach ($this->publicVersions($pack) as $version) {
+            [$loader, , $minecraft] = $this->targets($version);
+            $timestamp = $version['released'] ?? $version['updated'] ?? null;
+            $published = is_numeric($timestamp) && (int) $timestamp > 0 ? gmdate('c', (int) $timestamp) : null;
+            $type = is_string($version['type'] ?? null) ? strtolower(trim($version['type'])) : null;
+
             $versions[] = [
                 'id' => (string) $version['id'],
                 'label' => (string) $version['name'],
+                'version_number' => (string) $version['name'],
+                'version_type' => $type !== '' ? $type : null,
+                'date_published' => $published,
+                'minecraft' => $minecraft,
+                'loader' => $loader,
             ];
         }
 
