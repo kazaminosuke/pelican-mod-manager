@@ -24,6 +24,7 @@ final class PluginIdentityTest extends TestCase
             'https://raw.githubusercontent.com/kazaminosuke/'.self::PLUGIN_ID.'/refs/heads/main/update.json',
             $manifest['update_url'],
         );
+        self::assertSame(1, $manifest['api_version']);
         $version = $manifest['version'];
         self::assertIsString($version);
         $tag = str_starts_with($version, 'v') ? $version : 'v'.$version;
