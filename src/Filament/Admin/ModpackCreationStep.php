@@ -7,16 +7,15 @@ use App\Models\Server;
 use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\ViewField;
 use Filament\Infolists\Components\TextEntry;
-use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Components\Wizard\Step;
 use Illuminate\Validation\ValidationException;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
@@ -59,46 +58,24 @@ final class ModpackCreationStep
                         }
                     }),
                 Hidden::make('mm_original_startup')->dehydrated(false),
-                Grid::make(['default' => 1, 'md' => 2, 'xl' => 4])
-                    ->visible(fn (Get $get): bool => (bool) $get('mm_modpack'))
-                    ->schema([
-                        TextInput::make('mm_query')
-                            ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.catalog_search'))
-                            ->maxLength(100)
-                            ->live(debounce: 500)
-                            ->dehydrated(false),
-                        Select::make('mm_provider')
-                            ->label(fn (): string => trans('pelican-mod-manager::strings.table.columns.source'))
-                            ->default(ModpackProvider::Modrinth->value)
-                            ->options(fn (): array => app(ModpackCatalog::class)->providers())
-                            ->selectablePlaceholder(false)
-                            ->live()
-                            ->dehydrated(false)
-                            ->afterStateUpdated(function (Set $set, Get $get): void {
-                                $set('mm_project', null);
-                                $set('mm_project_title', null);
-                                $set('mm_version', null);
-                                $set('mm_egg', null);
-                                $set('mm_confirm_compatibility', false);
-                                self::restore($set, $get);
-                            }),
-                        Select::make('mm_minecraft')
-                            ->label(fn (): string => trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
-                            ->options(fn (): array => app(ModpackCatalog::class)->minecraftVersions())
-                            ->searchable()
-                            ->live()
-                            ->dehydrated(false)
-                            ->visible(self::hasCatalogFilters(...)),
-                        Select::make('mm_loader')
-                            ->label(fn (): string => trans('pelican-mod-manager::strings.table.filters.loader'))
-                            ->options(fn (): array => app(ModpackCatalog::class)->loaders())
-                            ->live()
-                            ->dehydrated(false)
-                            ->visible(self::hasCatalogFilters(...)),
-                    ]),
+                Hidden::make('mm_query')->dehydrated(false),
+                Hidden::make('mm_provider')
+                    ->default(ModpackProvider::Modrinth->value)
+                    ->live()
+                    ->dehydrated(false)
+                    ->afterStateUpdated(function (Set $set, Get $get): void {
+                        $set('mm_project', null);
+                        $set('mm_project_title', null);
+                        $set('mm_version', null);
+                        $set('mm_egg', null);
+                        $set('mm_confirm_compatibility', false);
+                        self::restore($set, $get);
+                    }),
+                Hidden::make('mm_minecraft')->dehydrated(false),
+                Hidden::make('mm_loader')->dehydrated(false),
                 Hidden::make('mm_project_title')->dehydrated(false),
                 ViewField::make('mm_project')
-                    ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.pack'))
+                    ->hiddenLabel()
                     ->view('pelican-mod-manager::components.modpack-catalog-field')
                     ->viewData(fn (Get $get, ViewField $component): array => self::catalogViewData($get, $component))
                     ->required(fn (Get $get): bool => (bool) $get('mm_modpack'))
@@ -106,7 +83,7 @@ final class ModpackCreationStep
                     ->afterStateUpdated(function (Set $set, Get $get, mixed $state): void {
                         if (!is_string($state) || $state === '') {
                             $set('mm_project_title', null);
-                        } else {
+                        } elseif (!is_string($get('mm_project_title')) || trim($get('mm_project_title')) === '') {
                             $titles = array_column(self::catalogPage($get)['hits'], 'title', 'key');
                             if (isset($titles[$state])) {
                                 $set('mm_project_title', $titles[$state]);
@@ -117,12 +94,9 @@ final class ModpackCreationStep
                         $set('mm_egg', null);
                         $set('mm_confirm_compatibility', false);
                     }),
-                Select::make('mm_version')
-                    ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.version'))
+                Hidden::make('mm_version')
                     ->live()
                     ->required(fn (Get $get): bool => (bool) $get('mm_modpack') && filled($get('mm_project')))
-                    ->visible(fn (Get $get): bool => (bool) $get('mm_modpack') && filled($get('mm_project')))
-                    ->options(fn (Get $get): array => app(ModpackCatalog::class)->versionOptions((string) $get('mm_project')))
                     ->afterStateUpdated(function (Set $set, Get $get): void {
                         self::restore($set, $get);
                         $set('mm_egg', null);
@@ -225,14 +199,18 @@ final class ModpackCreationStep
         $query = (string) $get('mm_query');
         $minecraft = $filters && is_string($get('mm_minecraft')) && $get('mm_minecraft') !== '' ? $get('mm_minecraft') : null;
         $loader = $filters && is_string($get('mm_loader')) && $get('mm_loader') !== '' ? $get('mm_loader') : null;
+        $selectedVersion = $get('mm_version');
 
         return [
+            'mode' => ModpackCatalogTable::MODE_CREATE,
             'provider' => $provider->value,
             'query' => $query,
             'minecraft' => $minecraft,
             'loader' => $loader,
             'serverId' => null,
+            'selectedVersion' => is_scalar($selectedVersion) && (string) $selectedVersion !== '' ? (string) $selectedVersion : null,
             'titleStatePath' => $component->resolveRelativeStatePath('mm_project_title'),
+            'versionStatePath' => $component->resolveRelativeStatePath('mm_version'),
             'tableKey' => 'create-modpack-'.hash('sha256', serialize([$provider->value, $query, $minecraft, $loader])),
         ];
     }

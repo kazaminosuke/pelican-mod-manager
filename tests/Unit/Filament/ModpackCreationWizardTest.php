@@ -165,7 +165,6 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_loader', 'neoforge')
             ->assertSee('All the Mods 10')
             ->set('data.mm_project', 'curseforge:925200')
-            ->assertSee('ATM10-8.6.zip')
             ->set('data.mm_version', '9620701')
             ->assertSet('data.egg_id', 7)
             ->assertSet('data.environment.MC_VERSION', '1.21.1');

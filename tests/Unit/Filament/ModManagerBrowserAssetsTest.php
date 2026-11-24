@@ -76,29 +76,26 @@ final class ModManagerBrowserAssetsTest extends TestCase
 
     public function test_catalog_toolbar_uses_column_manager_and_single_view_toggle(): void
     {
-        $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
-        $plugin = (string) file_get_contents(dirname(__DIR__, 3).'/src/ModManagerPlugin.php');
-        $runtime = $this->asset('mod-manager-runtime.js');
+        $root = dirname(__DIR__, 3);
+        $page = (string) file_get_contents($root.'/src/Filament/Server/Pages/ModManagerPage.php');
+        $plugin = (string) file_get_contents($root.'/src/ModManagerPlugin.php');
+        $toggleBlade = (string) file_get_contents($root.'/resources/views/components/catalog-view-toggle.blade.php');
+        $sortBlade = (string) file_get_contents($root.'/resources/views/components/catalog-sort-select.blade.php');
         $css = $this->asset('mod-manager.css');
 
         self::assertStringNotContainsString('mmr-table-action-registration', $page);
         self::assertStringNotContainsString("mountTableAction(\\'catalog_compatibility_override\\')", $plugin);
         self::assertStringNotContainsString("mountAction(\\'catalogCompatibilityOverride\\')", $plugin);
         self::assertStringNotContainsString('data-mmr-compatibility-override', $plugin);
-        self::assertSame(1, substr_count($plugin, 'data-mmr-view-toggle'));
-        self::assertStringNotContainsString('mmr-catalog-toolbar-actions', $plugin);
-        self::assertStringNotContainsString('mmr-catalog-view-toggle', $plugin);
-        self::assertStringNotContainsString('data-mmr-view-mode=', $plugin);
-        self::assertStringContainsString("Action::make('catalogViewToggle')", $plugin);
-        self::assertStringContainsString('->iconButton()', $plugin);
-        self::assertStringContainsString("->icon('tabler-layout-grid')", $plugin);
-        self::assertStringContainsString("->alpineClickHandler('null')", $plugin);
+        self::assertStringContainsString("view('pelican-mod-manager::components.catalog-view-toggle')", $plugin);
+        self::assertStringContainsString("view('pelican-mod-manager::components.catalog-sort-select')", $plugin);
         self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE', $plugin);
         self::assertStringNotContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
-        self::assertStringContainsString("document.querySelector('[data-mmr-view-toggle]')", $runtime);
-        self::assertStringContainsString("const target = view === 'panel' ? 'list' : 'panel'", $runtime);
-        self::assertStringContainsString("toggle.querySelector(':scope > svg.fi-icon')", $runtime);
-        self::assertStringNotContainsString("querySelectorAll('[data-mmr-view-icon]')", $runtime);
+        self::assertStringContainsString('wire:click="toggleCatalogView"', $toggleBlade);
+        self::assertStringContainsString('x-filament::icon-button', $toggleBlade);
+        self::assertStringContainsString('x-filament::input.wrapper', $sortBlade);
+        self::assertStringContainsString('x-filament::input.select', $sortBlade);
+        self::assertStringNotContainsString('.mmr-catalog-sort-select', $css);
         self::assertStringNotContainsString('.mmr-catalog-toolbar-button', $css);
         self::assertStringNotContainsString('.mmr-catalog-toolbar-icon-button', $css);
         self::assertStringNotContainsString('[data-mmr-override-active="true"]{border-color:', $css);
@@ -108,6 +105,8 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('[data-mmr-active-filters="0"] .fi-icon-btn-badge-ctn{display:none;}', $css);
         self::assertStringContainsString("CatalogSelectFilter::make('catalog_version')", $page);
         self::assertStringContainsString("CatalogSelectFilter::make('catalog_loader')", $page);
+        self::assertStringContainsString('->options(fn () => $this->getCatalogVersionFilterOptions())', $page);
+        self::assertStringContainsString('CatalogFields::VERSION_ALL', $page);
         self::assertStringContainsString('->activeCountExcludedValues(fn (): array => $this->catalogDefaultVersionValues())', $page);
         self::assertStringContainsString('->activeCountExcludedValues(fn (): array => $this->catalogDefaultLoaderValues())', $page);
     }
@@ -141,25 +140,32 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString("Section::make(trans('pelican-mod-manager::strings.table.filters.advanced'))", $page);
     }
 
-    public function test_catalog_list_keeps_the_original_table_columns_and_panel_is_css_scoped(): void
+    public function test_catalog_tile_view_uses_filament_stack_split_and_content_grid_without_hardcoded_colors(): void
     {
-        $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+        $root = dirname(__DIR__, 3);
+        $page = (string) file_get_contents($root.'/src/Filament/Server/Pages/ModManagerPage.php');
+        $tileBuilder = (string) file_get_contents($root.'/src/Support/CatalogTileColumns.php');
         $css = $this->asset('mod-manager.css');
 
-        self::assertStringNotContainsString('use Filament\\Tables\\Columns\\Layout\\Split;', $page);
-        self::assertStringNotContainsString('use Filament\\Tables\\Columns\\Layout\\Stack;', $page);
+        // Shared Filament-native Stack/Split/contentGrid tile builder.
+        self::assertStringContainsString('use Filament\\Tables\\Columns\\Layout\\Split;', $tileBuilder);
+        self::assertStringContainsString('use Filament\\Tables\\Columns\\Layout\\Stack;', $tileBuilder);
+        self::assertStringContainsString('CatalogTileColumns::columns(', $page);
+        self::assertStringContainsString('CatalogTileColumns::contentGrid()', $page);
+
+        // Tile layout deliberately omits Minecraft version and loader badges.
+        self::assertStringNotContainsString('minecraft_versions', $tileBuilder);
+        self::assertStringNotContainsString('loaders', $tileBuilder);
+        self::assertStringNotContainsString("TextColumn::make('catalog_compatibility')", $page);
+
+        // List table keeps SWR cells and existing row structure; old CSS grid hacks and hardcoded dark colors are gone.
         self::assertStringContainsString("->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])", $page);
         self::assertStringContainsString('->description(function (array $record): ?string {', $page);
         self::assertSame(4, substr_count($page, '->toggleable()'));
-        self::assertStringNotContainsString('mmr-record-', $page);
-        self::assertStringNotContainsString('.fi-ta-record-content-ctn', $css);
-        self::assertStringContainsString('.mmr-project-icon-cell .fi-ta-image img{display:block;inline-size:4.5cqi;', $css);
-        self::assertStringContainsString('[data-mmr-catalog-view="panel"] .fi-ta-table>tbody{display:grid;', $css);
-        self::assertStringContainsString('@container (min-width:36rem)', $css);
-        self::assertStringContainsString('repeat(2,minmax(0,1fr))', $css);
-        self::assertStringContainsString('@container (min-width:54rem)', $css);
-        self::assertStringContainsString('repeat(3,minmax(0,1fr))', $css);
-        self::assertStringNotContainsString('repeat(auto-fit', $css);
+        self::assertStringNotContainsString('[data-mmr-catalog-view="panel"]', $css);
+        self::assertStringNotContainsString('rgb(17 24 39)', $css);
+        self::assertStringNotContainsString('rgb(31 41 55)', $css);
+        self::assertStringNotContainsString('mmr-compatibility-cell', $css);
     }
 
     public function test_all_manager_assets_have_a_deterministic_compressed_size_budget(): void
@@ -252,21 +258,24 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString('modpack-catalog.css', $plugin);
         self::assertStringNotContainsString('modpack-catalog.css', $assets);
 
-        // Modpack catalog directly reuses Filament's native Table component with zero custom table markup or CSS.
+        // Modpack catalog reuses the exact same scroll container, provider tabs, tile layout, and row actions as ModManagerPage.
         self::assertStringContainsString('implements HasActions, HasSchemas, HasTable', $tableClass);
         self::assertStringContainsString('use InteractsWithTable;', $tableClass);
-        self::assertStringContainsString('ImageColumn::make(\'icon_url\')', $tableClass);
-        self::assertStringContainsString('TextColumn::make(\'title\')', $tableClass);
-        self::assertStringContainsString('TextColumn::make(\'minecraft_versions\')', $tableClass);
-        self::assertStringContainsString('TextColumn::make(\'loaders\')', $tableClass);
+        self::assertStringContainsString('CatalogTileColumns::columns(', $tableClass);
+        self::assertStringContainsString('CatalogTileColumns::contentGrid()', $tableClass);
+        self::assertStringContainsString("CatalogRowAction::compact('versions', 'info')", $tableClass);
+        self::assertStringContainsString("CatalogRowAction::compact('install_latest', 'success')", $tableClass);
         self::assertStringContainsString('->recordUrl(', $tableClass);
-        self::assertStringContainsString('->recordActions([', $tableClass);
+        self::assertStringContainsString('mmr-table-scroll-ctn', $tableBlade);
+        self::assertStringContainsString('x-filament::tabs', $tableBlade);
         self::assertStringContainsString('{{ $this->table }}', $tableBlade);
         self::assertStringContainsString('pelican-mod-manager.modpack-catalog-table', $fieldBlade);
 
-        // Source column is omitted because the provider is already selected.
+        // Source column and external version selects are omitted.
         self::assertStringNotContainsString('strings.table.columns.source', $tableClass);
         self::assertStringNotContainsString("TextColumn::make('source')", $tableClass);
+        self::assertStringNotContainsString("Select::make('mm_version')", $createStep);
+        self::assertStringNotContainsString("Select::make('version')", $serverPage);
 
         // Both new-server creation and existing-server modpack modal share the same Filament field + table component.
         self::assertStringContainsString("->view('pelican-mod-manager::components.modpack-catalog-field')", $createStep);

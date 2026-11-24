@@ -8,90 +8,16 @@
     window.__mmrRuntimeInstalled = true;
 
     const projectIconPlaceholder = document.currentScript?.dataset.mmrProjectIconPlaceholder ?? '';
-    const catalogViewStorageKey = 'pelican-mod-manager.catalog-view';
-    const catalogViewIconPaths = {
-        panel: '<path stroke="none" d="M0 0h24v24H0z" fill="none"></path><path d="M4 4m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path><path d="M4 15m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path><path d="M15 4m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path><path d="M15 15m-1 0a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"></path>',
-        list: '<path stroke="none" d="M0 0h24v24H0z" fill="none"></path><path d="M9 6h11"></path><path d="M9 12h11"></path><path d="M9 18h11"></path><path d="M5 6v.01"></path><path d="M5 12v.01"></path><path d="M5 18v.01"></path>',
-    };
     let headerScrollFrame = null;
-    let catalogViewFrame = null;
-
-    const storedCatalogView = () => {
-        try {
-            return localStorage.getItem(catalogViewStorageKey) === 'panel' ? 'panel' : 'list';
-        } catch (_) {
-            return 'list';
-        }
-    };
-
-    const applyCatalogView = () => {
-        catalogViewFrame = null;
-        const wrapper = document.querySelector('.mmr-table-scroll-ctn');
-        const toggle = document.querySelector('[data-mmr-view-toggle]');
-        // The toggle stays in the DOM on Installed, hidden with x-show.
-        // Panel layout is only for the catalog columns.
-        if (!wrapper || !toggle || getComputedStyle(toggle).display === 'none') {
-            wrapper?.removeAttribute('data-mmr-catalog-view');
-            return;
-        }
-
-        const view = storedCatalogView();
-        const target = view === 'panel' ? 'list' : 'panel';
-        const label = target === 'panel'
-            ? toggle.dataset.mmrViewPanelLabel
-            : toggle.dataset.mmrViewListLabel;
-        wrapper.dataset.mmrCatalogView = view;
-        toggle.dataset.mmrViewTarget = target;
-        toggle.setAttribute('aria-label', label || '');
-        toggle.setAttribute('title', label || '');
-        const icon = toggle.querySelector(':scope > svg.fi-icon');
-        if (icon && icon.dataset.mmrViewIcon !== target) {
-            icon.innerHTML = catalogViewIconPaths[target];
-            icon.dataset.mmrViewIcon = target;
-        }
-    };
-
-    const queueCatalogView = () => {
-        if (catalogViewFrame !== null) {
-            return;
-        }
-        catalogViewFrame = requestAnimationFrame(applyCatalogView);
-    };
-
-    document.addEventListener('click', (event) => {
-        const toggle = event.target instanceof Element ? event.target.closest('[data-mmr-view-toggle]') : null;
-        if (!toggle) {
-            return;
-        }
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        const target = toggle.dataset.mmrViewTarget === 'list' ? 'list' : 'panel';
-        try {
-            localStorage.setItem(catalogViewStorageKey, target);
-        } catch (_) {
-            // A locked-down browser may disable storage; the current view can
-            // still change for this rendered page.
-        }
-        const wrapper = document.querySelector('.mmr-table-scroll-ctn');
-        if (wrapper) {
-            wrapper.dataset.mmrCatalogView = target;
-        }
-        queueCatalogView();
-    }, true);
-
-    new MutationObserver(queueCatalogView).observe(document.documentElement, { childList: true, subtree: true });
-    document.addEventListener('livewire:navigated', queueCatalogView);
-    queueCatalogView();
 
     // Image errors do not bubble, so one capture-phase listener replaces a
-    // large inline onerror attribute on every catalog row and survives morphs.
+    // large inline onerror attribute on every catalog row/tile and survives morphs.
     document.addEventListener('error', (event) => {
         const image = event.target;
 
         if (
             !(image instanceof HTMLImageElement)
-            || !image.matches('.mmr-table-scroll-ctn .mmr-project-icon-cell .fi-ta-image img')
+            || !image.matches('.mmr-table-scroll-ctn .fi-ta-image img')
         ) {
             return;
         }
@@ -136,10 +62,6 @@
         if (headerScrollFrame !== null) {
             cancelAnimationFrame(headerScrollFrame);
             headerScrollFrame = null;
-        }
-        if (catalogViewFrame !== null) {
-            cancelAnimationFrame(catalogViewFrame);
-            catalogViewFrame = null;
         }
     });
 })();

@@ -47,6 +47,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\HtmlString;
@@ -64,6 +65,7 @@ use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Filament\Filters\CatalogSelectFilter;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
@@ -83,6 +85,8 @@ use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
+use Kazaminosuke\ModManager\Support\CatalogFields;
+use Kazaminosuke\ModManager\Support\CatalogTileColumns;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
@@ -199,6 +203,9 @@ class ModManagerPage extends Page implements HasTable
 
     /** @var array<string, string> Browser-visible options for the toolbar select. */
     public array $catalogSortOptions = [];
+
+    /** Shared catalog presentation mode ('list' table or 'panel' tile grid). */
+    public string $catalogView = CatalogTileColumns::VIEW_LIST;
 
     /** Catalog filters are shareable and participate in browser back/forward. */
     #[Url(as: 'filters', history: true, keep: false)]
@@ -607,6 +614,7 @@ class ModManagerPage extends Page implements HasTable
             : session()->get($this->getCatalogSortSessionKey(), 'downloads');
         $this->refreshCatalogSortOptions();
         $this->catalogSort = $this->normalizeCatalogSort($requestedSort);
+        $this->catalogView = CatalogTileColumns::resolveInitialView();
         $this->rejectUnauthorizedInstalledTab();
         $this->normalizeCatalogCompatibilityOverrides();
         $this->configureCatalogCompatibilityOverride();
@@ -616,6 +624,20 @@ class ModManagerPage extends Page implements HasTable
         $this->refreshInstalledOperationState();
 
         $this->catalogWarmPending = true;
+    }
+
+    public function toggleCatalogView(): void
+    {
+        $this->catalogView = $this->catalogView === CatalogTileColumns::VIEW_PANEL
+            ? CatalogTileColumns::VIEW_LIST
+            : CatalogTileColumns::VIEW_PANEL;
+
+        session()->put(CatalogTileColumns::SESSION_KEY, $this->catalogView);
+        Cookie::queue(CatalogTileColumns::COOKIE_KEY, $this->catalogView, 525600);
+        if (isset($this->table)) {
+            $this->table = $this->table($this->makeTable());
+        }
+        $this->flushCachedTableRecords();
     }
 
     public function hydrate(): void
@@ -1072,6 +1094,9 @@ class ModManagerPage extends Page implements HasTable
         $this->tableDeferredFilters = [];
         $this->refreshCatalogSortOptions();
         $this->catalogSort = $this->normalizeCatalogSort($this->catalogSort);
+        if (isset($this->table)) {
+            $this->table = $this->table($this->makeTable());
+        }
         $this->resetTable();
         $this->queueHeaderScroll();
         $this->dispatchCatalogWarm();
@@ -2958,7 +2983,7 @@ class ModManagerPage extends Page implements HasTable
             ->filters([
                 CatalogSelectFilter::make('catalog_version')
                     ->label(trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
-                    ->options(fn () => $this->getCatalogVersionOptions())
+                    ->options(fn () => $this->getCatalogVersionFilterOptions())
                     ->placeholder(fn (): string => $this->catalogVersionFilterPlaceholder())
                     ->multiple()
                     ->default(fn (): array => $this->catalogDefaultVersionValues())
@@ -3131,81 +3156,101 @@ class ModManagerPage extends Page implements HasTable
 
                 return null;
             })
-            ->columns([
-                ImageColumn::make('icon_url')
-                    ->label('')
-                    // ImageColumn omits its <img> when the state is blank. A
-                    // local SVG keeps the common placeholder structure without
-                    // an external request or visible "No image" text.
-                    ->defaultImageUrl(ProjectIconUrl::placeholderDataUri())
-                    ->alignCenter()
-                    // The client-side stale preview updates only values in the
-                    // real Filament cell. Keep this selector independent of
-                    // Filament's generated HTML below the cell.
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])
-                    ->extraImgAttributes(fn (array $record): array => $this->projectIconImgAttributes($record)),
-                TextColumn::make('title')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.title'))
-                    ->searchable()
-                    ->wrap()
-                    ->lineClamp(1)
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'title'])
-                    ->description(function (array $record): ?string {
+            ->columns($this->isCatalogTileView()
+                ? CatalogTileColumns::columns(
+                    iconImgAttributes: fn (array $record): array => $this->projectIconImgAttributes($record),
+                    formatDate: fn ($state): string => $this->formatExternalProjectDate($state),
+                    dateTooltip: function ($state) use ($table): string {
+                        $date = $this->parseExternalProjectDate($state);
+
+                        return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
+                    },
+                    authorUrl: fn (array $record, $state): ?string => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && is_string($state) && $state !== '')
+                        ? "https://modrinth.com/user/$state"
+                        : null,
+                    descriptionFormatter: function (array $record): ?string {
                         if ($record['untracked'] ?? false) {
                             return trans('pelican-mod-manager::strings.badges.untracked');
                         }
 
                         $description = $record['description'] ?? null;
-                        if (!is_string($description)) {
+                        if (!is_string($description) || trim($description) === '') {
                             return null;
                         }
 
                         return $this->truncateProjectDescription($description);
-                    }),
-                TextColumn::make('source')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.source'))
-                    ->badge()
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'source'])
-                    ->formatStateUsing(fn (?string $state) => $this->getSourceLabel($state))
-                    ->color(fn (?string $state) => match ($state) {
-                        'modrinth' => 'success',
-                        'curseforge' => 'warning',
-                        'hangar' => 'info',
-                        'spigot' => 'primary',
-                        'github_releases' => 'gray',
-                        default => 'gray',
-                    })
-                    ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1)
-                    ->toggleable(),
-                TextColumn::make('catalog_compatibility')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.compatibility'))
-                    ->state(fn (): string => $this->catalogCompatibilityLabel())
-                    ->badge()
-                    ->extraHeaderAttributes(['class' => 'mmr-compatibility-header'])
-                    ->extraCellAttributes(['class' => 'mmr-compatibility-cell']),
-                TextColumn::make('author')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.author'))
-                    ->url(fn (array $record, $state) => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && $state) ? "https://modrinth.com/user/$state" : null, true)
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'author'])
-                    ->toggleable(),
-                TextColumn::make('downloads')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
-                    ->numeric()
-                    ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="downloads" aria-hidden="true"></span>'))
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'downloads'])
-                    ->toggleable(),
-                TextColumn::make('date_modified')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
-                    ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="calendar" aria-hidden="true"></span>'))
-                    ->formatStateUsing(fn ($state): string => $this->formatExternalProjectDate($state))
-                    ->tooltip(function ($state) use ($table): string {
-                        $date = $this->parseExternalProjectDate($state);
+                    },
+                )
+                : [
+                    ImageColumn::make('icon_url')
+                        ->label('')
+                        // ImageColumn omits its <img> when the state is blank. A
+                        // local SVG keeps the common placeholder structure without
+                        // an external request or visible "No image" text.
+                        ->defaultImageUrl(ProjectIconUrl::placeholderDataUri())
+                        ->alignCenter()
+                        // The client-side stale preview updates only values in the
+                        // real Filament cell. Keep this selector independent of
+                        // Filament's generated HTML below the cell.
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])
+                        ->extraImgAttributes(fn (array $record): array => $this->projectIconImgAttributes($record)),
+                    TextColumn::make('title')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.title'))
+                        ->searchable()
+                        ->wrap()
+                        ->lineClamp(1)
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'title'])
+                        ->description(function (array $record): ?string {
+                            if ($record['untracked'] ?? false) {
+                                return trans('pelican-mod-manager::strings.badges.untracked');
+                            }
 
-                        return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
-                    })
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'date_modified'])
-                    ->toggleable(),
-            ])
+                            $description = $record['description'] ?? null;
+                            if (!is_string($description)) {
+                                return null;
+                            }
+
+                            return $this->truncateProjectDescription($description);
+                        }),
+                    TextColumn::make('source')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.source'))
+                        ->badge()
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'source'])
+                        ->formatStateUsing(fn (?string $state) => $this->getSourceLabel($state))
+                        ->color(fn (?string $state) => match ($state) {
+                            'modrinth' => 'success',
+                            'curseforge' => 'warning',
+                            'hangar' => 'info',
+                            'spigot' => 'primary',
+                            'github_releases' => 'gray',
+                            default => 'gray',
+                        })
+                        ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1)
+                        ->toggleable(),
+                    TextColumn::make('author')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.author'))
+                        ->url(fn (array $record, $state) => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && $state) ? "https://modrinth.com/user/$state" : null, true)
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'author'])
+                        ->toggleable(),
+                    TextColumn::make('downloads')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
+                        ->numeric()
+                        ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="downloads" aria-hidden="true"></span>'))
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'downloads'])
+                        ->toggleable(),
+                    TextColumn::make('date_modified')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
+                        ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="calendar" aria-hidden="true"></span>'))
+                        ->formatStateUsing(fn ($state): string => $this->formatExternalProjectDate($state))
+                        ->tooltip(function ($state) use ($table): string {
+                            $date = $this->parseExternalProjectDate($state);
+
+                            return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
+                        })
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'date_modified'])
+                        ->toggleable(),
+                ])
+            ->contentGrid(fn (): ?array => $this->isCatalogTileView() ? CatalogTileColumns::contentGrid() : null)
             ->recordUrl(function (array $record) {
                 if (!empty($record['unavailable']) || ($record['untracked'] ?? false)) {
                     return null;
@@ -3655,6 +3700,12 @@ class ModManagerPage extends Page implements HasTable
         };
     }
 
+    protected function isCatalogTileView(): bool
+    {
+        return $this->activeTab !== 'installed'
+            && $this->catalogView === CatalogTileColumns::VIEW_PANEL;
+    }
+
     /** @return array<string, string> */
     protected function getCatalogVersionOptions(): array
     {
@@ -3666,6 +3717,17 @@ class ModManagerPage extends Page implements HasTable
             $source instanceof HangarSource => $source->catalogVersionOptions($this->effectiveHangarPlatform()),
             default => [],
         };
+    }
+
+    /** @return array<string, string> */
+    protected function getCatalogVersionFilterOptions(): array
+    {
+        $options = $this->getCatalogVersionOptions();
+        if ($options === []) {
+            return [];
+        }
+
+        return [CatalogFields::VERSION_ALL => $this->catalogAllFilterPlaceholder()] + $options;
     }
 
     protected function catalogAllFilterPlaceholder(): string
@@ -4264,72 +4326,32 @@ class ModManagerPage extends Page implements HasTable
                 ->modalDescription(trans('pelican-mod-manager::strings.modpack_updates.setup_warning'))
                 ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.modpack_updates.preview'))
                 ->schema([
-                    Grid::make(['default' => 1, 'md' => 2, 'xl' => 4])
-                        ->schema([
-                            TextInput::make('query')
-                                ->label(trans('pelican-mod-manager::strings.modpacks.catalog_search'))
-                                ->maxLength(100)
-                                ->live(debounce: 500)
-                                ->dehydrated(false),
-                            Select::make('provider')
-                                ->label(trans('pelican-mod-manager::strings.table.columns.source'))
-                                ->options(fn (): array => app(ModpackCatalog::class)->archiveProviders())
-                                ->default(function () use ($server): string {
-                                    $provider = explode(':', $this->currentModpackSelection($server) ?? '', 2)[0];
+                    Hidden::make('provider')
+                        ->default(function () use ($server): string {
+                            $provider = explode(':', $this->currentModpackSelection($server) ?? '', 2)[0];
 
-                                    return array_key_exists($provider, app(ModpackCatalog::class)->archiveProviders()) ? $provider : 'modrinth';
-                                })
-                                ->selectablePlaceholder(false)
-                                ->required()
-                                ->live()
-                                ->dehydrated(false)
-                                ->afterStateUpdated(function (Set $set): void {
-                                    $set('project', null);
-                                    $set('project_title', null);
-                                    $set('version', null);
-                                    $set('confirm_server_compatibility', false);
-                                }),
-                            Select::make('minecraft')
-                                ->label(trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
-                                ->options(fn (): array => app(ModpackCatalog::class)->minecraftVersions())
-                                ->searchable()
-                                ->live()
-                                ->dehydrated(false)
-                                ->visible(fn (Get $get): bool => ModpackCatalog::supportsCatalogFilters($get('provider'))),
-                            Select::make('loader')
-                                ->label(trans('pelican-mod-manager::strings.table.filters.loader'))
-                                ->options(fn (): array => app(ModpackCatalog::class)->loaders())
-                                ->live()
-                                ->dehydrated(false)
-                                ->visible(fn (Get $get): bool => ModpackCatalog::supportsCatalogFilters($get('provider'))),
-                        ]),
+                            return array_key_exists($provider, app(ModpackCatalog::class)->archiveProviders()) ? $provider : 'modrinth';
+                        })
+                        ->live()
+                        ->dehydrated(false)
+                        ->afterStateUpdated(function (Set $set): void {
+                            $set('project', null);
+                            $set('project_title', null);
+                            $set('version', null);
+                            $set('confirm_server_compatibility', false);
+                        }),
                     Hidden::make('project_title')
                         ->default(fn () => $this->currentModpackTitle($server))
                         ->dehydrated(false),
                     ViewField::make('project')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.pack'))
+                        ->hiddenLabel()
                         ->view('pelican-mod-manager::components.modpack-catalog-field')
                         ->viewData(fn (Get $get, ViewField $component): array => $this->modpackCatalogViewData($server, $get, $component))
                         ->default(fn () => $this->currentModpackSelection($server))
-                        ->required()
-                        ->afterStateUpdated(function (Set $set, Get $get, mixed $state) use ($server): void {
-                            if (!is_string($state) || $state === '') {
-                                $set('project_title', null);
-                            } else {
-                                $titles = array_column($this->modpackCatalogPage($server, $get)['hits'], 'title', 'key');
-                                if (isset($titles[$state])) {
-                                    $set('project_title', $titles[$state]);
-                                }
-                            }
-                            $set('version', null);
-                            $set('confirm_server_compatibility', false);
-                        }),
-                    Select::make('version')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.version'))
+                        ->required(),
+                    Hidden::make('version')
                         ->required()
                         ->live()
-                        ->visible(fn (Get $get): bool => filled($get('project')))
-                        ->options(fn (Get $get): array => app(ModpackCatalog::class)->versionOptions((string) $get('project')))
                         ->afterStateUpdated(function (Set $set): void {
                             $set('confirm_server_compatibility', false);
                         }),
@@ -4582,51 +4604,60 @@ class ModManagerPage extends Page implements HasTable
         return $name !== '' ? $name : $current['pack_id'];
     }
 
+    public function selectModpackRelease(string $projectKey, string $title, string $versionId): void
+    {
+        $mountedIndex = null;
+        foreach ($this->mountedActions as $index => $action) {
+            if (($action['name'] ?? null) === 'install_modpack') {
+                $mountedIndex = $index;
+                break;
+            }
+        }
+
+        if ($mountedIndex === null) {
+            return;
+        }
+
+        $this->mountedActions[$mountedIndex]['data']['project'] = $projectKey;
+        $this->mountedActions[$mountedIndex]['data']['project_title'] = $title;
+        $this->mountedActions[$mountedIndex]['data']['version'] = $versionId;
+        $this->mountedActions[$mountedIndex]['data']['confirm_server_compatibility'] = false;
+
+        /** @var Server|null $server */
+        $server = Filament::getTenant();
+        if (!$server instanceof Server) {
+            return;
+        }
+
+        try {
+            $preview = app(ModpackInstallCoordinator::class)->preview($server, $projectKey, $versionId)['result'];
+            if ($preview->compatibilityWarning === null) {
+                $this->callMountedAction();
+            }
+        } catch (Throwable) {
+            // Keep the modal open so the operator can inspect the plan or warning.
+        }
+    }
+
     /** @return array<string, mixed> */
     private function modpackCatalogViewData(Server $server, Get $get, ViewField $component): array
     {
         $provider = ModpackProvider::tryFrom((string) $get('provider')) ?? ModpackProvider::Modrinth;
-        $hasFilters = ModpackCatalog::supportsCatalogFilters($provider);
-        $query = (string) $get('query');
-        $minecraft = $hasFilters && is_string($get('minecraft')) && $get('minecraft') !== '' ? $get('minecraft') : null;
-        $loader = $hasFilters && is_string($get('loader')) && $get('loader') !== '' ? $get('loader') : null;
         $serverKey = $server->getKey();
+        $selectedVersion = $get('version');
 
         return [
+            'mode' => ModpackCatalogTable::MODE_SERVER,
             'provider' => $provider->value,
-            'query' => $query,
-            'minecraft' => $minecraft,
-            'loader' => $loader,
+            'query' => '',
+            'minecraft' => null,
+            'loader' => null,
             'serverId' => is_numeric($serverKey) ? (int) $serverKey : null,
+            'selectedVersion' => is_scalar($selectedVersion) && (string) $selectedVersion !== '' ? (string) $selectedVersion : null,
             'titleStatePath' => $component->resolveRelativeStatePath('project_title'),
-            'tableKey' => 'server-modpack-'.hash('sha256', serialize([$serverKey, $provider->value, $query, $minecraft, $loader])),
+            'versionStatePath' => $component->resolveRelativeStatePath('version'),
+            'tableKey' => 'server-modpack-'.hash('sha256', serialize([$serverKey, $provider->value])),
         ];
-    }
-
-    /** @return array{hits: list<array<string, mixed>>, total_hits: int, error: bool} */
-    private function modpackCatalogPage(Server $server, Get $get): array
-    {
-        $provider = ModpackProvider::tryFrom((string) $get('provider')) ?? ModpackProvider::Modrinth;
-        $hasFilters = ModpackCatalog::supportsCatalogFilters($provider);
-        $query = (string) $get('query');
-        $minecraft = $hasFilters && is_string($get('minecraft')) && $get('minecraft') !== '' ? $get('minecraft') : null;
-        $loader = $hasFilters && is_string($get('loader')) && $get('loader') !== '' ? $get('loader') : null;
-        $key = 'modpack-catalog-table:'.hash('sha256', serialize([$server->getKey(), $provider->value, $query, 1, $minecraft, $loader]));
-        $attributes = request()->attributes;
-
-        if (!$attributes->has($key)) {
-            $attributes->set($key, app(ModpackCatalog::class)->searchPage(
-                $server,
-                $provider,
-                $query,
-                1,
-                $minecraft,
-                $loader,
-            ));
-        }
-
-        /** @var array{hits: list<array<string, mixed>>, total_hits: int, error: bool} */
-        return $attributes->get($key);
     }
 
     private function modpackPermission(Server $server): ProjectOperation

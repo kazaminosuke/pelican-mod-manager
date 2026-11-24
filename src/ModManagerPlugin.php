@@ -30,6 +30,7 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
 use Kazaminosuke\ModManager\Filament\Admin\ServerModManagerTab;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
@@ -55,16 +56,32 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
     public function register(Panel $panel): void
     {
         $id = str($panel->getId())->title();
+        $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
 
         if ($panel->getId() === 'admin') {
             EditServer::registerCustomTabs(TabPosition::After, ServerModManagerTab::make());
             if (class_exists(CreateServer::class) && class_exists(StepPosition::class)) {
                 CreateServer::registerCustomSteps(StepPosition::Before, ModpackCreationStep::step());
                 $panel->renderHook(
+                    TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
+                    fn () => view('pelican-mod-manager::components.catalog-view-toggle'),
+                    [ModpackCatalogTable::class],
+                );
+                $panel->renderHook(
                     PanelsRenderHook::HEAD_END,
                     fn () => new HtmlString(
                         '<link rel="preconnect" href="https://cdn.modrinth.com" crossorigin>'
-                        .'<link rel="preconnect" href="https://media.forgecdn.net" crossorigin>',
+                        .'<link rel="preconnect" href="https://media.forgecdn.net" crossorigin>'
+                        .'<link rel="stylesheet" href="'.e(ModManagerAssets::url('mod-manager.css')).'" data-navigate-track>',
+                    ),
+                    [CreateServer::class],
+                );
+                $panel->renderHook(
+                    PanelsRenderHook::BODY_END,
+                    fn () => new HtmlString(
+                        '<script src="'.e(ModManagerAssets::url('mod-manager-runtime.js')).'"'
+                            .' data-mmr-project-icon-placeholder="'.$projectIconPlaceholder.'" defer data-navigate-once></script>'
+                        .'<script src="'.e(ModManagerAssets::url('table-layout.js')).'" defer data-navigate-once></script>',
                     ),
                     [CreateServer::class],
                 );
@@ -99,45 +116,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // that targets this page's own table chrome must list every
         // concrete page class it needs to appear on.
         $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
-        $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
-        $switchToListLabel = trans('pelican-mod-manager::strings.table.view.switch_to_list');
-        $switchToPanelLabel = trans('pelican-mod-manager::strings.table.view.switch_to_panel');
-        $viewToggle = fn (): string => Action::make('catalogViewToggle')
-            ->iconButton()
-            ->color('gray')
-            ->label($switchToPanelLabel)
-            // Use the same Action/icon-button rendering path as Filament's
-            // filter and column-manager triggers. The runtime only swaps the
-            // SVG paths when the client-only view state changes; it never
-            // replaces or repositions the button/icon DOM.
-            ->icon('tabler-layout-grid')
-            // The actual view change is handled by the external runtime so it
-            // can remain client-only and preserve localStorage without a
-            // Livewire request. A non-empty Alpine handler disables the
-            // default mountAction wire click on this standalone Action.
-            ->alpineClickHandler('null')
-            ->extraAttributes([
-                'class' => 'fi-force-enabled',
-                'data-mmr-view-toggle' => true,
-                'data-mmr-view-list-label' => $switchToListLabel,
-                'data-mmr-view-panel-label' => $switchToPanelLabel,
-                'title' => $switchToPanelLabel,
-                'x-cloak' => true,
-                'x-show' => '$wire.activeTab !== \'installed\'',
-            ])
-            ->toHtml();
+        $tableClasses = [...$pageClasses, ModpackCatalogTable::class];
 
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
-            fn () => new HtmlString(
-                '<div class="mmr-catalog-sort-toolbar" x-cloak x-show="$wire.activeTab !== \'installed\'">'
-                .'<label for="mmr-catalog-sort" class="fi-sr-only">'.e(trans('pelican-mod-manager::strings.table.sort.label')).'</label>'
-                .'<select id="mmr-catalog-sort" wire:model.live="catalogSort" class="mmr-catalog-sort-select">'
-                .'<template x-for="([value, label]) in Object.entries($wire.catalogSortOptions || {})" :key="value">'
-                .'<option :value="value" x-text="label"></option>'
-                .'</template>'
-                .'</select></div>',
-            ),
+            fn () => view('pelican-mod-manager::components.catalog-sort-select'),
             $pageClasses,
         );
         // Filament renders this hook inside the same toolbar group, directly
@@ -145,8 +128,8 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // order without CSS ordering or client-side node movement.
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
-            fn () => new HtmlString($viewToggle()),
-            $pageClasses,
+            fn () => view('pelican-mod-manager::components.catalog-view-toggle'),
+            $tableClasses,
         );
         $panel->renderHook(
             PanelsRenderHook::HEAD_END,

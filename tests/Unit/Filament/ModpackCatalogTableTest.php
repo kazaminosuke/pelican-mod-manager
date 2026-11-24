@@ -10,6 +10,8 @@ use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Support\CatalogFields;
+use Kazaminosuke\ModManager\Support\CatalogTileColumns;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -66,9 +68,12 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertSame($expectedUrl, ModpackCatalog::externalProjectUrl($provider, $projectId, $slug, $title));
     }
 
-    public function test_renders_filament_table_with_external_links_metadata_and_separate_select_action(): void
+    public function test_renders_unified_table_with_scroll_container_tabs_plain_metadata_external_links_and_download_actions(): void
     {
         Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([
+                ['version' => '1.21.1', 'version_type' => 'release'],
+            ]),
             'api.modrinth.com/v2/search*' => Http::response([
                 'hits' => [
                     [
@@ -106,11 +111,14 @@ final class ModpackCatalogTableTest extends TestCase
             'selectedKey' => 'modrinth:1KVo5zza',
             'targetStatePath' => 'data.mm_project',
             'titleStatePath' => 'data.mm_project_title',
+            'versionStatePath' => 'data.mm_version',
         ]);
 
         $html = $component->html();
 
-        // Standard Filament Table markup, no source column.
+        // Shared scroll container, provider tabs, Filament table, no source column.
+        self::assertStringContainsString('mmr-table-scroll-ctn', $html);
+        self::assertStringContainsString('fi-tabs', $html);
         self::assertStringContainsString('fi-ta-table', $html);
         self::assertStringNotContainsString('>Source<', $html);
 
@@ -119,25 +127,129 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('href="https://modrinth.com/modpack/simply-optimized"', $html);
         self::assertStringContainsString('target="_blank"', $html);
 
-        // Modpack metadata columns render API values without guessing missing values.
-        self::assertStringContainsString('Fabulously Optimized', $html);
-        self::assertStringContainsString('1.21.1', $html);
+        // Minecraft versions and loaders render as plain text without badges/borders.
+        self::assertStringContainsString('1.21.1, 1.20.4 (+1)', $html);
         self::assertStringContainsString('Fabric', $html);
-        self::assertStringContainsString('1,234,567', $html);
-        self::assertStringContainsString('Simply Optimized', $html);
+        self::assertStringNotContainsString('fi-ta-text-has-badges', $html);
 
-        // Selection state and separate Alpine click handler targeting parent form state.
-        self::assertStringContainsString('Selected', $html);
-        self::assertStringContainsString('Select', $html);
-        self::assertStringContainsString('fi-striped', $html);
-        self::assertStringContainsString('$wire.$parent.$set(', $html);
-        self::assertStringContainsString('modrinth:1KVo5zza', $html);
-        self::assertStringContainsString('modrinth:2AbCdEfG', $html);
+        // Existing Mod catalog compact row actions (versions + install_latest download button) replace old select button.
+        self::assertStringContainsString('data-mmr-swr-row-action="versions"', $html);
+        self::assertStringContainsString('data-mmr-swr-row-action="install_latest"', $html);
+
+        // Switching to tile view uses Filament's contentGrid (Stack/Split) and omits Minecraft version and loader from tiles.
+        $component->call('toggleCatalogView');
+        self::assertSame(CatalogTileColumns::VIEW_PANEL, $component->get('catalogView'));
+        $tileHtml = $component->html();
+        self::assertStringContainsString('fi-ta-content-grid', $tileHtml);
+        self::assertStringContainsString('fi-ta-split', $tileHtml);
+        self::assertStringContainsString('fi-ta-stack', $tileHtml);
+        self::assertStringContainsString('Fabulously Optimized', $tileHtml);
+        self::assertStringNotContainsString('1.21.1, 1.20.4 (+1)', $tileHtml);
+    }
+
+    public function test_download_action_and_versions_modal_advance_to_next_step(): void
+    {
+        Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([
+                ['version' => '1.21.1', 'version_type' => 'release'],
+            ]),
+            'api.curseforge.com/v1/mods/search*' => Http::response([
+                'data' => [[
+                    'id' => 925200,
+                    'slug' => 'all-the-mods-10',
+                    'name' => 'All the Mods 10',
+                    'summary' => 'Kitchen sink pack.',
+                    'downloadCount' => 500000,
+                    'latestFilesIndexes' => [['gameVersion' => '1.21.1', 'modLoader' => 6]],
+                ]],
+                'pagination' => ['totalCount' => 1],
+            ]),
+            'api.curseforge.com/v1/mods/925200/files?*' => Http::response([
+                'data' => [[
+                    'id' => 9620701,
+                    'fileName' => 'ATM10-8.6.zip',
+                    'displayName' => 'ATM10-8.6.zip',
+                    'releaseType' => 1,
+                    'downloadCount' => 12345,
+                    'fileDate' => '2026-10-01T12:00:00Z',
+                    'gameVersions' => ['1.21.1', 'NeoForge'],
+                ]],
+            ]),
+        ]);
+
+        // Create mode: install_latest sets parent project + version and advances Filament Wizard step.
+        $create = Livewire::test(ModpackCatalogTable::class, [
+            'mode' => ModpackCatalogTable::MODE_CREATE,
+            'provider' => ModpackProvider::CurseForge->value,
+            'query' => 'All the Mods',
+            'targetStatePath' => 'data.mm_project',
+            'titleStatePath' => 'data.mm_project_title',
+            'versionStatePath' => 'data.mm_version',
+        ]);
+
+        // Versions modal lists releases like the Mod catalog.
+        $create->mountTableAction('versions', 'curseforge:925200');
+        $modalHtml = $create->getMountedActionModalHtml();
+        self::assertStringContainsString('ATM10-8.6.zip', $modalHtml);
+        self::assertStringContainsString('install_version_0', $modalHtml);
+        $create->unmountAction();
+
+        // Clicking install_latest selects the latest release and triggers requestNextStep().
+        $create->callTableAction('install_latest', 'curseforge:925200');
+        $jsCalls = $create->effects['xjs'] ?? [];
+        $joinedJs = implode("\n", array_map(static fn (mixed $item): string => is_array($item) ? (string) ($item['expression'] ?? '') : (string) $item, $jsCalls));
+        self::assertStringContainsString('curseforge:925200', $joinedJs);
+        self::assertStringContainsString('9620701', $joinedJs);
+        self::assertStringContainsString('requestNextStep', $joinedJs);
+
+        // Server mode: install_latest calls parent ModManagerPage::selectModpackRelease().
+        $server = Livewire::test(ModpackCatalogTable::class, [
+            'mode' => ModpackCatalogTable::MODE_SERVER,
+            'provider' => ModpackProvider::CurseForge->value,
+            'query' => 'All the Mods',
+            'targetStatePath' => 'mountedActions.0.data.project',
+            'titleStatePath' => 'mountedActions.0.data.project_title',
+            'versionStatePath' => 'mountedActions.0.data.version',
+        ]);
+        $server->callTableAction('install_latest', 'curseforge:925200');
+        $serverJsCalls = $server->effects['xjs'] ?? [];
+        $serverJoinedJs = implode("\n", array_map(static fn (mixed $item): string => is_array($item) ? (string) ($item['expression'] ?? '') : (string) $item, $serverJsCalls));
+        self::assertStringContainsString('selectModpackRelease', $serverJoinedJs);
+        self::assertStringContainsString('9620701', $serverJoinedJs);
+    }
+
+    public function test_explicit_all_version_filter_omits_minecraft_version_constraint(): void
+    {
+        Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([
+                ['version' => '1.21.1', 'version_type' => 'release'],
+            ]),
+            'api.modrinth.com/v2/search*' => Http::response([
+                'hits' => [],
+                'total_hits' => 0,
+            ]),
+        ]);
+
+        Livewire::test(ModpackCatalogTable::class, [
+            'provider' => ModpackProvider::Modrinth->value,
+            'minecraft' => CatalogFields::VERSION_ALL,
+            'targetStatePath' => 'data.mm_project',
+        ]);
+
+        Http::assertSent(static function ($request): bool {
+            if (!str_contains($request->url(), 'api.modrinth.com/v2/search')) {
+                return false;
+            }
+
+            return !str_contains($request->url(), 'versions%3A')
+                && !str_contains($request->url(), 'versions:');
+        });
     }
 
     public function test_renders_external_links_for_curseforge_ftb_technic_and_atlauncher(): void
     {
         Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([]),
             'api.curseforge.com/v1/mods/search*' => Http::response([
                 'data' => [[
                     'id' => 925200,
@@ -195,6 +307,7 @@ final class ModpackCatalogTableTest extends TestCase
     public function test_renders_appropriate_empty_state_messages(): void
     {
         Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([]),
             'api.modrinth.com/v2/search*' => Http::response(['hits' => [], 'total_hits' => 0]),
             'api.feed-the-beast.com/v1/modpacks/public/modpack/search/*' => Http::response([], 503),
         ]);
