@@ -60,28 +60,22 @@
 
 上記の代替 ID 検索と空ファイルの直接配置は、cosmii02/pelican-modpackmanager（MIT、Copyright (c) 2026 cosmii02）の設計を参考に、このプラグインの既存処理を使って実装しました。[参照元のライセンス](https://github.com/cosmii02/pelican-modpackmanager/blob/ddc2e364427c703e565b59f9533465e6b1090543/LICENSE)
 
-## ローダー導入とキューの切り分け
+## Mod Manager による新規サーバーの導入
 
-新規サーバーのアーカイブ導入では、Wizard が Egg の起動コマンド、変数、Java イメージを選び、`skip_scripts=0`、`start_on_completion=0` で Pelican に作成を渡します。サーバーの作成後、Mod Manager は Modrinth・CurseForge・FTB のパック導入をキューに登録します。Pelican が `installing` の間はジョブを30秒後に戻し、20分を超えるか `install_failed` または `reinstall_failed` になれば、パックを書き込まず `server_install_unfinished` で終了します。ジョブが進んだ場合もローダーの起動ファイルを Wings から読み取り、照合後にパックを配置します。Technic の専用 Egg など、明示的な委任経路では Egg がパックも配置します。[Wizard](../src/Filament/Admin/ModpackCreationStep.php) · [キュー登録](../src/Filament/Admin/QueueCreatedServerModpack.php) · [ジョブ](../src/Jobs/InstallModpack.php)
+Wizard で Minecraft、ローダービルド、Java イメージを固定します。Egg は実行時設定に使い、起動コマンドは Mod Manager が生成します。Wings がサーバーを作成する前に導入計画を記録する Pelican の `beforeDaemon` フックが必要です。Panel v1.0.0-rc.4 にはこのフックがあります。そのフックのない Panel ではアーカイブ方式を選べません。通常作成と Technic など明示的に Egg へ委任する方式は標準の作成処理に渡します。[Wizard](../src/Filament/Admin/ModpackCreationStep.php) · [Panel の作成フック](https://github.com/pelican-dev/panel/blob/v1.0.0-rc.4/app/Services/Servers/ServerCreationService.php#L47-L57)
 
-| ローダー | 公式 Egg の担当 | Mod Manager の照合 |
+Modpack 専用サーバーには `skip_scripts=true` を保存します。認証済みの Wings が導入対象のサーバー設定を取得したときだけ、一時インストールコンテナの実行を許可します。インストール API はそのサーバーに対して Mod Manager のスクリプトを返します。ローダーの結果は Mod Manager が記録し、パックの検証・配置まで成功した時点でファイル台帳と Panel の完了状態をまとめて保存します。運用時は導入が終わるまでプラグインを有効に保ちます。追加の常駐プロセスは不要です。[Wings のインストール処理](https://github.com/pelican-dev/wings/blob/81152690d2da31b8004f257e0df725e288510a0b/server/install.go#L54-L162) · [状態管理](../src/Services/ModpackProvisioning.php)
+
+| ローダー | インストーラー | 主な確認対象 |
 | --- | --- | --- |
-| Fabric | `MC_VERSION` と `LOADER_VERSION` で Fabric Installer を実行し、Minecraft 本体も取得 | 起動 JAR、Loader、Intermediary、Minecraft 本体。古い Loader では起動 JAR 内のビルド情報を確認 |
-| Forge | `FORGE_VERSION` のインストーラーを Maven から取得して実行。旧版は起動 JAR、1.17 以降は `unix_args.txt` とライブラリを配置 | 旧版の起動 JAR と固定ビルド、または `unix_args.txt` と参照先の Forge JAR |
-| NeoForge | `NEOFORGE_VERSION` のインストーラーを実行し、`unix_args.txt` とライブラリを配置。1.20.1 は `net/neoforged/forge` 系 | `unix_args.txt` と参照先の NeoForge JAR、固定ビルド |
-| Quilt | `MC_VERSION` で Quilt Installer を実行し、起動 JAR と Minecraft 本体を配置。公式 Egg に固定 Loader 変数がない | Quilt の起動 JAR。パックがビルドを固定する場合は、`QUILT_VERSION` を持つ適合 Egg とビルドを示す起動 JAR または依存 JAR が必要 |
+| Fabric | 公式 Fabric Installer 1.1.2、SHA-256 固定 | 起動 JAR、Loader、Intermediary、Minecraft 本体 |
+| Forge | 固定ビルドの Forge Maven 配布物 | 旧版は起動 JAR、1.17 以降は `unix_args.txt` と参照 JAR |
+| NeoForge | 固定ビルドの NeoForge Maven 配布物 | `unix_args.txt` と参照 JAR。1.20.1 は `net/neoforged/forge` 系 |
+| Quilt | 公式 Quilt Installer 0.15.1、SHA-256 固定 | 起動 JAR と固定ビルド。公式 Egg にロード用の版変数がなくても導入可能 |
 
-既存サーバーのプレビュー・適用も同じランタイム照合を行います。対象版が異なるローダービルドを要求する場合は、既存ランタイムの準備が済むまで受け付けません。[ランタイム検証](../src/Services/ModpackRuntime.php) · [既存サーバーの選択条件](../src/Services/ModpackInstallCoordinator.php) · [公式 Egg](https://github.com/pelican-eggs/minecraft/tree/c6f2262eb351054d1be44d3f6a3a605ae163d682/java)
+Mod Manager は認証済みの完了通知を確認してから既存ジョブで Modrinth・CurseForge・FTB のパックを配置します。失敗時はサーバーを失敗状態にし、旧方式で作成時に予約されたジョブは更新後の作り直しを案内します。既存サーバーの差分更新は対応する検証済みランタイムを使います。異なるローダー・ビルドへ既存サーバーを切り替えるには、ランタイムの交換もバックアップと復旧の対象にする必要があります。[固定版の選択](../src/Services/ModpackLoaderInstaller.php) · [配置と検証](../src/Jobs/InstallModpack.php) · [既存サーバーの選択条件](../src/Services/ModpackInstallCoordinator.php)
 
-既存の FTB テストの配布 API・Wings の代替を使い、SQLite の実キューと `mod-manager:process-jobs` を通して照合しました。Pelican 側が `installing` の間はファイル取得を始めず、状態解除後にキューを処理してパックのハッシュを照合し、完了を記録しました。`install_failed` に遷移したケースでは配布 API の取得も Wings への書き込みもなく、ジョブは `server_install_unfinished` で終わりました。実機の Egg 失敗原因は下記のログが必要です。
-
-比較先は組み立てたパックを先に配置し、対応 Egg に切り替え、`skip_scripts` が有効なら解除して Pelican 標準の再インストールを呼びます。再インストールを最大15分待ち、ランタイムを確認します。例外は同梱ランチャーを持つ CurseForge の専用パックです。そちらは起動コマンドを `start.sh` などに変更し、ランチャーが初回起動時にローダーを導入する場合も完了として記録します。固定 Quilt ビルド向けには共有 Egg の変数とスクリプトを編集します。[比較先のローダー選択・配置](https://github.com/cosmii02/pelican-modpackmanager/blob/ddc2e364427c703e565b59f9533465e6b1090543/src/Services/ModpackInstallService.php#L1554-L1858) · [Quilt の設定](https://github.com/cosmii02/pelican-modpackmanager/blob/ddc2e364427c703e565b59f9533465e6b1090543/src/Services/ModpackInstallService.php#L2665-L2730)
-
-### 標準機能で取れる対応
-
-- **公式 Egg で先にランタイムを用意する**。現行の互換性を保てます。実機で Egg が失敗している場合は、まず該当サーバーのインストールログで原因を確認します。ローダー準備済みの既存サーバーでは、そのまま Mod Manager のプレビュー・適用に進めます。
-- **完成済みランタイムの配布物がある版に限り、Wings のファイル転送・バックアップ復元を使う**。起動前に必要な全ファイルと固定版の照合ができれば、インストールスクリプトを使わない候補になります。現行の専用 ZIP はローダーや起動スクリプトを配置対象から外すため、対応するには版ごとの成果物確認と配置条件の追加が必要です。Fabric の公式サーバーランチャーも不足ファイルを起動時に導入するため、JAR の配置だけで導入完了とは判定できません。[専用 ZIP の配置対象](../src/Support/Modpacks/ModpackArchive.php) · [Fabric ランチャーの処理](https://github.com/FabricMC/fabric-installer/blob/6e7d1acd6a951a19a323060ac955f5e7bc51e3ce/src/main/java/net/fabricmc/installer/ServerLauncher.java#L76-L132)
-- **Pelican の状態管理はスクリプトスキップとは別に確認する**。`skip_scripts` は Wings に渡されますが、Wings はスキップ時も成功を報告し、Panel は `status` を解除して `installed_at` を設定します。標準のバックアップ復元はその後に別状態へ移ります。パック完了まで `installing` の維持が必要な経路では、標準スキップだけでは条件を満たせません。Wings の標準 API に Egg スクリプトを使わず任意の Java インストーラーを単発実行する操作はありません。[Wings の完了通知](https://github.com/pelican-dev/wings/blob/81152690d2da31b8004f257e0df725e288510a0b/server/install.go#L54-L95) · [Panel の状態更新](https://github.com/pelican-dev/panel/blob/f880625bef01de8c87766c319cae2bf483d25886/app/Http/Controllers/Api/Remote/Servers/ServerInstallController.php#L40-L66) · [Wings の API](https://github.com/pelican-dev/wings/blob/81152690d2da31b8004f257e0df725e288510a0b/router/router.go#L146-L185)
+比較先の pelican-modpackmanager は、一般のパックではファイルを配置した後に Egg の再インストールを呼び出し、終了を待ってローダーを確認します。同梱ランチャー付きの一部の CurseForge 専用パックでは初回起動時の導入を許容し、固定 Quilt 版への対応では共有 Egg を更新します。[比較先の配置と再インストール](https://github.com/cosmii02/pelican-modpackmanager/blob/ddc2e364427c703e565b59f9533465e6b1090543/src/Services/ModpackInstallService.php#L1554-L1858) · [比較先の Quilt 設定](https://github.com/cosmii02/pelican-modpackmanager/blob/ddc2e364427c703e565b59f9533465e6b1090543/src/Services/ModpackInstallService.php#L2665-L2730)
 
 ### 実機ログ
 

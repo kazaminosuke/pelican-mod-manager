@@ -4,9 +4,9 @@ PR #2の `84f21de` と、同じツリーを持つ名義修正後の `fff3d31` �
 
 ## EggとMod Managerの役割
 
-- **Modrinth・CurseForge**はローダーEggでMinecraftとローダーを準備し、Mod Managerが選択した配布物を一時配置して検証します。作成時の自動起動は無効です。PelicanがEggのインストール終了を返した後で、管理ジョブが起動JARまたは `unix_args.txt` と、そこから参照されるローダーを確認します。版を固定できるEgg変数が必要です。専用Server Packは子ZIPの `variables.txt` または `manifest.json` を優先し、ZIP展開時に重複と矛盾も確認します。
+- **Modrinth・CurseForge**の新規サーバーは、Mod Manager が固定版のローダーを Wings の一時コンテナで導入し、配布物を一時配置して検証します。起動 JAR または `unix_args.txt` と参照先を確認し、パックの配置まで成功した時点で Pelican のインストール完了を記録します。作成時の自動起動は無効です。専用Server Packは子ZIPの `variables.txt` または `manifest.json` を優先し、ZIP展開時に重複と矛盾も確認します。
 - **Technic**は公式配布物と専用Eggを固定できる版を専用Eggで導入します。専用スクリプトによる導入は差分更新の対象外です。
-- **FTB**は対応する公開リリースを作成・更新できます。WizardでパックIDとリリースIDを固定し、Minecraft・ローダーを準備するEggを選びます。Mod ManagerがFTB公式APIのファイル一覧を取得し、クライアント専用ファイルを除いた公開ファイルをWingsに一時配置します。配置先、サイズ、配布元のハッシュ、最終配置のSHA-256を検証し、全件が確認できてから導入済みとして記録します。
+- **FTB**は対応する公開リリースを作成・更新できます。Wizard でパック ID とリリース ID を固定し、実行環境に使う Egg を選びます。新規サーバーの Minecraft とローダーは Mod Manager が準備します。Mod ManagerがFTB公式APIのファイル一覧を取得し、クライアント専用ファイルを除いた公開ファイルをWingsに一時配置します。配置先、サイズ、配布元のハッシュ、最終配置のSHA-256を検証し、全件が確認できてから導入済みとして記録します。
 - **ATLauncher**は版の閲覧に対応します。
 
 ### FTBの対象と確認手順
