@@ -350,6 +350,26 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             }
         }
 
+        $alternateId = (int) ($release['alternateFileId'] ?? 0);
+        $releaseId = (int) $release['id'];
+        if ($alternateId > 0 && $alternateId !== $releaseId && $alternateId !== $linkedId) {
+            try {
+                $alternate = $this->findModpackFile($projectId, $alternateId);
+                if ($alternate !== null
+                    && (string) ($alternate['modId'] ?? '') === $projectId
+                    && ($alternate['isServerPack'] ?? false) === true
+                    && in_array((int) ($alternate['parentProjectFileId'] ?? 0), [0, $releaseId], true)) {
+                    $hasServerPack = true;
+                    $download = $this->modpackReleaseDownload($projectId, $release, $alternate, true);
+                    if ($download !== null) {
+                        return $download;
+                    }
+                }
+            } catch (Exception $exception) {
+                report($exception);
+            }
+        }
+
         $download = $this->modpackReleaseDownload($projectId, $release, $release, false);
 
         return $download === null ? null : array_replace($download, ['has_server_pack' => $hasServerPack]);

@@ -29,6 +29,7 @@ use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class ModpackSearchTest extends TestCase
@@ -293,6 +294,45 @@ final class ModpackSearchTest extends TestCase
         self::assertTrue($download['has_server_pack']);
         self::assertFalse($download['server_pack']);
         self::assertNull($source->modpackDownloadById('10', '6'));
+    }
+
+    #[DataProvider('curseForgeAlternateFiles')]
+    public function test_curseforge_alternate_file_is_used_only_for_a_matching_server_pack(array $alternate, bool $serverPack): void
+    {
+        $clientUrl = 'https://edge.forgecdn.net/client.zip';
+        $serverUrl = 'https://edge.forgecdn.net/server.zip';
+        $release = [
+            'id' => 5, 'modId' => 10, 'fileName' => 'client.zip', 'downloadUrl' => $clientUrl, 'alternateFileId' => 9,
+        ];
+        Http::fake([
+            'api.curseforge.com/v1/mods/10/files/5' => Http::response(['data' => $release]),
+            'api.curseforge.com/v1/mods/10/files/9' => Http::response(['data' => [
+                ...$alternate, 'id' => 9, 'fileName' => 'server.zip', 'downloadUrl' => $serverUrl,
+            ]]),
+            'api.curseforge.com/v1/mods/10/files?*' => Http::response(['data' => [$release]]),
+        ]);
+        $source = new CurseForgeSource($this->cache(new CapturingExecutor()));
+        $server = $this->server();
+        CatalogCompatibilityOverride::set($server, '1.21.1', 'fabric');
+
+        foreach ([$source->modpackDownloadById('10', '5'), $source->latestModpackDownload($server, '10')] as $download) {
+            self::assertSame('5', $download['version_id']);
+            self::assertSame($serverPack ? '9' : '5', $download['artifact_id']);
+            self::assertSame($serverPack ? $serverUrl : $clientUrl, $download['url']);
+            self::assertSame($serverPack, $download['server_pack']);
+            self::assertSame($serverPack, $download['has_server_pack']);
+            self::assertSame($clientUrl, $download['manifest_url']);
+        }
+    }
+
+    public static function curseForgeAlternateFiles(): array
+    {
+        return [
+            'explicit server pack' => [['modId' => 10, 'isServerPack' => true], true],
+            'client pack' => [['modId' => 10, 'isServerPack' => false], false],
+            'different project' => [['modId' => 11, 'isServerPack' => true], false],
+            'different release' => [['modId' => 10, 'isServerPack' => true, 'parentProjectFileId' => 8], false],
+        ];
     }
 
     public function test_only_an_official_download_url_can_supply_a_missing_server_pack_url(): void
