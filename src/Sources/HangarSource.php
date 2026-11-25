@@ -174,9 +174,9 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         }
 
         $hasVersionList = array_key_exists('versions', $filters);
-        $requestedVersions = $this->versionFilterValues(
-            $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []),
-        );
+        $rawVersions = $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
         $explicitVersion = $hasVersionList
             ? (count($requestedVersions) === 1 ? $requestedVersions[0] : null)
             : ($requestedVersions[0] ?? null);
@@ -186,7 +186,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         // Minecraft version across an explicit platform change creates a
         // contradictory query. An explicitly selected version remains
         // authoritative for the selected platform.
-        $automaticVersion = !$hasVersionList || $requestedVersions === []
+        $automaticVersion = !$disableVersionFilter && (!$hasVersionList || $requestedVersions === [])
             ? (($selectedPlatform === '' || $selectedPlatform === $automaticPlatform)
             ? $this->automaticPlatformVersion($server, $platform)
             : null)
@@ -603,21 +603,288 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             ]);
         }
 
-        if (count($specsByHash) > 1) {
-            $this->sourceCache->peekMany($specsByHash);
-        }
+        $peeked = $this->sourceCache->peekMany($specsByHash);
+        $pendingSpecs = [];
+        $hadFailure = false;
 
         foreach ($specsByHash as $hash => $spec) {
-            $entry = $authoritative
-                ? $this->sourceCache->swrRequired($spec, CacheProfile::HashMatch)
-                : $this->sourceCache->swr($spec, CacheProfile::HashMatch);
+            $probe = $peeked[$hash] ?? null;
 
-            if (is_array($entry)) {
-                $results[$hash] = $entry;
+            if (is_array($probe) && $probe['hit']) {
+                if (is_array($probe['data'])) {
+                    $results[$hash] = $probe['data'];
+                }
+
+                continue;
             }
+
+            if (is_array($probe) && $probe['retry_delayed']) {
+                $hadFailure = true;
+
+                continue;
+            }
+
+            $pendingSpecs[$hash] = $spec;
+        }
+
+        if (count($pendingSpecs) === 1) {
+            $hash = array_key_first($pendingSpecs);
+            $spec = $pendingSpecs[$hash];
+
+            try {
+                $entry = $authoritative
+                    ? $this->sourceCache->swrRequired($spec, CacheProfile::HashMatch)
+                    : $this->sourceCache->swr($spec, CacheProfile::HashMatch);
+
+                if (is_array($entry)) {
+                    $results[$hash] = $entry;
+                }
+            } catch (Throwable $exception) {
+                if ($authoritative && $results !== []) {
+                    throw new PartialSourceFetchException($exception->getMessage(), $results, previous: $exception);
+                }
+
+                throw $exception;
+            }
+
+            if ($authoritative && $hadFailure) {
+                if ($results !== []) {
+                    throw new PartialSourceFetchException('Hangar hash lookup had retry-delayed hashes.', $results);
+                }
+
+                throw new Exception('Hangar hash lookup is temporarily unavailable.');
+            }
+
+            return $results;
+        }
+
+        if ($pendingSpecs !== []) {
+            [$resolved, $firstFailure] = $this->fetchHashMatchesWithPool($pendingSpecs, $authoritative);
+            $results = array_replace($results, $resolved);
+
+            if ($firstFailure !== null) {
+                $hadFailure = true;
+            }
+
+            if ($authoritative && $hadFailure) {
+                if ($results !== []) {
+                    throw new PartialSourceFetchException(
+                        $firstFailure?->getMessage() ?? 'Hangar hash lookup completed with partial failures.',
+                        $results,
+                        previous: $firstFailure,
+                    );
+                }
+
+                throw $firstFailure ?? new Exception('Hangar hash lookup is temporarily unavailable.');
+            }
+
+            return $results;
+        }
+
+        if ($authoritative && $hadFailure) {
+            if ($results !== []) {
+                throw new PartialSourceFetchException('Hangar hash lookup had retry-delayed hashes.', $results);
+            }
+
+            throw new Exception('Hangar hash lookup is temporarily unavailable.');
         }
 
         return $results;
+    }
+
+    /**
+     * Resolve multiple cold Hangar SHA-256 hashes with bounded concurrency and
+     * prime each matched project directly from the /versions/hash payload so
+     * follow-up project lookups avoid redundant round trips.
+     *
+     * @param  array<string, SourceFetchSpec>  $pendingSpecs
+     * @return array{0: array<string, array<string, mixed>>, 1: ?Throwable}
+     */
+    protected function fetchHashMatchesWithPool(array $pendingSpecs, bool $authoritative): array
+    {
+        $timeoutSeconds = $authoritative
+            ? CacheProfile::HashMatch->backgroundTimeoutSeconds()
+            : CacheProfile::HashMatch->inlineBudgetSeconds();
+        $perBatchTimeout = max(1.0, $timeoutSeconds);
+        $headers = $this->authHeaders();
+
+        $matchedProjectsByHash = [];
+        $projectsToPrime = [];
+        $failedSpecs = [];
+        $firstFailure = null;
+
+        foreach (array_chunk($pendingSpecs, self::LATEST_VERSION_POOL_SIZE, true) as $chunk) {
+            $aliases = [];
+
+            try {
+                $responses = Http::pool(function (Pool $pool) use ($chunk, $perBatchTimeout, $headers, &$aliases) {
+                    $poolRequests = [];
+                    $index = 0;
+
+                    foreach ($chunk as $hash => $_spec) {
+                        $alias = "hangar_hash_{$index}";
+                        $index++;
+                        $aliases[$alias] = $hash;
+                        $poolRequests[] = $pool->as($alias)
+                            ->asJson()
+                            ->withHeaders($headers)
+                            ->timeout($perBatchTimeout)
+                            ->connectTimeout(min(3.0, $perBatchTimeout))
+                            ->get(self::BASE_URL."/versions/hash/{$hash}");
+                    }
+
+                    return $poolRequests;
+                });
+            } catch (Throwable $exception) {
+                report($exception);
+                $firstFailure ??= $exception;
+                array_push($failedSpecs, ...array_values($chunk));
+
+                continue;
+            }
+
+            foreach ($aliases as $alias => $hash) {
+                $response = $responses[$alias] ?? null;
+
+                if ($response instanceof Response) {
+                    if ($response->status() === 404) {
+                        continue;
+                    }
+
+                    if ($response->successful()) {
+                        $project = $response->json();
+
+                        if (is_array($project) && isset($project['id'])) {
+                            $projectId = (string) $project['id'];
+                            $matchedProjectsByHash[$hash] = $projectId;
+                            if (isset($project['name']) || isset($project['namespace'])) {
+                                $projectsToPrime[$projectId] = $this->normalizeProject($project);
+                            }
+
+                            continue;
+                        }
+                    }
+
+                    $exception = $response->toException() ?? new Exception("Hangar hash lookup failed for [$hash].");
+                } elseif ($response instanceof Throwable) {
+                    $exception = $response;
+                } else {
+                    $exception = new Exception("Hangar hash lookup failed for [$hash].");
+                }
+
+                report($exception);
+                $firstFailure ??= $exception;
+                $failedSpecs[] = $chunk[$hash];
+            }
+        }
+
+        if ($projectsToPrime !== []) {
+            $this->primeProjects($projectsToPrime);
+        }
+
+        $resolved = [];
+        $primeEntries = [];
+
+        if ($matchedProjectsByHash !== []) {
+            $hashesByProjectId = [];
+            foreach ($matchedProjectsByHash as $hash => $projectId) {
+                $hashesByProjectId[$projectId][] = $hash;
+            }
+
+            foreach (array_chunk(array_keys($hashesByProjectId), self::LATEST_VERSION_POOL_SIZE) as $projectChunk) {
+                $aliases = [];
+
+                try {
+                    $responses = Http::pool(function (Pool $pool) use ($projectChunk, $perBatchTimeout, $headers, &$aliases) {
+                        $poolRequests = [];
+
+                        foreach ($projectChunk as $index => $projectId) {
+                            $alias = "hangar_hash_ver_{$index}";
+                            $aliases[$alias] = $projectId;
+                            $poolRequests[] = $pool->as($alias)
+                                ->asJson()
+                                ->withHeaders($headers)
+                                ->timeout($perBatchTimeout)
+                                ->connectTimeout(min(3.0, $perBatchTimeout))
+                                ->get(self::BASE_URL."/projects/{$projectId}/versions", [
+                                    'limit' => self::PAGE_SIZE,
+                                    'offset' => 0,
+                                ]);
+                        }
+
+                        return $poolRequests;
+                    });
+                } catch (Throwable $exception) {
+                    report($exception);
+                    $firstFailure ??= $exception;
+                    foreach ($projectChunk as $projectId) {
+                        foreach ($hashesByProjectId[$projectId] as $hash) {
+                            $failedSpecs[] = $pendingSpecs[$hash];
+                        }
+                    }
+
+                    continue;
+                }
+
+                foreach ($aliases as $alias => $projectId) {
+                    $response = $responses[$alias] ?? null;
+
+                    if (!$response instanceof Response || !$response->successful()) {
+                        $exception = $response instanceof Response
+                            ? ($response->toException() ?? new Exception("Hangar versions lookup failed for [$projectId]."))
+                            : ($response instanceof Throwable ? $response : new Exception("Hangar versions lookup failed for [$projectId]."));
+                        report($exception);
+                        $firstFailure ??= $exception;
+                        foreach ($hashesByProjectId[$projectId] as $hash) {
+                            $failedSpecs[] = $pendingSpecs[$hash];
+                        }
+
+                        continue;
+                    }
+
+                    $payload = $response->json();
+                    $versions = is_array($payload) && is_array($payload['result'] ?? null) ? $payload['result'] : [];
+                    $unmatchedHashes = [];
+
+                    foreach ($hashesByProjectId[$projectId] as $hash) {
+                        $entry = $this->matchVersionEntryInPage($versions, $projectId, $hash);
+                        if ($entry !== null) {
+                            $resolved[$hash] = $entry;
+                            $primeEntries[] = ['spec' => $pendingSpecs[$hash], 'data' => $entry];
+                        } else {
+                            $unmatchedHashes[] = $hash;
+                        }
+                    }
+
+                    if ($unmatchedHashes !== [] && count($versions) >= self::PAGE_SIZE) {
+                        $deadline = microtime(true) + $perBatchTimeout;
+                        foreach ($unmatchedHashes as $hash) {
+                            try {
+                                $entry = $this->fetchVersionEntryByHash($projectId, $hash, $deadline, startPage: 1);
+                                if ($entry !== null) {
+                                    $resolved[$hash] = $entry;
+                                    $primeEntries[] = ['spec' => $pendingSpecs[$hash], 'data' => $entry];
+                                }
+                            } catch (Throwable $exception) {
+                                report($exception);
+                                $firstFailure ??= $exception;
+                                $failedSpecs[] = $pendingSpecs[$hash];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($primeEntries !== []) {
+            $this->sourceCache->primeMany($primeEntries, CacheProfile::HashMatch);
+        }
+
+        if ($failedSpecs !== []) {
+            $this->sourceCache->markRetryDelayedMany($failedSpecs, CacheProfile::HashMatch);
+        }
+
+        return [$resolved, $firstFailure];
     }
 
     /** @return array<string, mixed>|null */
@@ -913,7 +1180,12 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             throw new Exception("No Hangar project matched hash [$hash].");
         }
 
-        $entry = $this->fetchVersionEntryByHash((string) $project['id'], $hash, $deadline);
+        $projectId = (string) $project['id'];
+        if (isset($project['name']) || isset($project['namespace'])) {
+            $this->primeProjects([$projectId => $this->normalizeProject($project)]);
+        }
+
+        $entry = $this->fetchVersionEntryByHash($projectId, $hash, $deadline);
         if ($entry === null) {
             // Do not persist a negative match indefinitely: the matching
             // release may be published after this scan. The miss is still a
@@ -924,11 +1196,10 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         return $entry;
     }
 
-    protected function fetchVersionEntryByHash(string $projectId, string $hash, float $deadline): ?array
+    /** @return array<string, mixed>|null */
+    protected function fetchVersionEntryByHash(string $projectId, string $hash, float $deadline, int $startPage = 0): ?array
     {
-        $entry = null;
-
-        for ($page = 0; $page < self::HASH_SCAN_MAX_PAGES; $page++) {
+        for ($page = $startPage; $page < self::HASH_SCAN_MAX_PAGES; $page++) {
             $response = $this->getJson("/projects/$projectId/versions", [
                 'limit' => self::PAGE_SIZE,
                 'offset' => $page * self::PAGE_SIZE,
@@ -940,24 +1211,9 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
                 break;
             }
 
-            foreach ($versions as $version) {
-                if (!is_array($version)) {
-                    continue;
-                }
-
-                foreach (($version['downloads'] ?? []) as $platform => $download) {
-                    $fileHash = strtolower((string) ($download['fileInfo']['sha256Hash'] ?? ''));
-
-                    if ($fileHash !== '' && $fileHash === $hash) {
-                        $entry = $this->normalizeVersion($version, $platform);
-
-                        if ($entry !== null) {
-                            $entry['project_id'] = $projectId;
-                        }
-
-                        break 3;
-                    }
-                }
+            $entry = $this->matchVersionEntryInPage($versions, $projectId, $hash);
+            if ($entry !== null) {
+                return $entry;
             }
 
             if (count($versions) < self::PAGE_SIZE) {
@@ -965,7 +1221,36 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
             }
         }
 
-        return $entry;
+        return null;
+    }
+
+    /**
+     * @param  array<int, mixed>  $versions
+     * @return array<string, mixed>|null
+     */
+    protected function matchVersionEntryInPage(array $versions, string $projectId, string $hash): ?array
+    {
+        foreach ($versions as $version) {
+            if (!is_array($version)) {
+                continue;
+            }
+
+            foreach (($version['downloads'] ?? []) as $platform => $download) {
+                $fileHash = strtolower((string) ($download['fileInfo']['sha256Hash'] ?? ''));
+
+                if ($fileHash !== '' && $fileHash === $hash) {
+                    $entry = $this->normalizeVersion($version, $platform);
+
+                    if ($entry !== null) {
+                        $entry['project_id'] = $projectId;
+                    }
+
+                    return $entry;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1268,7 +1553,7 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
         $response = Http::asJson()
             ->withHeaders($this->authHeaders())
             ->timeout($timeoutSeconds)
-            ->connectTimeout(min(1.0, $timeoutSeconds))
+            ->connectTimeout(min(3.0, $timeoutSeconds))
             ->throw()
             ->get(self::BASE_URL.$path, $query)
             ->json();

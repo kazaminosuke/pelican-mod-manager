@@ -16,6 +16,26 @@ final class CatalogFields
      */
     public const DESCRIPTION_MAX_LENGTH = 120;
 
+    /**
+     * Explicit "All" sentinel for the Minecraft version catalog filter.
+     * Selecting this value disables automatic server-version filtering rather
+     * than falling back to the server's detected version.
+     */
+    public const VERSION_ALL = '__all__';
+
+    public static function disablesVersionFilter(mixed $raw): bool
+    {
+        $values = is_array($raw) ? $raw : [$raw];
+
+        foreach ($values as $value) {
+            if (is_scalar($value) && trim((string) $value) === self::VERSION_ALL) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static function description(mixed $value): string
     {
         if (!is_string($value)) {

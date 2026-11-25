@@ -4,23 +4,30 @@ namespace Kazaminosuke\ModManager\Jobs;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use Closure;
 use Illuminate\Container\Container;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectUpdateService;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
+use RuntimeException;
 use Throwable;
 
 final class BulkUpdateInstalledProjects
 {
     public int $uniqueFor = 1200;
 
-    private const LEASE_REFRESH_SECONDS = 60;
+    private const LEASE_REFRESH_SECONDS = 30;
 
+    /**
+     * @param  (Closure(): bool)|null  $heartbeat
+     */
     public function __construct(
         public readonly int $serverId,
         public readonly string $projectType,
         public readonly string $leaseToken,
+        public readonly ?int $claimEpoch = null,
+        private readonly ?Closure $heartbeat = null,
     ) {}
 
     public function uniqueId(): string
@@ -40,7 +47,7 @@ final class BulkUpdateInstalledProjects
             return;
         }
 
-        if (!$leases->refresh($this->serverId, $type, $this->leaseToken)) {
+        if (!$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
             return;
         }
 
@@ -54,6 +61,7 @@ final class BulkUpdateInstalledProjects
                 InstalledOperationManager::OPERATION_BULK_UPDATE,
                 'server_not_found',
                 leaseToken: $this->leaseToken,
+                leaseEpoch: $this->claimEpoch,
             );
 
             return;
@@ -74,10 +82,15 @@ final class BulkUpdateInstalledProjects
                 $type,
                 function (int $progress, int $total) use ($operations, $leases, $server, $type, &$leaseRefreshedAt): void {
                     // A large bulk update can outlive the lease's crash-recovery
-                    // TTL. Renew it while work is still progressing so the final
-                    // complete() is not rejected as coming from a stale owner.
+                    // TTL. Renew both cache lease and DB reservation while
+                    // progressing so another worker cannot reclaim a live job.
                     if (microtime(true) - $leaseRefreshedAt >= self::LEASE_REFRESH_SECONDS) {
-                        $leases->refresh($this->serverId, $type, $this->leaseToken);
+                        if ($this->heartbeat !== null && !($this->heartbeat)()) {
+                            throw new RuntimeException('The bulk-update background job reservation was superseded.');
+                        }
+                        if (!$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
+                            throw new RuntimeException('The server operation lease expired.');
+                        }
                         $leaseRefreshedAt = microtime(true);
                     }
 
@@ -97,6 +110,7 @@ final class BulkUpdateInstalledProjects
                 InstalledOperationManager::OPERATION_BULK_UPDATE,
                 $result,
                 $this->leaseToken,
+                $this->claimEpoch,
             );
         } catch (Throwable $exception) {
             report($exception);
@@ -107,6 +121,7 @@ final class BulkUpdateInstalledProjects
                 InstalledOperationManager::OPERATION_BULK_UPDATE,
                 'bulk_update_exception',
                 leaseToken: $this->leaseToken,
+                leaseEpoch: $this->claimEpoch,
             );
         }
     }
@@ -122,7 +137,7 @@ final class BulkUpdateInstalledProjects
         $container = Container::getInstance();
         $leases = $container->make(InstalledOperationLease::class);
 
-        if (!$leases->owns($this->serverId, $type, $this->leaseToken)) {
+        if (!$leases->owns($this->serverId, $type, $this->leaseToken, $this->claimEpoch)) {
             return;
         }
 
@@ -132,6 +147,7 @@ final class BulkUpdateInstalledProjects
             InstalledOperationManager::OPERATION_BULK_UPDATE,
             $exception === null ? 'bulk_update_job_failed' : 'bulk_update_job_exception',
             leaseToken: $this->leaseToken,
+            leaseEpoch: $this->claimEpoch,
         );
     }
 }

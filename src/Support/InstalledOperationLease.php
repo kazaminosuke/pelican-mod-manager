@@ -92,11 +92,16 @@ final class InstalledOperationLease
         });
     }
 
-    public function owns(int $serverId, ProjectType $type, string $token): bool
+    public function owns(int $serverId, ProjectType $type, string $token, ?int $epoch = null): bool
     {
         $current = $this->cache->get(self::key($serverId, $type));
+        if (!is_array($current) || !hash_equals((string) ($current['token'] ?? ''), $token)) {
+            return false;
+        }
 
-        return is_array($current) && hash_equals((string) ($current['token'] ?? ''), $token);
+        $currentEpoch = isset($current['epoch']) && is_int($current['epoch']) ? $current['epoch'] : null;
+
+        return $epoch === null || $currentEpoch === null || $epoch >= $currentEpoch;
     }
 
     /**
@@ -110,15 +115,24 @@ final class InstalledOperationLease
         ProjectType $type,
         string $token,
         ?int $ttlSeconds = null,
+        ?int $epoch = null,
     ): bool {
         $key = self::key($serverId, $type);
 
-        return $this->synchronized($key, function () use ($key, $token, $ttlSeconds): bool {
+        return $this->synchronized($key, function () use ($key, $token, $ttlSeconds, $epoch): bool {
             $current = $this->cache->get($key);
 
             if (!is_array($current)
                 || !hash_equals((string) ($current['token'] ?? ''), $token)) {
                 return false;
+            }
+
+            $currentEpoch = isset($current['epoch']) && is_int($current['epoch']) ? $current['epoch'] : null;
+            if ($epoch !== null && $currentEpoch !== null && $epoch < $currentEpoch) {
+                return false;
+            }
+            if ($epoch !== null) {
+                $current['epoch'] = max($currentEpoch ?? 0, $epoch);
             }
 
             return $this->cache->put($key, $current, $ttlSeconds ?? self::TTL_SECONDS);

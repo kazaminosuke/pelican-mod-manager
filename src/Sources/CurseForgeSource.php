@@ -432,9 +432,9 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $page = min(max(1, $page), intdiv(self::MAX_SEARCH_RESULTS, self::SEARCH_PAGE_SIZE));
 
         $hasVersionList = array_key_exists('versions', $filters);
-        $requestedVersions = $this->versionFilterValues(
-            $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []),
-        );
+        $rawVersions = $hasVersionList ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
         $automaticVersion = MinecraftVersionResolver::resolve($server);
         $params = [
             'gameId' => self::GAME_ID,
@@ -443,7 +443,9 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             'pageSize' => self::SEARCH_PAGE_SIZE,
         ];
 
-        if ($hasVersionList) {
+        if ($disableVersionFilter) {
+            // Explicit "All" selected: omit gameVersion/gameVersions completely.
+        } elseif ($hasVersionList) {
             if ($requestedVersions !== []) {
                 // CurseForge's official API accepts up to four game versions
                 // in the gameVersions list, with OR semantics.
@@ -733,16 +735,66 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             return [];
         }
 
-        $modIds = array_values(array_unique(array_map('intval', $projectIds)));
-        sort($modIds);
+        $modIds = array_values(array_unique(array_filter(
+            array_map('intval', $projectIds),
+            static fn (int $id): bool => $id > 0,
+        )));
 
-        $spec = new SourceFetchSpec(
-            sourceKey: $this->getKey()->value,
-            operation: 'projects',
-            arguments: ['project_ids' => $modIds],
-        );
+        if ($modIds === []) {
+            return [];
+        }
 
-        return $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
+        $projects = [];
+        $pendingModIds = $modIds;
+
+        if (!$freshRequired) {
+            $stringIds = array_map('strval', $modIds);
+            $peeked = $this->cachedProjectMetadata->peekMany($stringIds, $this->projectSpec(...));
+            $pendingModIds = [];
+
+            foreach ($modIds as $modId) {
+                $key = (string) $modId;
+                $probe = $peeked[$key] ?? null;
+                if (is_array($probe['data'] ?? null)) {
+                    $projects[$key] = $probe['data'];
+
+                    continue;
+                }
+
+                $pendingModIds[] = $modId;
+            }
+        }
+
+        if ($pendingModIds === []) {
+            return $projects;
+        }
+
+        sort($pendingModIds);
+        $fetchedToPrime = [];
+
+        foreach (array_chunk($pendingModIds, 100) as $chunk) {
+            $spec = new SourceFetchSpec(
+                sourceKey: $this->getKey()->value,
+                operation: 'projects',
+                arguments: ['project_ids' => $chunk],
+            );
+
+            $batch = $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
+
+            foreach ($batch as $id => $project) {
+                if (is_array($project)) {
+                    $key = (string) $id;
+                    $projects[$key] = $project;
+                    $fetchedToPrime[$key] = $project;
+                }
+            }
+        }
+
+        if ($fetchedToPrime !== []) {
+            $this->primeProjects($fetchedToPrime);
+        }
+
+        return $projects;
     }
 
     /** @param array<int, int> $modIds */
