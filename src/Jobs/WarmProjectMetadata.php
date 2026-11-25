@@ -7,6 +7,7 @@ use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Kazaminosuke\ModManager\Contracts\AuthoritativeBatchProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\ProjectMetadataPeekManyInterface;
+use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Throwable;
 
@@ -158,17 +159,20 @@ final class WarmProjectMetadata
      */
     private function includeConfirmedMissingProjects(array $projectIds, array $projects): array
     {
-        $byLowerIdentifier = [];
-        foreach ($projects as $key => $project) {
-            $byLowerIdentifier[strtolower((string) $key)] = $project;
+        $byId = [];
+        $bySlug = [];
+        foreach ($projects as $project) {
             if (!is_array($project)) {
                 continue;
             }
-            foreach (['project_id', 'id', 'slug'] as $field) {
+            foreach (['project_id', 'id'] as $field) {
                 $value = $project[$field] ?? null;
                 if ((is_string($value) || is_int($value)) && (string) $value !== '') {
-                    $byLowerIdentifier[strtolower((string) $value)] = $project;
+                    $byId[(string) $value] = $project;
                 }
+            }
+            if (is_string($project['slug'] ?? null) && $project['slug'] !== '') {
+                $bySlug[strtolower($project['slug'])] = $project;
             }
         }
 
@@ -183,17 +187,16 @@ final class WarmProjectMetadata
 
             // CurseForge canonicalizes numeric ids for its batch endpoint;
             // retain the id used by the per-project cache spec on the left.
-            $canonicalNumericId = ctype_digit($projectId) ? (string) (int) $projectId : null;
+            $canonicalNumericId = $this->sourceKey === ProjectSourceKey::CurseForge->value && ctype_digit($projectId)
+                ? (string) (int) $projectId : null;
             if ($canonicalNumericId !== null && array_key_exists($canonicalNumericId, $projects)) {
                 $primed[$projectId] = $projects[$canonicalNumericId];
 
                 continue;
             }
 
-            $lowerId = strtolower($projectId);
-            $primed[$projectId] = array_key_exists($lowerId, $byLowerIdentifier)
-                ? $byLowerIdentifier[$lowerId]
-                : null;
+            // Slugs can match without case; Modrinth's base62 IDs cannot.
+            $primed[$projectId] = $byId[$projectId] ?? $bySlug[strtolower($projectId)] ?? null;
         }
 
         return $primed;
