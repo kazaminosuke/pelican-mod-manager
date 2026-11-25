@@ -1,5 +1,7 @@
 # 作業引き継ぎドキュメント（PR #2 / `fix/modpack-wizard-spigot`）
 
+> **2026-11-25 方針更新**　以下は引き継ぎ時点の記録です。比較調査は [Modpack互換性監査の追補](../modpack-compatibility-audit.md#pr-2-の比較追補) に反映しました。M2〜M6 は参考資料として保管します。`tests/E2E/` は削除済みで、検証には既存の PHPUnit・PHPStan・Pint・CI を使います。
+
 - **対象リポジトリ**: `https://github.com/kazaminosuke/pelican-mod-manager`
 - **対象ブランチ / PR**: `fix/modpack-wizard-spigot`（PR #2、ベース `origin/main` = `a3352733`、本作業起点 = `4e5f839a`）
 - **比較監査対象**: `https://github.com/cosmii02/pelican-modpackmanager`（v1.7.3、`ddc2e364`、MIT License `Copyright (c) 2026 cosmii02`）
