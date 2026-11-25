@@ -147,6 +147,9 @@ final class ModpackInstaller
 
                         return $snapshot;
                     };
+                    if ($manifest->format === ModpackManifest::FORMAT_FTB && $file->size === 0) {
+                        $open = static fn (): StreamInterface => Utils::streamFor('');
+                    }
                     $target[$path] = $this->managedEntry($identity, $hashes['sha256'] ?? null, $file->size, $hashes,
                         $file->fileId === null ? null : (string) $file->fileId, $file->projectId === null ? null : (string) $file->projectId, $open, $file->url, $file->required, $file->fallbackUrls);
                 }

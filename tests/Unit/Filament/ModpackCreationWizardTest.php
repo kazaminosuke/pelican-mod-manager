@@ -377,6 +377,7 @@ final class ModpackCreationWizardTest extends TestCase
             'installed loader has the wrong version' => ['wrong_loader', 'does not reference this Minecraft and loader build'],
             'file pull returns success without a file' => ['missing_file', 'Missing file'],
             'file has the right size but the wrong hash' => ['bad_hash', 'published hash'],
+            'empty file has the wrong hash' => ['bad_empty_hash', 'published hash'],
             'partial download then retry' => ['interrupted', 'Could not download and verify'],
             'configured Java too old' => ['wrong_java', 'Java 25'],
         ];
@@ -393,6 +394,11 @@ final class ModpackCreationWizardTest extends TestCase
         $wings->files += ['server.properties' => 'level-name=world', 'world/level.dat' => 'saved world'];
         $runtimeFiles = $wings->files;
         $release = $this->ftbRelease('89', 'initial', $mod, $scenario === 'wrong_java' ? '25.0.1' : '17.0.6');
+        $release['files'][] = [
+            'path' => './config', 'name' => 'empty.toml', 'size' => 0,
+            'sha1' => sha1($scenario === 'bad_empty_hash' ? 'not empty' : ''),
+            'url' => 'https://ftb-files.example.test/empty.toml',
+        ];
         $fingerprint = FtbReleaseManifest::fingerprint(FtbReleaseManifest::read(json_encode($release, JSON_THROW_ON_ERROR), '5', '89'));
         switch ($scenario) {
             case 'no_files':
@@ -461,6 +467,8 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('0.15.0', $installed['loader_version']);
         self::assertSame('fixture-89', $installed['version_name']);
         self::assertSame('initial', $wings->files['config/pack.cfg']);
+        self::assertSame('', $wings->files['config/empty.toml']);
+        self::assertSame(hash('sha256', ''), $installed['files']['config/empty.toml']['sha256']);
         self::assertSame(hash('sha256', $mod), $installed['files']['mods/example.jar']['sha256']);
         self::assertSame('level-name=world', $wings->files['server.properties']);
         self::assertSame('saved world', $wings->files['world/level.dat']);
