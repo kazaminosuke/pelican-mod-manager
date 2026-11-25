@@ -49,8 +49,7 @@ final class DownloadUnavailableException extends Exception
     public function __construct(
         private readonly string $reason,
         public readonly ?string $manualDownloadUrl = null,
-    )
-    {
+    ) {
         parent::__construct(match ($reason) {
             self::PREMIUM => 'This resource is premium and cannot be downloaded automatically.',
             self::EXTERNAL => 'This resource is hosted externally and cannot be downloaded automatically.',
