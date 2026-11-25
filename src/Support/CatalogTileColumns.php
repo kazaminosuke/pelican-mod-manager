@@ -10,6 +10,7 @@ use Filament\Tables\Columns\Layout\Component as LayoutComponent;
 use Filament\Tables\Columns\Layout\Split;
 use Filament\Tables\Columns\Layout\Stack;
 use Filament\Tables\Columns\TextColumn;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Str;
 
 /**
@@ -28,6 +29,10 @@ final class CatalogTileColumns
     public const SESSION_KEY = 'pelican-mod-manager.catalog-view';
 
     public const COOKIE_KEY = 'mmr_catalog_view';
+
+    public const COOKIE_MINUTES = 525600;
+
+    public const VIEW_CHANGED_EVENT = 'mmr-catalog-view-changed';
 
     /**
      * @return array<string, int>
@@ -48,19 +53,28 @@ final class CatalogTileColumns
             $stored = request()->cookie(self::COOKIE_KEY);
         }
 
-        return $stored === self::VIEW_PANEL ? self::VIEW_PANEL : self::VIEW_LIST;
+        return self::normalizeView($stored);
     }
 
-    public static function normalizeView(?string $view): string
+    public static function normalizeView(mixed $view): string
     {
         return $view === self::VIEW_PANEL ? self::VIEW_PANEL : self::VIEW_LIST;
+    }
+
+    public static function storeView(string $view): string
+    {
+        $normalized = self::normalizeView($view);
+
+        session()->put(self::SESSION_KEY, $normalized);
+        Cookie::queue(self::COOKIE_KEY, $normalized, self::COOKIE_MINUTES);
+
+        return $normalized;
     }
 
     /**
      * @param  Closure(array<string, mixed>): array<string, string>  $iconImgAttributes
      * @param  Closure(mixed): string  $formatDate
      * @param  Closure(mixed): string  $dateTooltip
-     * @param  Closure(array<string, mixed>, mixed): ?string  $authorUrl
      * @param  Closure(array<string, mixed>): ?string|null  $descriptionFormatter
      * @return list<LayoutComponent>
      */
@@ -68,7 +82,6 @@ final class CatalogTileColumns
         Closure $iconImgAttributes,
         Closure $formatDate,
         Closure $dateTooltip,
-        Closure $authorUrl,
         ?Closure $descriptionFormatter = null,
     ): array {
         return [
@@ -105,33 +118,42 @@ final class CatalogTileColumns
 
                         return Str::limit($description, CatalogFields::DESCRIPTION_MAX_LENGTH, '...');
                     }),
-                Split::make([
+                Stack::make([
                     TextColumn::make('author')
                         ->label(trans('pelican-mod-manager::strings.table.columns.author'))
                         ->icon('tabler-user')
                         ->color('gray')
                         ->size(TextSize::Small)
                         ->lineClamp(1)
-                        ->url($authorUrl, true)
                         ->toggleable(),
-                    TextColumn::make('downloads')
-                        ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
-                        ->numeric()
-                        ->icon('tabler-download')
-                        ->color('gray')
-                        ->size(TextSize::Small)
-                        ->grow(false)
-                        ->toggleable(),
-                    TextColumn::make('date_modified')
-                        ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
-                        ->icon('tabler-calendar')
-                        ->color('gray')
-                        ->size(TextSize::Small)
-                        ->grow(false)
-                        ->formatStateUsing($formatDate)
-                        ->tooltip($dateTooltip)
-                        ->toggleable(),
-                ]),
+                    Split::make([
+                        TextColumn::make('downloads')
+                            ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
+                            ->numeric()
+                            ->icon('tabler-download')
+                            ->color('gray')
+                            ->size(TextSize::Small)
+                            ->toggleable(),
+                        TextColumn::make('date_modified')
+                            ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
+                            ->icon('tabler-calendar')
+                            ->color('gray')
+                            ->size(TextSize::Small)
+                            ->grow(false)
+                            ->alignEnd()
+                            ->state(static function (array $record) use ($formatDate): ?string {
+                                $formatted = $formatDate($record['date_modified'] ?? null);
+
+                                return trim($formatted) !== '' ? $formatted : null;
+                            })
+                            ->tooltip(static function (array $record) use ($dateTooltip): ?string {
+                                $tooltip = $dateTooltip($record['date_modified'] ?? null);
+
+                                return trim($tooltip) !== '' ? $tooltip : null;
+                            })
+                            ->toggleable(),
+                    ]),
+                ])->space(1),
             ])->space(3),
         ];
     }

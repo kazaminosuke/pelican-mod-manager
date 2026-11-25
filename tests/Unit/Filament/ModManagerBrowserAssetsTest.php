@@ -56,6 +56,30 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('cancelAnimationFrame(headerScrollFrame)', $runtime);
     }
 
+    public function test_table_swr_cache_keys_by_catalog_view_and_drops_stale_author_url_comment(): void
+    {
+        $swr = $this->asset('table-swr-cache.js');
+
+        self::assertStringContainsString('const effectiveCatalogView = (wire) => {', $swr);
+        self::assertStringContainsString('catalogView: effectiveCatalogView(wire),', $swr);
+        self::assertStringContainsString("changed.includes('catalogView')", $swr);
+        self::assertStringContainsString("element.matches('a, .fi-ta-col')", $swr);
+        self::assertStringNotContainsString('Modrinth author URL', $swr);
+
+        $describeStart = strpos($swr, 'const describeViewState = (wire) => ({');
+        $buildKeyStart = strpos($swr, 'const buildKey = (wrapper, wire) => {');
+        self::assertIsInt($describeStart);
+        self::assertIsInt($buildKeyStart);
+        self::assertStringContainsString(
+            'catalogView: effectiveCatalogView(wire),',
+            substr($swr, $describeStart, $buildKeyStart - $describeStart),
+        );
+        self::assertStringContainsString(
+            'catalogView: effectiveCatalogView(wire),',
+            substr($swr, $buildKeyStart, 700),
+        );
+    }
+
     public function test_row_action_mask_matches_old_zip_xl_icon_size(): void
     {
         $css = $this->asset('mod-manager.css');
@@ -144,6 +168,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
     {
         $root = dirname(__DIR__, 3);
         $page = (string) file_get_contents($root.'/src/Filament/Server/Pages/ModManagerPage.php');
+        $tableClass = (string) file_get_contents($root.'/src/Filament/Components/ModpackCatalogTable.php');
         $tileBuilder = (string) file_get_contents($root.'/src/Support/CatalogTileColumns.php');
         $css = $this->asset('mod-manager.css');
 
@@ -154,14 +179,41 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('CatalogTileColumns::contentGrid()', $page);
         self::assertStringContainsString('->recordActionsAlignment(Alignment::End->value)', $page);
 
-        // Tile layout places author in bottom row alongside downloads and date_modified, and keeps them toggleable
-        // so the toolbar column-manager button never disappears on view toggle.
+        // Modrinth author page links are abolished everywhere so tile cards never nest <a> tags.
+        self::assertStringNotContainsString('modrinth.com/user', $tileBuilder);
+        self::assertStringNotContainsString('modrinth.com/user', $page);
+        self::assertStringNotContainsString('modrinth.com/user', $tableClass);
+        self::assertStringNotContainsString('authorUrl', $tileBuilder);
+        self::assertStringNotContainsString('authorUrl', $page);
+        self::assertStringNotContainsString('authorUrl', $tableClass);
+        self::assertStringNotContainsString('->url(', $tileBuilder);
+
+        // Tile layout places author in a nested Stack above Split([downloads, date_modified->alignEnd()])
+        // and keeps all three toggleable so the toolbar view-toggle hook stays rendered on filterless providers.
         $descriptionPos = strpos($tileBuilder, "TextColumn::make('description')");
         $authorPos = strpos($tileBuilder, "TextColumn::make('author')");
+        $downloadsPos = strpos($tileBuilder, "TextColumn::make('downloads')");
+        $datePos = strpos($tileBuilder, "TextColumn::make('date_modified')");
         self::assertIsInt($descriptionPos);
         self::assertIsInt($authorPos);
+        self::assertIsInt($downloadsPos);
+        self::assertIsInt($datePos);
         self::assertGreaterThan($descriptionPos, $authorPos);
+        self::assertGreaterThan($authorPos, $downloadsPos);
+        self::assertGreaterThan($downloadsPos, $datePos);
+        self::assertStringContainsString('Stack::make([', substr($tileBuilder, $descriptionPos, $authorPos - $descriptionPos));
+        self::assertStringContainsString('Split::make([', substr($tileBuilder, $authorPos, $downloadsPos - $authorPos));
+        self::assertStringContainsString('->alignEnd()', substr($tileBuilder, $datePos));
+        self::assertStringContainsString('->space(1)', substr($tileBuilder, $datePos));
         self::assertSame(3, substr_count($tileBuilder, '->toggleable()'));
+
+        // Both catalogs centralize view persistence in CatalogTileColumns and use closure contentGrid().
+        self::assertStringContainsString('CatalogTileColumns::storeView(', $page);
+        self::assertStringContainsString('CatalogTileColumns::storeView(', $tableClass);
+        self::assertStringContainsString('->contentGrid(fn (): ?array =>', $page);
+        self::assertStringContainsString('->contentGrid(fn (): ?array =>', $tableClass);
+        self::assertStringNotContainsString('Cookie::queue(CatalogTileColumns::COOKIE_KEY', $page);
+        self::assertStringNotContainsString('Cookie::queue(CatalogTileColumns::COOKIE_KEY', $tableClass);
 
         // Tile layout deliberately omits Minecraft version and loader badges.
         self::assertStringNotContainsString('minecraft_versions', $tileBuilder);
@@ -275,7 +327,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
 
         // Modpack catalog reuses the exact same scroll container, tile layout, right-aligned actions, and row actions as ModManagerPage.
         self::assertStringContainsString('implements HasActions, HasSchemas, HasTable', $tableClass);
-        self::assertStringContainsString('use InteractsWithTable;', $tableClass);
+        self::assertStringContainsString('use InteractsWithTable', $tableClass);
         self::assertStringContainsString('CatalogTileColumns::columns(', $tableClass);
         self::assertStringContainsString('CatalogTileColumns::contentGrid()', $tableClass);
         self::assertStringContainsString('->recordActionsAlignment(Alignment::End->value)', $tableClass);

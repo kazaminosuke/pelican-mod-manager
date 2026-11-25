@@ -28,7 +28,6 @@ use Filament\Tables\Table;
 use Illuminate\Contracts\View\View;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Js;
 use Illuminate\Support\Str;
@@ -62,7 +61,10 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
 {
     use InteractsWithActions;
     use InteractsWithSchemas;
-    use InteractsWithTable;
+    use InteractsWithTable {
+        InteractsWithTable::applyTableColumnManager as protected baseApplyTableColumnManager;
+        InteractsWithTable::resetTableColumnManager as protected baseResetTableColumnManager;
+    }
 
     public const MODE_CREATE = 'create';
 
@@ -184,14 +186,51 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
 
     public function toggleCatalogView(): void
     {
-        $this->catalogView = $this->catalogView === CatalogTileColumns::VIEW_PANEL
-            ? CatalogTileColumns::VIEW_LIST
-            : CatalogTileColumns::VIEW_PANEL;
+        $this->catalogView = CatalogTileColumns::storeView(
+            $this->catalogView === CatalogTileColumns::VIEW_PANEL
+                ? CatalogTileColumns::VIEW_LIST
+                : CatalogTileColumns::VIEW_PANEL,
+        );
 
-        session()->put(CatalogTileColumns::SESSION_KEY, $this->catalogView);
-        Cookie::queue(CatalogTileColumns::COOKIE_KEY, $this->catalogView, 525600);
-        $this->table = $this->table($this->makeTable());
+        if (isset($this->table)) {
+            $this->table = $this->table($this->makeTable());
+            $this->syncTableColumnManagerAfterViewChange();
+        }
+
         $this->flushCachedTableRecords();
+        $this->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: $this->catalogView);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>|null  $state
+     */
+    public function applyTableColumnManager(?array $state = null, bool $wasReordered = false): void
+    {
+        if (isset($this->table) && $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
+        $this->baseApplyTableColumnManager($state, $wasReordered);
+    }
+
+    public function resetTableColumnManager(): void
+    {
+        if (isset($this->table) && $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
+        $this->baseResetTableColumnManager();
+    }
+
+    private function syncTableColumnManagerAfterViewChange(): void
+    {
+        if (!isset($this->table) || $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
+        $this->cachedDefaultTableColumnState = null;
+        $this->tableColumnsToggleStateByName = null;
+        $this->initTableColumnManager();
     }
 
     public function table(Table $table): Table
@@ -263,9 +302,9 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
                     iconImgAttributes: fn (array $record): array => ProjectIconUrl::imgAttributes($this->rowIndex($record)),
                     formatDate: fn (mixed $state): string => $this->formatDate($state),
                     dateTooltip: fn (mixed $state): string => $this->formatDateTooltip($state, $table),
-                    authorUrl: fn (array $record, mixed $state): ?string => $this->authorUrl($record, $state),
                 )
                 : $this->listColumns($table))
+            ->contentGrid(fn (): ?array => $this->catalogView === CatalogTileColumns::VIEW_PANEL ? CatalogTileColumns::contentGrid() : null)
             ->recordUrl(fn (array $record): ?string => is_string($record['url'] ?? null) && $record['url'] !== '' ? $record['url'] : null, true)
             ->recordClasses(fn (array $record): ?string => $this->isSelected($record) ? 'fi-striped' : null)
             ->recordActionsAlignment(Alignment::End->value)
@@ -294,10 +333,6 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
                         $this->openPlanModal($record, $latest['id'], $latest['label']);
                     }),
             ]);
-
-        if ($isPanelView) {
-            $table = $table->contentGrid(CatalogTileColumns::contentGrid());
-        }
 
         return $table;
     }
@@ -528,7 +563,6 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
                 ->toggleable(),
             TextColumn::make('author')
                 ->label(trans('pelican-mod-manager::strings.table.columns.author'))
-                ->url(fn (array $record, mixed $state): ?string => $this->authorUrl($record, $state), true)
                 ->toggleable(isToggledHiddenByDefault: true),
             TextColumn::make('downloads')
                 ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
@@ -801,16 +835,6 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
         }
 
         return $labels !== [] ? implode(', ', $labels) : null;
-    }
-
-    /** @param array<string, mixed> $record */
-    private function authorUrl(array $record, mixed $state): ?string
-    {
-        return ($record['provider'] ?? null) === ModpackProvider::Modrinth->value
-            && is_string($state)
-            && preg_match('/^[A-Za-z0-9._-]+$/D', $state) === 1
-            ? "https://modrinth.com/user/{$state}"
-            : null;
     }
 
     /**

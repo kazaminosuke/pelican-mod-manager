@@ -2,6 +2,8 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Filament;
 
+use DOMDocument;
+use DOMXPath;
 use Filament\Facades\Filament;
 use Filament\Support\Facades\FilamentView;
 use Filament\Tables\View\TablesRenderHook;
@@ -133,6 +135,7 @@ final class ModpackCatalogTableTest extends TestCase
         $html = $component->html();
 
         // Shared scroll container, provider dropdown (not tabs), view toggle, column manager, Filament table, no source column.
+        self::assertSame(CatalogTileColumns::VIEW_LIST, $component->get('catalogView'));
         self::assertStringContainsString('mmr-table-scroll-ctn', $html);
         self::assertStringNotContainsString('fi-tabs', $html);
         self::assertStringContainsString('wire:model.live="provider"', $html);
@@ -141,10 +144,11 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('fi-ta-table', $html);
         self::assertStringNotContainsString('>Source<', $html);
 
-        // External project page links open in a new tab via Filament's recordUrl.
+        // External project page links open in a new tab via Filament's recordUrl; author links are abolished.
         self::assertStringContainsString('href="https://modrinth.com/modpack/fabulously-optimized"', $html);
         self::assertStringContainsString('href="https://modrinth.com/modpack/simply-optimized"', $html);
         self::assertStringContainsString('target="_blank"', $html);
+        self::assertStringNotContainsString('modrinth.com/user/', $html);
 
         // Minecraft versions and loaders render as plain text without badges/borders.
         self::assertStringContainsString('1.21.1, 1.20.4 (+1)', $html);
@@ -156,25 +160,53 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('data-mmr-swr-row-action="install_latest"', $html);
 
         // Switching to tile view uses Filament's contentGrid, keeps view toggle & column manager visible,
-        // right-aligns row actions, moves author into the bottom metadata row, and omits MC version/loader.
-        $component->call('toggleCatalogView');
+        // right-aligns row actions, stacks author above downloads/date_modified, omits MC version/loader,
+        // preserves external project links, and avoids nested <a> tags.
+        $component->call('toggleCatalogView')
+            ->assertDispatched(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_PANEL);
         self::assertSame(CatalogTileColumns::VIEW_PANEL, $component->get('catalogView'));
         $tileHtml = $component->html();
         self::assertStringContainsString('fi-ta-content-grid', $tileHtml);
         self::assertStringContainsString('fi-ta-split', $tileHtml);
         self::assertStringContainsString('fi-ta-stack', $tileHtml);
-        self::assertStringContainsString('fi-align-end', $tileHtml);
+        self::assertStringContainsString('fi-gap-sm', $tileHtml);
+        self::assertStringContainsString('fi-ta-col fi-align-end', $tileHtml);
         self::assertStringContainsString('data-mmr-view-toggle', $tileHtml);
         self::assertStringContainsString('fi-ta-col-manager', $tileHtml);
         self::assertStringContainsString('Fabulously Optimized', $tileHtml);
         self::assertStringContainsString('robotkoer', $tileHtml);
+        self::assertStringContainsString('href="https://modrinth.com/modpack/fabulously-optimized"', $tileHtml);
+        self::assertStringContainsString('href="https://modrinth.com/modpack/simply-optimized"', $tileHtml);
+        self::assertStringNotContainsString('modrinth.com/user/', $tileHtml);
         self::assertStringNotContainsString('1.21.1, 1.20.4 (+1)', $tileHtml);
 
-        // Switching back to table view restores the standard Filament table cleanly.
-        $component->call('toggleCatalogView');
+        $sanitizedTileHtml = preg_replace('/<!--.*?-->|<script\b[^>]*>.*?<\/script>|<style\b[^>]*>.*?<\/style>/is', '', $tileHtml) ?? $tileHtml;
+        preg_match_all('/<(\/?)a(?:\s[^>]*)?>/i', $sanitizedTileHtml, $anchorMatches);
+        $anchorDepth = 0;
+        $maxAnchorDepth = 0;
+        foreach ($anchorMatches[1] as $closing) {
+            $anchorDepth = $closing === '/' ? max(0, $anchorDepth - 1) : $anchorDepth + 1;
+            $maxAnchorDepth = max($maxAnchorDepth, $anchorDepth);
+        }
+        self::assertLessThanOrEqual(1, $maxAnchorDepth);
+
+        $dom = new DOMDocument();
+        @$dom->loadHTML('<?xml encoding="utf-8" ?>'.$tileHtml);
+        $xpath = new DOMXPath($dom);
+        self::assertSame(0, $xpath->query('//a//a')?->length);
+        self::assertSame(2, $xpath->query('//a[contains(concat(" ", normalize-space(@class), " "), " fi-ta-record-content ")]')?->length);
+
+        // Switching back to table view restores the standard Filament table and keeps toggleable columns visible.
+        $component->call('toggleCatalogView')
+            ->assertDispatched(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_LIST);
         self::assertSame(CatalogTileColumns::VIEW_LIST, $component->get('catalogView'));
-        self::assertStringContainsString('fi-ta-table', $component->html());
-        self::assertStringNotContainsString('fi-ta-content-grid', $component->html());
+        $returnedListHtml = $component->html();
+        self::assertStringContainsString('fi-ta-table', $returnedListHtml);
+        self::assertStringNotContainsString('fi-ta-content-grid', $returnedListHtml);
+        self::assertStringContainsString('1.21.1, 1.20.4 (+1)', $returnedListHtml);
+        self::assertStringContainsString('Fabric', $returnedListHtml);
+        self::assertStringContainsString('1,234,567', $returnedListHtml);
+        self::assertStringNotContainsString('modrinth.com/user/', $returnedListHtml);
     }
 
     public function test_download_action_opens_filament_plan_modal_and_submitting_advances_to_next_step(): void

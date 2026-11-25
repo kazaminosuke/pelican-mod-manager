@@ -47,7 +47,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\HtmlString;
@@ -102,6 +101,7 @@ use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\RequestPerformanceProfiler;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Livewire\Attributes\Locked;
+use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
 use Livewire\WithoutUrlPagination;
 use Throwable;
@@ -629,16 +629,52 @@ class ModManagerPage extends Page implements HasTable
 
     public function toggleCatalogView(): void
     {
-        $this->catalogView = $this->catalogView === CatalogTileColumns::VIEW_PANEL
-            ? CatalogTileColumns::VIEW_LIST
-            : CatalogTileColumns::VIEW_PANEL;
+        $this->catalogView = CatalogTileColumns::storeView(
+            $this->catalogView === CatalogTileColumns::VIEW_PANEL
+                ? CatalogTileColumns::VIEW_LIST
+                : CatalogTileColumns::VIEW_PANEL,
+        );
 
-        session()->put(CatalogTileColumns::SESSION_KEY, $this->catalogView);
-        Cookie::queue(CatalogTileColumns::COOKIE_KEY, $this->catalogView, 525600);
         if (isset($this->table)) {
             $this->table = $this->table($this->makeTable());
+            $this->syncTableColumnManagerAfterViewChange();
         }
+
         $this->flushCachedTableRecords();
+    }
+
+    #[On(CatalogTileColumns::VIEW_CHANGED_EVENT)]
+    public function syncCatalogView(mixed $view = null): void
+    {
+        $normalized = CatalogTileColumns::normalizeView($view);
+        if ($this->catalogView === $normalized) {
+            return;
+        }
+
+        $wasTileView = $this->isCatalogTileView();
+        $this->catalogView = $normalized;
+
+        if ($wasTileView === $this->isCatalogTileView()) {
+            return;
+        }
+
+        if (isset($this->table)) {
+            $this->table = $this->table($this->makeTable());
+            $this->syncTableColumnManagerAfterViewChange();
+        }
+
+        $this->flushCachedTableRecords();
+    }
+
+    protected function syncTableColumnManagerAfterViewChange(): void
+    {
+        if (!isset($this->table) || $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
+        $this->cachedDefaultTableColumnState = null;
+        $this->tableColumnsToggleStateByName = null;
+        $this->initTableColumnManager();
     }
 
     public function hydrate(): void
@@ -1097,6 +1133,7 @@ class ModManagerPage extends Page implements HasTable
         $this->catalogSort = $this->normalizeCatalogSort($this->catalogSort);
         if (isset($this->table)) {
             $this->table = $this->table($this->makeTable());
+            $this->syncTableColumnManagerAfterViewChange();
         }
         $this->resetTable();
         $this->queueHeaderScroll();
@@ -1253,11 +1290,19 @@ class ModManagerPage extends Page implements HasTable
      */
     public function applyTableColumnManager(?array $state = null, bool $wasReordered = false): void
     {
+        if (isset($this->table) && $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
         $this->baseApplyTableColumnManager($state, $wasReordered);
     }
 
     public function resetTableColumnManager(): void
     {
+        if (isset($this->table) && $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
         $this->baseResetTableColumnManager();
     }
 
@@ -3186,9 +3231,6 @@ class ModManagerPage extends Page implements HasTable
 
                         return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
                     },
-                    authorUrl: fn (array $record, $state): ?string => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && is_string($state) && $state !== '')
-                        ? "https://modrinth.com/user/$state"
-                        : null,
                     descriptionFormatter: function (array $record): ?string {
                         if ($record['untracked'] ?? false) {
                             return trans('pelican-mod-manager::strings.badges.untracked');
@@ -3250,7 +3292,6 @@ class ModManagerPage extends Page implements HasTable
                         ->toggleable(),
                     TextColumn::make('author')
                         ->label(trans('pelican-mod-manager::strings.table.columns.author'))
-                        ->url(fn (array $record, $state) => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && $state) ? "https://modrinth.com/user/$state" : null, true)
                         ->extraCellAttributes(['data-mmr-swr-cell' => 'author'])
                         ->toggleable(),
                     TextColumn::make('downloads')
