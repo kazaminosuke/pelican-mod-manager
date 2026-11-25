@@ -98,9 +98,9 @@
             }
 
             const previous = {
-                top: Number(root.dataset.mmrTableTop ?? NaN),
-                bottom: Number(root.dataset.mmrTableBottom ?? NaN),
-                viewport: Number(root.dataset.mmrViewportHeight ?? NaN),
+                top: Number(wrapper.dataset.mmrTableTop ?? NaN),
+                bottom: Number(wrapper.dataset.mmrTableBottom ?? NaN),
+                viewport: Number(wrapper.dataset.mmrViewportHeight ?? NaN),
             };
 
             // A scrollbar appearing, a font swapping in or a sub-pixel
@@ -113,12 +113,12 @@
                 return;
             }
 
-            root.dataset.mmrTableTop = String(top);
-            root.dataset.mmrTableBottom = String(bottom);
-            root.dataset.mmrViewportHeight = String(viewport);
-            root.style.setProperty('--mmr-table-top', `${top}px`);
-            root.style.setProperty('--mmr-table-bottom', `${bottom}px`);
-            root.style.setProperty('--mmr-viewport-height', `${viewport}px`);
+            wrapper.dataset.mmrTableTop = String(top);
+            wrapper.dataset.mmrTableBottom = String(bottom);
+            wrapper.dataset.mmrViewportHeight = String(viewport);
+            wrapper.style.setProperty('--mmr-table-top', `${top}px`);
+            wrapper.style.setProperty('--mmr-table-bottom', `${bottom}px`);
+            wrapper.style.setProperty('--mmr-viewport-height', `${viewport}px`);
 
             debugLog(`measured (from: ${caller})`, {
                 top,
@@ -276,6 +276,9 @@
 
         const scheduleRefresh = (context, caller = 'unknown') => {
             if (!context?.component?.isConnected) {
+                context?.observer?.disconnect();
+                contexts.delete(context);
+
                 return;
             }
 
@@ -339,6 +342,11 @@
                 if (context) {
                     scheduleRefresh(context, 'morphed');
                 }
+
+                // Discover scroll containers attached by a later Livewire render.
+                if (component?.el?.querySelector(WRAPPER_SELECTOR)) {
+                    discoverContexts();
+                }
             });
             morphUnsubscribe = typeof unsubscribe === 'function' ? unsubscribe : () => {};
         };
@@ -346,27 +354,34 @@
         const onResize = () => refreshAll('window-resize');
 
         const activate = (caller = 'activate') => {
-            discoverContexts();
-
-            if (contexts.size === 0) {
-                return;
-            }
-
             registerMorphHook();
+            discoverContexts();
 
             if (!resizeListening) {
                 window.addEventListener('resize', onResize);
                 resizeListening = true;
             }
 
-            refreshAll(caller);
+            if (contexts.size > 0) {
+                refreshAll(caller);
+            }
         };
 
         const deactivate = () => {
             morphUnsubscribe?.();
             morphUnsubscribe = null;
 
-            contexts.forEach((context) => context.observer?.disconnect());
+            contexts.forEach((context) => {
+                context.observer?.disconnect();
+                if (context.wrapper) {
+                    delete context.wrapper.dataset.mmrTableTop;
+                    delete context.wrapper.dataset.mmrTableBottom;
+                    delete context.wrapper.dataset.mmrViewportHeight;
+                    context.wrapper.style.removeProperty('--mmr-table-top');
+                    context.wrapper.style.removeProperty('--mmr-table-bottom');
+                    context.wrapper.style.removeProperty('--mmr-viewport-height');
+                }
+            });
             contexts.clear();
             pendingContexts.clear();
 
@@ -379,13 +394,6 @@
                 window.removeEventListener('resize', onResize);
                 resizeListening = false;
             }
-
-            delete root.dataset.mmrTableTop;
-            delete root.dataset.mmrTableBottom;
-            delete root.dataset.mmrViewportHeight;
-            root.style.removeProperty('--mmr-table-top');
-            root.style.removeProperty('--mmr-table-bottom');
-            root.style.removeProperty('--mmr-viewport-height');
         };
 
         window.__mmrTableLayout = { activate, deactivate, refresh: refreshAll };

@@ -56,6 +56,30 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('cancelAnimationFrame(headerScrollFrame)', $runtime);
     }
 
+    public function test_table_swr_cache_keys_by_catalog_view_and_drops_stale_author_url_comment(): void
+    {
+        $swr = $this->asset('table-swr-cache.js');
+
+        self::assertStringContainsString('const effectiveCatalogView = (wire) => {', $swr);
+        self::assertStringContainsString('catalogView: effectiveCatalogView(wire),', $swr);
+        self::assertStringContainsString("changed.includes('catalogView')", $swr);
+        self::assertStringContainsString("element.matches('a, .fi-ta-col')", $swr);
+        self::assertStringNotContainsString('Modrinth author URL', $swr);
+
+        $describeStart = strpos($swr, 'const describeViewState = (wire) => ({');
+        $buildKeyStart = strpos($swr, 'const buildKey = (wrapper, wire) => {');
+        self::assertIsInt($describeStart);
+        self::assertIsInt($buildKeyStart);
+        self::assertStringContainsString(
+            'catalogView: effectiveCatalogView(wire),',
+            substr($swr, $describeStart, $buildKeyStart - $describeStart),
+        );
+        self::assertStringContainsString(
+            'catalogView: effectiveCatalogView(wire),',
+            substr($swr, $buildKeyStart, 700),
+        );
+    }
+
     public function test_row_action_mask_matches_old_zip_xl_icon_size(): void
     {
         $css = $this->asset('mod-manager.css');
@@ -76,29 +100,29 @@ final class ModManagerBrowserAssetsTest extends TestCase
 
     public function test_catalog_toolbar_uses_column_manager_and_single_view_toggle(): void
     {
-        $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
-        $plugin = (string) file_get_contents(dirname(__DIR__, 3).'/src/ModManagerPlugin.php');
-        $runtime = $this->asset('mod-manager-runtime.js');
+        $root = dirname(__DIR__, 3);
+        $page = (string) file_get_contents($root.'/src/Filament/Server/Pages/ModManagerPage.php');
+        $plugin = (string) file_get_contents($root.'/src/ModManagerPlugin.php');
+        $toggleBlade = (string) file_get_contents($root.'/resources/views/components/catalog-view-toggle.blade.php');
+        $sortBlade = (string) file_get_contents($root.'/resources/views/components/catalog-sort-select.blade.php');
         $css = $this->asset('mod-manager.css');
 
         self::assertStringNotContainsString('mmr-table-action-registration', $page);
         self::assertStringNotContainsString("mountTableAction(\\'catalog_compatibility_override\\')", $plugin);
         self::assertStringNotContainsString("mountAction(\\'catalogCompatibilityOverride\\')", $plugin);
         self::assertStringNotContainsString('data-mmr-compatibility-override', $plugin);
-        self::assertSame(1, substr_count($plugin, 'data-mmr-view-toggle'));
-        self::assertStringNotContainsString('mmr-catalog-toolbar-actions', $plugin);
-        self::assertStringNotContainsString('mmr-catalog-view-toggle', $plugin);
-        self::assertStringNotContainsString('data-mmr-view-mode=', $plugin);
-        self::assertStringContainsString("Action::make('catalogViewToggle')", $plugin);
-        self::assertStringContainsString('->iconButton()', $plugin);
-        self::assertStringContainsString("->icon('tabler-layout-grid')", $plugin);
-        self::assertStringContainsString("->alpineClickHandler('null')", $plugin);
+        self::assertStringContainsString("view('pelican-mod-manager::components.catalog-view-toggle')", $plugin);
+        self::assertStringContainsString("view('pelican-mod-manager::components.catalog-sort-select')", $plugin);
         self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE', $plugin);
         self::assertStringNotContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
-        self::assertStringContainsString("document.querySelector('[data-mmr-view-toggle]')", $runtime);
-        self::assertStringContainsString("const target = view === 'panel' ? 'list' : 'panel'", $runtime);
-        self::assertStringContainsString("toggle.querySelector(':scope > svg.fi-icon')", $runtime);
-        self::assertStringNotContainsString("querySelectorAll('[data-mmr-view-icon]')", $runtime);
+        self::assertStringContainsString("'wire:click' => 'toggleCatalogView'", $toggleBlade);
+        self::assertStringContainsString('->iconButton()', $toggleBlade);
+        self::assertStringContainsString('getColumnManagerTriggerAction()', $toggleBlade);
+        self::assertStringContainsString('->size($trigger->getSize())', $toggleBlade);
+        self::assertStringContainsString('->iconSize($trigger->getIconSize())', $toggleBlade);
+        self::assertStringContainsString('x-filament::input.wrapper', $sortBlade);
+        self::assertStringContainsString('x-filament::input.select', $sortBlade);
+        self::assertStringNotContainsString('.mmr-catalog-sort-select', $css);
         self::assertStringNotContainsString('.mmr-catalog-toolbar-button', $css);
         self::assertStringNotContainsString('.mmr-catalog-toolbar-icon-button', $css);
         self::assertStringNotContainsString('[data-mmr-override-active="true"]{border-color:', $css);
@@ -108,6 +132,8 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('[data-mmr-active-filters="0"] .fi-icon-btn-badge-ctn{display:none;}', $css);
         self::assertStringContainsString("CatalogSelectFilter::make('catalog_version')", $page);
         self::assertStringContainsString("CatalogSelectFilter::make('catalog_loader')", $page);
+        self::assertStringContainsString('->options(fn () => $this->getCatalogVersionFilterOptions())', $page);
+        self::assertStringContainsString('CatalogFields::VERSION_ALL', $page);
         self::assertStringContainsString('->activeCountExcludedValues(fn (): array => $this->catalogDefaultVersionValues())', $page);
         self::assertStringContainsString('->activeCountExcludedValues(fn (): array => $this->catalogDefaultLoaderValues())', $page);
     }
@@ -141,25 +167,68 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString("Section::make(trans('pelican-mod-manager::strings.table.filters.advanced'))", $page);
     }
 
-    public function test_catalog_list_keeps_the_original_table_columns_and_panel_is_css_scoped(): void
+    public function test_catalog_tile_view_uses_filament_stack_split_and_content_grid_without_hardcoded_colors(): void
     {
-        $page = (string) file_get_contents(dirname(__DIR__, 3).'/src/Filament/Server/Pages/ModManagerPage.php');
+        $root = dirname(__DIR__, 3);
+        $page = (string) file_get_contents($root.'/src/Filament/Server/Pages/ModManagerPage.php');
+        $tileBuilder = (string) file_get_contents($root.'/src/Support/CatalogTileColumns.php');
         $css = $this->asset('mod-manager.css');
 
-        self::assertStringNotContainsString('use Filament\\Tables\\Columns\\Layout\\Split;', $page);
-        self::assertStringNotContainsString('use Filament\\Tables\\Columns\\Layout\\Stack;', $page);
+        // Shared Filament-native Stack/Split/contentGrid tile builder with right-aligned actions.
+        self::assertStringContainsString('use Filament\\Tables\\Columns\\Layout\\Split;', $tileBuilder);
+        self::assertStringContainsString('use Filament\\Tables\\Columns\\Layout\\Stack;', $tileBuilder);
+        self::assertStringContainsString('CatalogTileColumns::columns(', $page);
+        self::assertStringContainsString('CatalogTileColumns::contentGrid()', $page);
+        self::assertStringContainsString('->recordActionsAlignment(Alignment::End->value)', $page);
+
+        // Modrinth author page links are abolished everywhere so tile cards never nest <a> tags.
+        self::assertStringNotContainsString('modrinth.com/user', $tileBuilder);
+        self::assertStringNotContainsString('modrinth.com/user', $page);
+        self::assertStringNotContainsString('authorUrl', $tileBuilder);
+        self::assertStringNotContainsString('authorUrl', $page);
+        self::assertStringNotContainsString('->url(', $tileBuilder);
+
+        // Keep the two metrics together when the outer Split wraps.
+        $descriptionPos = strpos($tileBuilder, "TextColumn::make('description')");
+        $authorPos = strpos($tileBuilder, "TextColumn::make('author')");
+        $downloadsPos = strpos($tileBuilder, "TextColumn::make('downloads')");
+        $datePos = strpos($tileBuilder, "TextColumn::make('date_modified')");
+        self::assertIsInt($descriptionPos);
+        self::assertIsInt($authorPos);
+        self::assertIsInt($downloadsPos);
+        self::assertIsInt($datePos);
+        self::assertGreaterThan($descriptionPos, $authorPos);
+        self::assertGreaterThan($authorPos, $downloadsPos);
+        self::assertGreaterThan($downloadsPos, $datePos);
+        self::assertStringContainsString('Split::make([', substr($tileBuilder, $descriptionPos, $authorPos - $descriptionPos));
+        self::assertStringContainsString('Split::make([', substr($tileBuilder, $authorPos, $downloadsPos - $authorPos));
+        self::assertStringContainsString('->alignEnd()', substr($tileBuilder, $datePos));
+        self::assertStringContainsString('.fi-ta-split.mmr-tile-stats{flex-wrap:wrap;', $css);
+        self::assertStringContainsString('.fi-ta-split.mmr-tile-stat-values{gap:.75rem;white-space:nowrap;', $css);
+        self::assertSame(3, substr_count($tileBuilder, '->toggleable()'));
+
+        // The page delegates view persistence to CatalogTileColumns and builds its grid lazily.
+        self::assertStringContainsString('CatalogTileColumns::storeView(', $page);
+        self::assertStringContainsString('->contentGrid(fn (): ?array =>', $page);
+        self::assertStringNotContainsString('Cookie::queue(CatalogTileColumns::COOKIE_KEY', $page);
+
+        // Tile layout deliberately omits Minecraft version and loader badges.
+        self::assertStringNotContainsString('minecraft_versions', $tileBuilder);
+        self::assertStringNotContainsString('loaders', $tileBuilder);
+        self::assertStringNotContainsString("TextColumn::make('catalog_compatibility')", $page);
+
+        // Loading spinner and empty state are centered vertically & horizontally within the table content region.
+        self::assertStringContainsString('.mmr-table-scroll-ctn .fi-ta-table-loading-ctn{flex:1 1 auto;height:100%;min-height:8rem;}', $css);
+        self::assertStringContainsString('.mmr-table-scroll-ctn .fi-ta-empty-state{display:flex;align-items:center;justify-content:center;}', $css);
+
+        // List table keeps SWR cells and existing row structure; old CSS grid hacks and hardcoded dark colors are gone.
         self::assertStringContainsString("->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])", $page);
         self::assertStringContainsString('->description(function (array $record): ?string {', $page);
         self::assertSame(4, substr_count($page, '->toggleable()'));
-        self::assertStringNotContainsString('mmr-record-', $page);
-        self::assertStringNotContainsString('.fi-ta-record-content-ctn', $css);
-        self::assertStringContainsString('.mmr-project-icon-cell .fi-ta-image img{display:block;inline-size:4.5cqi;', $css);
-        self::assertStringContainsString('[data-mmr-catalog-view="panel"] .fi-ta-table>tbody{display:grid;', $css);
-        self::assertStringContainsString('@container (min-width:36rem)', $css);
-        self::assertStringContainsString('repeat(2,minmax(0,1fr))', $css);
-        self::assertStringContainsString('@container (min-width:54rem)', $css);
-        self::assertStringContainsString('repeat(3,minmax(0,1fr))', $css);
-        self::assertStringNotContainsString('repeat(auto-fit', $css);
+        self::assertStringNotContainsString('[data-mmr-catalog-view="panel"]', $css);
+        self::assertStringNotContainsString('rgb(17 24 39)', $css);
+        self::assertStringNotContainsString('rgb(31 41 55)', $css);
+        self::assertStringNotContainsString('mmr-compatibility-cell', $css);
     }
 
     public function test_all_manager_assets_have_a_deterministic_compressed_size_budget(): void

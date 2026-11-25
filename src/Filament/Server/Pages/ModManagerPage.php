@@ -25,8 +25,10 @@ use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Support\ArrayRecord;
+use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\TextSize;
 use Filament\Support\Enums\Width;
 use Filament\Tables\Columns\ImageColumn;
@@ -38,6 +40,7 @@ use Filament\Tables\Filters\Indicator;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -71,6 +74,8 @@ use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Sources\SpigotSource;
 use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
+use Kazaminosuke\ModManager\Support\CatalogFields;
+use Kazaminosuke\ModManager\Support\CatalogTileColumns;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
@@ -187,6 +192,9 @@ class ModManagerPage extends Page implements HasTable
     /** @var array<string, string> Browser-visible options for the toolbar select. */
     public array $catalogSortOptions = [];
 
+    /** Shared catalog presentation mode ('list' table or 'panel' tile grid). */
+    public string $catalogView = CatalogTileColumns::VIEW_LIST;
+
     /** Catalog filters are shareable and participate in browser back/forward. */
     #[Url(as: 'filters', history: true, keep: false)]
     public ?array $tableFilters = null;
@@ -250,6 +258,14 @@ class ModManagerPage extends Page implements HasTable
     public bool $pollEnrichment = false;
 
     /**
+     * Gentle follow-up poll while installed rows are in a short source-cache
+     * failure cooldown (`retry_delayed`). Does not dispatch upstream requests
+     * during cooldown; once the cooldown expires, pollEnrichment() re-peeks,
+     * queues one retry warm job, and refreshes the table when metadata lands.
+     */
+    public bool $pollEnrichmentRetry = false;
+
+    /**
      * Hash of the visible enrichment payload. Compared on pollEnrichment()
      * so an unchanged pending fill does not remorph the table every five
      * seconds. Shared by Installed and Catalog.
@@ -278,6 +294,9 @@ class ModManagerPage extends Page implements HasTable
 
     /** Whether a still-valid scan result already exists, independent of background-operation state. */
     public bool $installedScanDataReady = false;
+
+    /** Whether reading installed metadata failed during this request (Wings/read error). */
+    protected bool $installedMetadataReadFailed = false;
 
     /**
      * The scan result read during this request. Not a Livewire property: it
@@ -473,7 +492,7 @@ class ModManagerPage extends Page implements HasTable
         return $this->activeTab !== 'installed' && $this->getCurrentSource() instanceof SpigotSource;
     }
 
-    protected function resolveTableRecord(?string $key): \Illuminate\Database\Eloquent\Model|array|null
+    protected function resolveTableRecord(?string $key): Model|array|null
     {
         if ($this->isSpigotCatalog()) {
             return $key === null ? null : ($this->renderedSpigotRecords[$key] ?? null);
@@ -586,6 +605,7 @@ class ModManagerPage extends Page implements HasTable
             : session()->get($this->getCatalogSortSessionKey(), 'downloads');
         $this->refreshCatalogSortOptions();
         $this->catalogSort = $this->normalizeCatalogSort($requestedSort);
+        $this->catalogView = CatalogTileColumns::resolveInitialView();
         $this->rejectUnauthorizedInstalledTab();
         $this->normalizeCatalogCompatibilityOverrides();
         $this->configureCatalogCompatibilityOverride();
@@ -595,6 +615,33 @@ class ModManagerPage extends Page implements HasTable
         $this->refreshInstalledOperationState();
 
         $this->catalogWarmPending = true;
+    }
+
+    public function toggleCatalogView(): void
+    {
+        $this->catalogView = CatalogTileColumns::storeView(
+            $this->catalogView === CatalogTileColumns::VIEW_PANEL
+                ? CatalogTileColumns::VIEW_LIST
+                : CatalogTileColumns::VIEW_PANEL,
+        );
+
+        if (isset($this->table)) {
+            $this->table = $this->table($this->makeTable());
+            $this->syncTableColumnManagerAfterViewChange();
+        }
+
+        $this->flushCachedTableRecords();
+    }
+
+    protected function syncTableColumnManagerAfterViewChange(): void
+    {
+        if (!isset($this->table) || $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
+        $this->cachedDefaultTableColumnState = null;
+        $this->tableColumnsToggleStateByName = null;
+        $this->initTableColumnManager();
     }
 
     public function hydrate(): void
@@ -1020,10 +1067,7 @@ class ModManagerPage extends Page implements HasTable
         $this->catalogCategoryOptionsKey = null;
         $this->projectIconRowIndexMap = null;
 
-        // A loaded table normally evaluates its records during this same
-        // Livewire update. Reset it to Filament's deferred state first, so an
-        // Installed-tab hydration runs in the follow-up loadTable request
-        // while the tab itself has already switched and shows its spinner.
+        // Let Filament defer uncached records on the new tab.
         $this->isTableLoaded = false;
 
         // HasTabs::updatedActiveTab() (aliased above) already resets the table's
@@ -1051,6 +1095,10 @@ class ModManagerPage extends Page implements HasTable
         $this->tableDeferredFilters = [];
         $this->refreshCatalogSortOptions();
         $this->catalogSort = $this->normalizeCatalogSort($this->catalogSort);
+        if (isset($this->table)) {
+            $this->table = $this->table($this->makeTable());
+            $this->syncTableColumnManagerAfterViewChange();
+        }
         $this->resetTable();
         $this->queueHeaderScroll();
         $this->dispatchCatalogWarm();
@@ -1206,11 +1254,19 @@ class ModManagerPage extends Page implements HasTable
      */
     public function applyTableColumnManager(?array $state = null, bool $wasReordered = false): void
     {
+        if (isset($this->table) && $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
         $this->baseApplyTableColumnManager($state, $wasReordered);
     }
 
     public function resetTableColumnManager(): void
     {
+        if (isset($this->table) && $this->getTable()->hasColumnsLayout()) {
+            return;
+        }
+
         $this->baseResetTableColumnManager();
     }
 
@@ -1546,12 +1602,14 @@ class ModManagerPage extends Page implements HasTable
                     $this->installedModsMetadata = $cached;
                     $this->installedFilesCount = count($cached);
                     $this->installedScanDataReady = true;
+                    $this->installedMetadataReadFailed = false;
                 } else {
                     try {
                         $installed = app(ResourcePackService::class)->getInstalled($server, $fileRepository);
                         $this->installedModsMetadata = $installed === null ? [] : [$installed];
                         $this->installedFilesCount = $installed === null ? 0 : 1;
                         $this->installedScanDataReady = true;
+                        $this->installedMetadataReadFailed = false;
                         Cache::put($cacheKey, $this->installedModsMetadata, now()->addHour());
                     } catch (Exception $exception) {
                         if (function_exists('report') && app()->bound(ExceptionHandler::class)) {
@@ -1560,6 +1618,7 @@ class ModManagerPage extends Page implements HasTable
                         $this->installedModsMetadata = [];
                         $this->installedFilesCount = -1;
                         $this->installedScanDataReady = false;
+                        $this->installedMetadataReadFailed = true;
                     }
                 }
 
@@ -1587,10 +1646,12 @@ class ModManagerPage extends Page implements HasTable
 
             if ($cacheHit) {
                 $this->installedModsMetadata = $cached;
+                $this->installedMetadataReadFailed = false;
             } else {
                 $metadataResult = ModManager::getInstalledMetadataReadResult($server, $fileRepository, $type);
                 $this->installedModsMetadata = $metadataResult->document->installedMods();
                 $metadataStatus = $metadataResult->status->value;
+                $this->installedMetadataReadFailed = !$metadataResult->isAuthoritative();
 
                 // Never turn a transient Wings/metadata read failure into an
                 // hour of an apparently empty Installed tab. A valid empty
@@ -2334,15 +2395,8 @@ class ModManagerPage extends Page implements HasTable
      * Livewire round trip (wire:init="loadTable") a deferred table always
      * costs.
      *
-     * Deliberately always false for the Installed tab: unlike the catalog
-     * tab, records()'s installed branch can still discover a missing scan
-     * cache and start a background scan (or show the configuration warning).
-     * hasWarmRecordsCache() can only see the longer-lived metadata display
-     * cache, not that separate scan-result cache. Keeping the Installed tab
-     * unconditionally deferred gives that state transition its own request;
-     * the manager rejects a missing background dispatcher, and the render itself remains
-     * non-blocking through peekVisibleLatestVersions()/peekInstalled() and
-     * pollEnrichment().
+     * The Installed tab uses a separate scan-result cache. Its pending
+     * scan has a dedicated empty state and is handled by deferLoading().
      */
     protected function hasWarmRecordsCache(): bool
     {
@@ -2434,9 +2488,11 @@ class ModManagerPage extends Page implements HasTable
                 (string) ($project['project_id'] ?? ''),
                 (string) ($project['source'] ?? ''),
                 (string) ($project['icon_url'] ?? ''),
+                (string) ($project['description'] ?? ''),
                 (string) ($project['downloads'] ?? ''),
                 (string) ($project['date_modified'] ?? ''),
                 !empty($project['enrichment_pending']) ? '1' : '0',
+                !empty($project['retry_delayed']) ? '1' : '0',
             ]);
         }
 
@@ -2643,16 +2699,19 @@ class ModManagerPage extends Page implements HasTable
             ? app(ProjectSourceRegistry::class)->peekInstalled($pagedInstalledMods, $server)
             : [];
 
+        $enrichmentRetryDelayed = false;
         foreach ($projects as $project) {
             if ($project['enrichment_pending'] ?? false) {
                 $enrichmentPending = true;
-
-                break;
+            }
+            if ($project['retry_delayed'] ?? false) {
+                $enrichmentRetryDelayed = true;
             }
         }
 
-        $this->pollEnrichment = $enrichmentPending
-            && app(InstalledOperationManager::class)->supportsAsyncDispatch();
+        $supportsAsync = app(InstalledOperationManager::class)->supportsAsyncDispatch();
+        $this->pollEnrichment = $enrichmentPending && $supportsAsync;
+        $this->pollEnrichmentRetry = !$this->pollEnrichment && $enrichmentRetryDelayed && $supportsAsync;
         $this->installedEnrichmentSignature = $this->enrichmentSignatureFromProjects(
             $projects,
             $this->pendingLatestVersionKeys !== [],
@@ -2755,18 +2814,22 @@ class ModManagerPage extends Page implements HasTable
                         ? app(ProjectSourceRegistry::class)->peekInstalled($pagedInstalledMods, $server)
                         : [];
 
+                    $enrichmentRetryDelayed = false;
                     foreach ($projects as $project) {
                         if ($project['enrichment_pending'] ?? false) {
                             $enrichmentPending = true;
-
-                            break;
+                        }
+                        if ($project['retry_delayed'] ?? false) {
+                            $enrichmentRetryDelayed = true;
                         }
                     }
 
                     // A missing background dispatcher cannot complete a deferred
                     // metadata fill, so polling it would only repeat the same
                     // cache reads and table render indefinitely.
-                    $this->pollEnrichment = $enrichmentPending && $operations->supportsAsyncDispatch();
+                    $supportsAsync = $operations->supportsAsyncDispatch();
+                    $this->pollEnrichment = $enrichmentPending && $supportsAsync;
+                    $this->pollEnrichmentRetry = !$this->pollEnrichment && $enrichmentRetryDelayed && $supportsAsync;
                     $this->installedEnrichmentSignature = $this->enrichmentSignatureFromProjects(
                         $projects,
                         $this->pendingLatestVersionKeys !== [],
@@ -2798,6 +2861,7 @@ class ModManagerPage extends Page implements HasTable
 
                 if (!$type || !$currentSource || !$currentSource->isConfigured() || !$currentSource->supportsSearch()) {
                     $this->pollEnrichment = false;
+                    $this->pollEnrichmentRetry = false;
                     $this->catalogEnrichmentPeekKeys = [];
                     $this->installedEnrichmentSignature = null;
 
@@ -2859,18 +2923,14 @@ class ModManagerPage extends Page implements HasTable
                 $versionPending = $this->peekVisibleLatestVersions($hits, $server, $type);
                 $this->pollEnrichment = $versionPending
                     && app(InstalledOperationManager::class)->supportsAsyncDispatch();
+                $this->pollEnrichmentRetry = false;
                 $this->catalogEnrichmentPeekKeys = $this->catalogEnrichmentPeekKeysFromHits($hits);
                 $this->installedEnrichmentSignature = $this->catalogEnrichmentSignatureFromHits($hits);
 
                 return new LengthAwarePaginator($hits, $response['total_hits'], self::TABLE_PAGE_SIZE, $page);
             })
-            // Render the page shell immediately, unless the current request's
-            // records are already cached (fresh or stale) with no upstream
-            // fetch required - in which case skip the deferred round trip
-            // entirely and render real records synchronously. See
-            // hasWarmRecordsCache() for what "warm" means per tab, and why
-            // the Installed tab is deliberately excluded from this check.
-            ->deferLoading(fn (): bool => !$this->hasWarmRecordsCache())
+            // An empty pending scan has its own status inside the table.
+            ->deferLoading(fn (): bool => !$this->showInstalledScanInEmptyState() && !$this->hasWarmRecordsCache())
             ->paginated([self::TABLE_PAGE_SIZE])
             // Filament's Select uses a fixed Floating UI strategy inside this
             // positioning context, so its option panel can escape the
@@ -2892,7 +2952,7 @@ class ModManagerPage extends Page implements HasTable
             ->filters([
                 CatalogSelectFilter::make('catalog_version')
                     ->label(trans('pelican-mod-manager::strings.table.filters.minecraft_version'))
-                    ->options(fn () => $this->getCatalogVersionOptions())
+                    ->options(fn () => $this->getCatalogVersionFilterOptions())
                     ->placeholder(fn (): string => $this->catalogVersionFilterPlaceholder())
                     ->multiple()
                     ->default(fn (): array => $this->catalogDefaultVersionValues())
@@ -3047,99 +3107,134 @@ class ModManagerPage extends Page implements HasTable
                     ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarTagOptions() !== []),
             ])
-            ->emptyStateHeading(function () {
+            ->emptyState(fn () => $this->showInstalledScanInEmptyState()
+                ? view('pelican-mod-manager::components.installed-operation-status', $this->installedOperationStatusViewData(inTable: true))
+                : null)
+            ->emptyStateIcon(function (): ?string {
+                if ($this->activeTab === 'installed') {
+                    return $this->installedEmptyStateIcon();
+                }
+
+                return null;
+            })
+            ->emptyStateHeading(function (): ?string {
+                if ($this->activeTab === 'installed') {
+                    return $this->installedEmptyStateHeading();
+                }
+
                 $currentSource = $this->getCurrentSource();
 
-                if ($this->activeTab !== 'installed' && $currentSource && !$currentSource->isConfigured()) {
+                if ($currentSource && !$currentSource->isConfigured()) {
                     return trans('pelican-mod-manager::strings.page.source_not_configured_heading');
                 }
 
                 return null;
             })
-            ->emptyStateDescription(function () {
+            ->emptyStateDescription(function (): ?string {
+                if ($this->activeTab === 'installed') {
+                    return $this->installedEmptyStateDescription();
+                }
+
                 $currentSource = $this->getCurrentSource();
 
-                if ($this->activeTab !== 'installed' && $currentSource && !$currentSource->isConfigured()) {
+                if ($currentSource && !$currentSource->isConfigured()) {
                     return trans('pelican-mod-manager::strings.page.source_not_configured');
                 }
 
                 return null;
             })
-            ->columns([
-                ImageColumn::make('icon_url')
-                    ->label('')
-                    // ImageColumn omits its <img> when the state is blank. A
-                    // local SVG keeps the common placeholder structure without
-                    // an external request or visible "No image" text.
-                    ->defaultImageUrl(ProjectIconUrl::placeholderDataUri())
-                    ->alignCenter()
-                    // The client-side stale preview updates only values in the
-                    // real Filament cell. Keep this selector independent of
-                    // Filament's generated HTML below the cell.
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])
-                    ->extraImgAttributes(fn (array $record): array => $this->projectIconImgAttributes($record)),
-                TextColumn::make('title')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.title'))
-                    ->searchable()
-                    ->wrap()
-                    ->lineClamp(1)
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'title'])
-                    ->description(function (array $record): ?string {
+            ->columns($this->isCatalogTileView()
+                ? CatalogTileColumns::columns(
+                    iconImgAttributes: fn (array $record): array => $this->projectIconImgAttributes($record),
+                    formatDate: fn ($state): string => $this->formatExternalProjectDate($state),
+                    dateTooltip: function ($state) use ($table): string {
+                        $date = $this->parseExternalProjectDate($state);
+
+                        return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
+                    },
+                    descriptionFormatter: function (array $record): ?string {
                         if ($record['untracked'] ?? false) {
                             return trans('pelican-mod-manager::strings.badges.untracked');
                         }
 
                         $description = $record['description'] ?? null;
-                        if (!is_string($description)) {
+                        if (!is_string($description) || trim($description) === '') {
                             return null;
                         }
 
                         return $this->truncateProjectDescription($description);
-                    }),
-                TextColumn::make('source')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.source'))
-                    ->badge()
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'source'])
-                    ->formatStateUsing(fn (?string $state) => $this->getSourceLabel($state))
-                    ->color(fn (?string $state) => match ($state) {
-                        'modrinth' => 'success',
-                        'curseforge' => 'warning',
-                        'hangar' => 'info',
-                        'spigot' => 'primary',
-                        'github_releases' => 'gray',
-                        default => 'gray',
-                    })
-                    ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1)
-                    ->toggleable(),
-                TextColumn::make('catalog_compatibility')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.compatibility'))
-                    ->state(fn (): string => $this->catalogCompatibilityLabel())
-                    ->badge()
-                    ->extraHeaderAttributes(['class' => 'mmr-compatibility-header'])
-                    ->extraCellAttributes(['class' => 'mmr-compatibility-cell']),
-                TextColumn::make('author')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.author'))
-                    ->url(fn (array $record, $state) => (($record['source'] ?? null) === ProjectSourceKey::Modrinth->value && $state) ? "https://modrinth.com/user/$state" : null, true)
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'author'])
-                    ->toggleable(),
-                TextColumn::make('downloads')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
-                    ->numeric()
-                    ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="downloads" aria-hidden="true"></span>'))
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'downloads'])
-                    ->toggleable(),
-                TextColumn::make('date_modified')
-                    ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
-                    ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="calendar" aria-hidden="true"></span>'))
-                    ->formatStateUsing(fn ($state): string => $this->formatExternalProjectDate($state))
-                    ->tooltip(function ($state) use ($table): string {
-                        $date = $this->parseExternalProjectDate($state);
+                    },
+                )
+                : [
+                    ImageColumn::make('icon_url')
+                        ->label('')
+                        // ImageColumn omits its <img> when the state is blank. A
+                        // local SVG keeps the common placeholder structure without
+                        // an external request or visible "No image" text.
+                        ->defaultImageUrl(ProjectIconUrl::placeholderDataUri())
+                        ->alignCenter()
+                        // The client-side stale preview updates only values in the
+                        // real Filament cell. Keep this selector independent of
+                        // Filament's generated HTML below the cell.
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'icon', 'class' => 'mmr-project-icon-cell'])
+                        ->extraImgAttributes(fn (array $record): array => $this->projectIconImgAttributes($record)),
+                    TextColumn::make('title')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.title'))
+                        ->searchable()
+                        ->wrap()
+                        ->lineClamp(1)
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'title'])
+                        ->description(function (array $record): ?string {
+                            if ($record['untracked'] ?? false) {
+                                return trans('pelican-mod-manager::strings.badges.untracked');
+                            }
 
-                        return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
-                    })
-                    ->extraCellAttributes(['data-mmr-swr-cell' => 'date_modified'])
-                    ->toggleable(),
-            ])
+                            $description = $record['description'] ?? null;
+                            if (!is_string($description)) {
+                                return null;
+                            }
+
+                            return $this->truncateProjectDescription($description);
+                        }),
+                    TextColumn::make('source')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.source'))
+                        ->badge()
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'source'])
+                        ->formatStateUsing(fn (?string $state) => $this->getSourceLabel($state))
+                        ->color(fn (?string $state) => match ($state) {
+                            'modrinth' => 'success',
+                            'curseforge' => 'warning',
+                            'hangar' => 'info',
+                            'spigot' => 'primary',
+                            'github_releases' => 'gray',
+                            default => 'gray',
+                        })
+                        ->visible(fn () => $this->activeTab === 'installed' && count($this->getAvailableSources()) > 1)
+                        ->toggleable(),
+                    TextColumn::make('author')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.author'))
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'author'])
+                        ->toggleable(),
+                    TextColumn::make('downloads')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.downloads'))
+                        ->numeric()
+                        ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="downloads" aria-hidden="true"></span>'))
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'downloads'])
+                        ->toggleable(),
+                    TextColumn::make('date_modified')
+                        ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
+                        ->prefix(new HtmlString('<span class="mmr-stat-icon" data-mmr-stat-icon="calendar" aria-hidden="true"></span>'))
+                        ->formatStateUsing(fn ($state): string => $this->formatExternalProjectDate($state))
+                        ->tooltip(function ($state) use ($table): string {
+                            $date = $this->parseExternalProjectDate($state);
+
+                            return $date?->timezone(user()->timezone ?? 'UTC')->format($table->getDefaultDateTimeDisplayFormat()) ?? '';
+                        })
+                        ->extraCellAttributes(['data-mmr-swr-cell' => 'date_modified'])
+                        ->toggleable(),
+                ])
+            ->contentGrid(fn (): ?array => $this->isCatalogTileView() ? CatalogTileColumns::contentGrid() : null)
+            ->recordActionsAlignment(Alignment::End->value)
             ->recordUrl(function (array $record) {
                 if (!empty($record['unavailable']) || ($record['untracked'] ?? false)) {
                     return null;
@@ -3581,6 +3676,12 @@ class ModManagerPage extends Page implements HasTable
         };
     }
 
+    protected function isCatalogTileView(): bool
+    {
+        return $this->activeTab !== 'installed'
+            && $this->catalogView === CatalogTileColumns::VIEW_PANEL;
+    }
+
     /** @return array<string, string> */
     protected function getCatalogVersionOptions(): array
     {
@@ -3592,6 +3693,17 @@ class ModManagerPage extends Page implements HasTable
             $source instanceof HangarSource => $source->catalogVersionOptions($this->effectiveHangarPlatform()),
             default => [],
         };
+    }
+
+    /** @return array<string, string> */
+    protected function getCatalogVersionFilterOptions(): array
+    {
+        $options = $this->getCatalogVersionOptions();
+        if ($options === []) {
+            return [];
+        }
+
+        return [CatalogFields::VERSION_ALL => $this->catalogAllFilterPlaceholder()] + $options;
     }
 
     protected function catalogAllFilterPlaceholder(): string
@@ -4390,6 +4502,104 @@ class ModManagerPage extends Page implements HasTable
         ];
     }
 
+    protected function isInstalledScanInProgress(): bool
+    {
+        if (is_array($this->installedOperation)
+            && ($this->installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_SCAN
+            && in_array($this->installedOperation['status'] ?? null, [
+                InstalledOperationState::STATUS_QUEUED,
+                InstalledOperationState::STATUS_RUNNING,
+            ], true)) {
+            return true;
+        }
+
+        /** @var Server|null $server */
+        $server = Filament::getTenant();
+        $type = $server instanceof Server ? static::detectProjectType($server) : null;
+
+        return $this->installedOperation === null
+            && $type !== ProjectType::ResourcePack
+            && !$this->installedScanDataReady
+            && $this->pollInstalledOperations;
+    }
+
+    protected function isInstalledScanFailed(): bool
+    {
+        if (is_array($this->installedOperation)
+            && ($this->installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_SCAN
+            && ($this->installedOperation['status'] ?? null) === InstalledOperationState::STATUS_FAILED) {
+            return true;
+        }
+
+        return is_array($this->installedScanCompletion)
+            && ($this->installedScanCompletion['status'] ?? null) === InstalledOperationState::STATUS_FAILED;
+    }
+
+    protected function showInstalledScanInEmptyState(): bool
+    {
+        return $this->activeTab === 'installed' && !$this->installedScanDataReady
+            && !$this->operationQueueWarningShown && $this->isInstalledScanInProgress();
+    }
+
+    protected function installedEmptyStateIcon(): string
+    {
+        if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
+            return 'tabler-alert-triangle';
+        }
+
+        if (filled(trim((string) $this->getTableSearch()))) {
+            return 'tabler-search';
+        }
+
+        /** @var Server|null $server */
+        $server = Filament::getTenant();
+        $type = $server instanceof Server ? static::detectProjectType($server) : null;
+
+        return match ($type) {
+            ProjectType::Datapack => 'tabler-file-zip',
+            ProjectType::ResourcePack => 'tabler-photo',
+            default => 'tabler-packages',
+        };
+    }
+
+    protected function installedEmptyStateHeading(): string
+    {
+        if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_error_heading');
+        }
+
+        if (filled(trim((string) $this->getTableSearch()))) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_search_heading');
+        }
+
+        /** @var Server|null $server */
+        $server = Filament::getTenant();
+        $type = $server instanceof Server ? static::detectProjectType($server) : null;
+
+        $key = match ($type) {
+            ProjectType::Plugin => 'installed_plugin',
+            ProjectType::Datapack => 'installed_datapack',
+            ProjectType::ResourcePack => 'installed_resourcepack',
+            default => 'installed_mod',
+        };
+
+        return trans('pelican-mod-manager::strings.table.empty.'.$key);
+    }
+
+    protected function installedEmptyStateDescription(): string
+    {
+        if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_error_description');
+        }
+
+        if (filled(trim((string) $this->getTableSearch()))) {
+            return trans('pelican-mod-manager::strings.table.empty.installed_search_description');
+        }
+
+        return trans('pelican-mod-manager::strings.table.empty.installed_description');
+    }
+
+    /** @return array<string, mixed> */
     private function modpackPreview(Server $server, Get $get, mixed $explicitEggId = null): ?CompatibilityResult
     {
         $project = (string) $get('project');
@@ -4485,46 +4695,15 @@ class ModManagerPage extends Page implements HasTable
                 Section::make()
                     ->extraAttributes(fn () => $this->installedOperationStatusExtraAttributes())
                     ->schema([
-                        TextEntry::make('installed_operation_status')
-                            ->hiddenLabel()
-                            ->state(fn () => $this->installedOperationStatus())
-                            // Mirrors installedOperationIsActive()'s split: the
-                            // spinning loader belongs only to states that are
-                            // genuinely still in flight. The terminal states get
-                            // an icon that reads as an outcome instead, so a
-                            // finished scan no longer looks like a running one.
-                            ->icon(fn () => match ($this->getInstalledOperationDisplayPayload()['status'] ?? null) {
-                                InstalledOperationState::STATUS_COMPLETED => 'tabler-check',
-                                InstalledOperationState::STATUS_FAILED => 'tabler-alert-triangle',
-                                default => $this->operationQueueWarningShown
-                                    ? 'tabler-alert-triangle'
-                                    : 'tabler-loader-2',
-                            })
-                            ->badge()
-                            ->color(fn () => match ($this->getInstalledOperationDisplayPayload()['status'] ?? null) {
-                                InstalledOperationState::STATUS_RUNNING => 'info',
-                                InstalledOperationState::STATUS_COMPLETED => 'success',
-                                InstalledOperationState::STATUS_FAILED => 'danger',
-                                default => $this->operationQueueWarningShown ? 'danger' : 'gray',
-                            })
-                            // TextEntry has no dedicated hook for extra icon
-                            // attributes (unlike ImageColumn's
-                            // extraImgAttributes()) - Filament's own
-                            // generate_icon_html() puts the "fi-icon" class
-                            // directly on the rendered <svg>, so scoping the
-                            // spin animation through this wrapper class and
-                            // a descendant selector (like the existing
-                            // .mcloader-badge rule below) reaches it without
-                            // needing that hook.
-                            ->extraAttributes(fn () => $this->installedOperationIsActive()
-                                ? ['class' => 'mmr-installed-operation-spinning']
-                                : []),
+                        View::make('pelican-mod-manager::components.installed-operation-status')
+                            ->viewData(fn (): array => $this->installedOperationStatusViewData()),
                     ])
                     // Bulk-update progress remains useful in the page body.
                     // A scan uses this same position, but only while the
                     // Installed tab is open (including its brief success
                     // outcome); catalog tabs stay free of scan state.
-                    ->visible(fn () => $this->shouldShowInstalledOperationStatus()),
+                    ->visible(fn () => $this->shouldShowInstalledOperationStatus()
+                        && !($this->showInstalledScanInEmptyState() && $this->getTableRecords()->isEmpty())),
                 Group::make([
                     EmbeddedTable::make(),
                 ])->extraAttributes(fn () => array_merge([
@@ -4562,6 +4741,10 @@ class ModManagerPage extends Page implements HasTable
 
         if ($this->pollEnrichment) {
             return ['wire:poll.5s' => 'pollEnrichment'];
+        }
+
+        if ($this->pollEnrichmentRetry) {
+            return ['wire:poll.10s' => 'pollEnrichment'];
         }
 
         return [];
@@ -4876,7 +5059,7 @@ class ModManagerPage extends Page implements HasTable
         }
 
         $signature = $this->peekInstalledEnrichmentSignature();
-        if ($this->pollEnrichment
+        if (($this->pollEnrichment || $this->pollEnrichmentRetry)
             && $signature !== null
             && $signature === $this->installedEnrichmentSignature) {
             $this->skipRender();
@@ -4978,6 +5161,11 @@ class ModManagerPage extends Page implements HasTable
 
         $operation = $this->getInstalledOperationDisplayPayload();
 
+        if ($operation === null) {
+            return !$this->installedScanDataReady
+                && ($this->pollInstalledOperations || $this->operationQueueWarningShown);
+        }
+
         if (($operation['operation'] ?? null) !== InstalledOperationManager::OPERATION_SCAN
             // A background revalidation refreshes data already on screen.
             || (($operation['result']['background'] ?? false) === true)) {
@@ -5008,6 +5196,10 @@ class ModManagerPage extends Page implements HasTable
         $finishedAt = $completion['finished_at'] ?? null;
 
         if ($this->activeTab !== 'installed'
+            || in_array($this->installedOperation['status'] ?? null, [
+                InstalledOperationState::STATUS_QUEUED,
+                InstalledOperationState::STATUS_RUNNING,
+            ], true)
             || ($completion['operation'] ?? null) !== InstalledOperationManager::OPERATION_SCAN
             || ($completion['status'] ?? null) !== InstalledOperationState::STATUS_COMPLETED
             || !is_string($finishedAt)) {
@@ -5049,21 +5241,29 @@ class ModManagerPage extends Page implements HasTable
         ];
     }
 
-    /**
-     * Whether the status badge's loader icon should spin - true while
-     * something is queued, running, or about to be dispatched, false for
-     * the terminal completed/failed states and the static queue-config
-     * warning (all of which mean nothing is actually in progress anymore).
-     */
-    protected function installedOperationIsActive(): bool
+    /** @return array{inTable: bool, loading: bool, icon: ?string, color: string, message: string} */
+    protected function installedOperationStatusViewData(bool $inTable = false): array
     {
         $status = $this->getInstalledOperationDisplayPayload()['status'] ?? null;
+        $warning = $status === null && $this->operationQueueWarningShown;
 
-        if (in_array($status, [InstalledOperationState::STATUS_COMPLETED, InstalledOperationState::STATUS_FAILED], true)) {
-            return false;
-        }
-
-        return !($status === null && $this->operationQueueWarningShown);
+        return [
+            'inTable' => $inTable,
+            'loading' => $status === InstalledOperationState::STATUS_RUNNING || ($status === null && !$warning),
+            'icon' => match ($status) {
+                InstalledOperationState::STATUS_QUEUED => 'tabler-clock',
+                InstalledOperationState::STATUS_COMPLETED => 'tabler-check',
+                InstalledOperationState::STATUS_FAILED => 'tabler-alert-triangle',
+                default => $warning ? 'tabler-alert-triangle' : null,
+            },
+            'color' => match ($status) {
+                InstalledOperationState::STATUS_RUNNING => 'info',
+                InstalledOperationState::STATUS_COMPLETED => 'success',
+                InstalledOperationState::STATUS_FAILED => 'danger',
+                default => $warning ? 'danger' : 'gray',
+            },
+            'message' => $this->installedOperationStatus(),
+        ];
     }
 
     protected function shouldPollInstalledOperation(?InstalledOperationState $state): bool
@@ -5260,10 +5460,8 @@ class ModManagerPage extends Page implements HasTable
         }
 
         if ($dispatch['dispatched']) {
-            if ($state !== null && $state->operation === InstalledOperationManager::OPERATION_SCAN) {
-                // Scan progress belongs in the Installed tab, not in a
-                // global notification. The tab condition is enforced by
-                // shouldShowInstalledOperationStatus().
+            if ($state !== null && ($state->operation === InstalledOperationManager::OPERATION_SCAN
+                || $this->shouldShowInstalledOperationStatus())) {
                 return;
             }
 

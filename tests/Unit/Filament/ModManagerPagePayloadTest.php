@@ -1014,6 +1014,56 @@ class ModManagerPagePayloadTest extends TestCase
         self::assertStringNotContainsString("ProjectType::Datapack->value => 'texture-packs'", $source);
     }
 
+    public function test_initial_installed_tab_shows_checking_status_before_scan_data_is_ready(): void
+    {
+        $page = $this->pageWithSources([]);
+        $page->activeTab = 'installed';
+        $page->installedOperation = null;
+        $page->installedScanDataReady = false;
+        $page->pollInstalledOperations = true;
+
+        self::assertTrue($page->shouldShowOperationStatusForTest());
+
+        // Once scan data is ready and no active operation is running, hide it.
+        $page->installedScanDataReady = true;
+        self::assertFalse($page->shouldShowOperationStatusForTest());
+
+        // Queue-warning state also remains visible when data is not ready.
+        $page->installedScanDataReady = false;
+        $page->pollInstalledOperations = false;
+        $page->operationQueueWarningShown = true;
+        self::assertTrue($page->shouldShowOperationStatusForTest());
+
+        // Catalog tabs stay free of scan status indicators.
+        $page->activeTab = 'modrinth';
+        self::assertFalse($page->shouldShowOperationStatusForTest());
+    }
+
+    public function test_retry_delayed_enrichment_uses_gentle_poll_and_refreshes_when_signature_changes(): void
+    {
+        $page = $this->pageWithSources([]);
+        $page->activeTab = 'installed';
+        $page->pollInstalledOperations = false;
+        $page->pollEnrichment = false;
+        $page->pollEnrichmentRetry = true;
+        $page->installedEnrichmentSignature = 'cooldown-sig';
+
+        self::assertSame(['wire:poll.10s' => 'pollEnrichment'], $page->tablePollingAttributesForTest());
+
+        // While signature is unchanged during cooldown, pollEnrichment skips re-render.
+        $page->peekedEnrichmentSignatureForTest = 'cooldown-sig';
+        $page->pollEnrichment();
+        self::assertSame(1, $page->pollEnrichmentSkipRenderCallsForTest);
+        self::assertSame(0, $page->flushCachedTableRecordsCallsForTest);
+
+        // Once cooldown expires or metadata arrives, signature changes and table records flush.
+        $page->peekedEnrichmentSignatureForTest = 'recovered-sig';
+        $page->pollEnrichment();
+        self::assertSame(1, $page->pollEnrichmentSkipRenderCallsForTest);
+        self::assertSame(1, $page->flushCachedTableRecordsCallsForTest);
+        self::assertSame('recovered-sig', $page->installedEnrichmentSignature);
+    }
+
     /** @param array<int, ProjectSourceInterface> $sources */
     private function pageWithSources(array $sources): TestableModManagerPage
     {
