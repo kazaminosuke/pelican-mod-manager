@@ -27,6 +27,7 @@ final class ModpackProvisioning
 
     private const TABLE = 'mod_manager_provisioning';
 
+    /** @param array{container_image: string, entrypoint: string, script: string} $installer */
     public function stage(Server $server, array $installer): void
     {
         DB::table(self::TABLE)->insert([

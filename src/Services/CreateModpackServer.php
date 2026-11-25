@@ -6,6 +6,7 @@ use App\Models\Objects\DeploymentObject;
 use App\Models\Server;
 use App\Services\Servers\ServerCreationService;
 use Closure;
+use Illuminate\Container\Container;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use ReflectionMethod;
@@ -39,7 +40,7 @@ final class CreateModpackServer extends ServerCreationService
         $data['startup'] = $selection['startup'];
 
         return parent::handle($data, $deployment, function (Server $server) use ($installer): void {
-            app(ModpackProvisioning::class)->stage($server, $installer);
+            Container::getInstance()->make(ModpackProvisioning::class)->stage($server, $installer);
         });
     }
 }
