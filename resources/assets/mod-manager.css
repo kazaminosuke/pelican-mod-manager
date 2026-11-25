@@ -8,6 +8,14 @@
 .mmr-table-scroll-ctn .fi-ta-content-ctn:has(>.fi-ta-table-loading-ctn){display:flex;flex-direction:column;}
 .mmr-table-scroll-ctn .fi-ta-table-loading-ctn{flex:1 1 auto;height:100%;min-height:8rem;}
 .mmr-table-scroll-ctn .fi-ta-empty-state{display:flex;align-items:center;justify-content:center;}
+.mmr-table-scroll-ctn .fi-ta-main:has(.mmr-installed-scan-pending){height:auto;min-height:0;}
+.mmr-installed-scan-pending{display:flex;align-items:center;gap:.5rem;padding:1rem;}
+.fi-ta-split.mmr-tile-stats{flex-wrap:wrap;gap:.25rem .75rem;}
+.mmr-tile-stats>.fi-ta-col{flex:1 1 max-content;min-inline-size:0;max-inline-size:100%;}
+.mmr-tile-stats>:has(>.mmr-tile-stat-values){min-inline-size:0;max-inline-size:100%;margin-inline-start:auto;}
+.fi-ta-split.mmr-tile-stat-values{gap:.75rem;white-space:nowrap;overflow-x:auto;}
+.mmr-tile-stat-values>div{flex-shrink:0;}
+.mmr-tile-stats>div:not(:has(.fi-ta-text-item)),.mmr-tile-stat-values>div:not(:has(.fi-ta-text-item)){display:none;}
 .mmr-table-scroll-ctn .fi-pagination{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);}
 .mmr-table-scroll-ctn .fi-pagination-overview{grid-column:1;min-inline-size:0;min-block-size:2.5rem;white-space:normal;overflow-wrap:normal;word-break:normal;line-break:strict;}
 .mmr-table-scroll-ctn .mmr-pagination-overview-content{min-inline-size:0;}
@@ -43,7 +51,3 @@
 .mmr-table-scroll-ctn .mmr-stat-icon{display:inline-block;width:1rem;height:1rem;flex:0 0 1rem;background:currentColor;vertical-align:-0.125em;-webkit-mask:var(--mmr-stat-icon-mask) center/contain no-repeat;mask:var(--mmr-stat-icon-mask) center/contain no-repeat;}
 .mmr-table-scroll-ctn .mmr-stat-icon[data-mmr-stat-icon="downloads"]{--mmr-stat-icon-mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%22M4%2017v2a2%202%200%200%200%202%202h12a2%202%200%200%200%202%20-2v-2%22%2F%3E%3Cpath%20d%3D%22M7%2011l5%205l5%20-5%22%2F%3E%3Cpath%20d%3D%22M12%204l0%2012%22%2F%3E%3C%2Fsvg%3E");}
 .mmr-table-scroll-ctn .mmr-stat-icon[data-mmr-stat-icon="calendar"]{--mmr-stat-icon-mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%22M4%207a2%202%200%200%201%202%20-2h12a2%202%200%200%201%202%202v12a2%202%200%200%201%20-2%202h-12a2%202%200%200%201%20-2%20-2v-12z%22%2F%3E%3Cpath%20d%3D%22M16%203v4%22%2F%3E%3Cpath%20d%3D%22M8%203v4%22%2F%3E%3Cpath%20d%3D%22M4%2011h16%22%2F%3E%3Cpath%20d%3D%22M11%2015h1%22%2F%3E%3Cpath%20d%3D%22M12%2015v3%22%2F%3E%3C%2Fsvg%3E");}
-@keyframes mmr-spin{to{transform:rotate(360deg);}
-}
-@media (prefers-reduced-motion: no-preference){.mmr-installed-operation-spinning .fi-icon{animation:mmr-spin 1s linear infinite;}
-}

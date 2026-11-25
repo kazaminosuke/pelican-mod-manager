@@ -1100,10 +1100,7 @@ class ModManagerPage extends Page implements HasTable
         $this->catalogCategoryOptionsKey = null;
         $this->projectIconRowIndexMap = null;
 
-        // A loaded table normally evaluates its records during this same
-        // Livewire update. Reset it to Filament's deferred state first, so an
-        // Installed-tab hydration runs in the follow-up loadTable request
-        // while the tab itself has already switched and shows its spinner.
+        // Let Filament defer uncached records on the new tab.
         $this->isTableLoaded = false;
 
         // HasTabs::updatedActiveTab() (aliased above) already resets the table's
@@ -2465,15 +2462,8 @@ class ModManagerPage extends Page implements HasTable
      * Livewire round trip (wire:init="loadTable") a deferred table always
      * costs.
      *
-     * Deliberately always false for the Installed tab: unlike the catalog
-     * tab, records()'s installed branch can still discover a missing scan
-     * cache and start a background scan (or show the configuration warning).
-     * hasWarmRecordsCache() can only see the longer-lived metadata display
-     * cache, not that separate scan-result cache. Keeping the Installed tab
-     * unconditionally deferred gives that state transition its own request;
-     * the manager rejects a missing background dispatcher, and the render itself remains
-     * non-blocking through peekVisibleLatestVersions()/peekInstalled() and
-     * pollEnrichment().
+     * The Installed tab uses a separate scan-result cache. Its pending
+     * scan has a dedicated empty state and is handled by deferLoading().
      */
     protected function hasWarmRecordsCache(): bool
     {
@@ -3006,13 +2996,8 @@ class ModManagerPage extends Page implements HasTable
 
                 return new LengthAwarePaginator($hits, $response['total_hits'], self::TABLE_PAGE_SIZE, $page);
             })
-            // Render the page shell immediately, unless the current request's
-            // records are already cached (fresh or stale) with no upstream
-            // fetch required - in which case skip the deferred round trip
-            // entirely and render real records synchronously. See
-            // hasWarmRecordsCache() for what "warm" means per tab, and why
-            // the Installed tab is deliberately excluded from this check.
-            ->deferLoading(fn (): bool => !$this->hasWarmRecordsCache())
+            // An empty pending scan has its own status inside the table.
+            ->deferLoading(fn (): bool => !$this->showInstalledScanInEmptyState() && !$this->hasWarmRecordsCache())
             ->paginated([self::TABLE_PAGE_SIZE])
             // Filament's Select uses a fixed Floating UI strategy inside this
             // positioning context, so its option panel can escape the
@@ -3189,6 +3174,9 @@ class ModManagerPage extends Page implements HasTable
                     ->placeholder(fn (): string => $this->catalogAllFilterPlaceholder())
                     ->visible(fn () => $this->catalogFilterVisible() && $this->getHangarTagOptions() !== []),
             ])
+            ->emptyState(fn () => $this->showInstalledScanInEmptyState()
+                ? view('pelican-mod-manager::components.installed-operation-status', $this->installedOperationStatusViewData(inTable: true))
+                : null)
             ->emptyStateIcon(function (): ?string {
                 if ($this->activeTab === 'installed') {
                     return $this->installedEmptyStateIcon();
@@ -4419,8 +4407,11 @@ class ModManagerPage extends Page implements HasTable
                             (string) ($data['version'] ?? ''),
                             (bool) ($data['confirm_server_compatibility'] ?? false),
                         );
-                        $this->refreshInstalledOperationState();
-                        $this->notifyInstalledOperationDispatched(['dispatched' => true, 'reason' => null, 'state' => null]);
+                        $this->notifyInstalledOperationDispatched([
+                            'dispatched' => true,
+                            'reason' => null,
+                            'state' => $this->refreshInstalledOperationState(),
+                        ]);
                     } catch (ModpackException $exception) {
                         Notification::make()
                             ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
@@ -4636,7 +4627,8 @@ class ModManagerPage extends Page implements HasTable
         $server = Filament::getTenant();
         $type = $server instanceof Server ? static::detectProjectType($server) : null;
 
-        return $type !== ProjectType::ResourcePack
+        return $this->installedOperation === null
+            && $type !== ProjectType::ResourcePack
             && !$this->installedScanDataReady
             && $this->pollInstalledOperations;
     }
@@ -4653,12 +4645,14 @@ class ModManagerPage extends Page implements HasTable
             && ($this->installedScanCompletion['status'] ?? null) === InstalledOperationState::STATUS_FAILED;
     }
 
+    protected function showInstalledScanInEmptyState(): bool
+    {
+        return $this->activeTab === 'installed' && !$this->installedScanDataReady
+            && !$this->operationQueueWarningShown && $this->isInstalledScanInProgress();
+    }
+
     protected function installedEmptyStateIcon(): string
     {
-        if ($this->isInstalledScanInProgress()) {
-            return 'tabler-loader-2';
-        }
-
         if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
             return 'tabler-alert-triangle';
         }
@@ -4680,10 +4674,6 @@ class ModManagerPage extends Page implements HasTable
 
     protected function installedEmptyStateHeading(): string
     {
-        if ($this->isInstalledScanInProgress()) {
-            return trans('pelican-mod-manager::strings.table.empty.installed_scanning_heading');
-        }
-
         if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
             return trans('pelican-mod-manager::strings.table.empty.installed_error_heading');
         }
@@ -4708,10 +4698,6 @@ class ModManagerPage extends Page implements HasTable
 
     protected function installedEmptyStateDescription(): string
     {
-        if ($this->isInstalledScanInProgress()) {
-            return trans('pelican-mod-manager::strings.table.empty.installed_scanning_description');
-        }
-
         if ($this->installedMetadataReadFailed || $this->isInstalledScanFailed()) {
             return trans('pelican-mod-manager::strings.table.empty.installed_error_description');
         }
@@ -4972,46 +4958,15 @@ class ModManagerPage extends Page implements HasTable
                 Section::make()
                     ->extraAttributes(fn () => $this->installedOperationStatusExtraAttributes())
                     ->schema([
-                        TextEntry::make('installed_operation_status')
-                            ->hiddenLabel()
-                            ->state(fn () => $this->installedOperationStatus())
-                            // Mirrors installedOperationIsActive()'s split: the
-                            // spinning loader belongs only to states that are
-                            // genuinely still in flight. The terminal states get
-                            // an icon that reads as an outcome instead, so a
-                            // finished scan no longer looks like a running one.
-                            ->icon(fn () => match ($this->getInstalledOperationDisplayPayload()['status'] ?? null) {
-                                InstalledOperationState::STATUS_COMPLETED => 'tabler-check',
-                                InstalledOperationState::STATUS_FAILED => 'tabler-alert-triangle',
-                                default => $this->operationQueueWarningShown
-                                    ? 'tabler-alert-triangle'
-                                    : 'tabler-loader-2',
-                            })
-                            ->badge()
-                            ->color(fn () => match ($this->getInstalledOperationDisplayPayload()['status'] ?? null) {
-                                InstalledOperationState::STATUS_RUNNING => 'info',
-                                InstalledOperationState::STATUS_COMPLETED => 'success',
-                                InstalledOperationState::STATUS_FAILED => 'danger',
-                                default => $this->operationQueueWarningShown ? 'danger' : 'gray',
-                            })
-                            // TextEntry has no dedicated hook for extra icon
-                            // attributes (unlike ImageColumn's
-                            // extraImgAttributes()) - Filament's own
-                            // generate_icon_html() puts the "fi-icon" class
-                            // directly on the rendered <svg>, so scoping the
-                            // spin animation through this wrapper class and
-                            // a descendant selector (like the existing
-                            // .mcloader-badge rule below) reaches it without
-                            // needing that hook.
-                            ->extraAttributes(fn () => $this->installedOperationIsActive()
-                                ? ['class' => 'mmr-installed-operation-spinning']
-                                : []),
+                        View::make('pelican-mod-manager::components.installed-operation-status')
+                            ->viewData(fn (): array => $this->installedOperationStatusViewData()),
                     ])
                     // Bulk-update progress remains useful in the page body.
                     // A scan uses this same position, but only while the
                     // Installed tab is open (including its brief success
                     // outcome); catalog tabs stay free of scan state.
-                    ->visible(fn () => $this->shouldShowInstalledOperationStatus()),
+                    ->visible(fn () => $this->shouldShowInstalledOperationStatus()
+                        && !($this->showInstalledScanInEmptyState() && $this->getTableRecords()->isEmpty())),
                 Group::make([
                     EmbeddedTable::make(),
                 ])->extraAttributes(fn () => array_merge([
@@ -5522,6 +5477,10 @@ class ModManagerPage extends Page implements HasTable
         $finishedAt = $completion['finished_at'] ?? null;
 
         if ($this->activeTab !== 'installed'
+            || in_array($this->installedOperation['status'] ?? null, [
+                InstalledOperationState::STATUS_QUEUED,
+                InstalledOperationState::STATUS_RUNNING,
+            ], true)
             || ($completion['operation'] ?? null) !== InstalledOperationManager::OPERATION_SCAN
             || ($completion['status'] ?? null) !== InstalledOperationState::STATUS_COMPLETED
             || !is_string($finishedAt)) {
@@ -5563,21 +5522,29 @@ class ModManagerPage extends Page implements HasTable
         ];
     }
 
-    /**
-     * Whether the status badge's loader icon should spin - true while
-     * something is queued, running, or about to be dispatched, false for
-     * the terminal completed/failed states and the static queue-config
-     * warning (all of which mean nothing is actually in progress anymore).
-     */
-    protected function installedOperationIsActive(): bool
+    /** @return array{inTable: bool, loading: bool, icon: ?string, color: string, message: string} */
+    protected function installedOperationStatusViewData(bool $inTable = false): array
     {
         $status = $this->getInstalledOperationDisplayPayload()['status'] ?? null;
+        $warning = $status === null && $this->operationQueueWarningShown;
 
-        if (in_array($status, [InstalledOperationState::STATUS_COMPLETED, InstalledOperationState::STATUS_FAILED], true)) {
-            return false;
-        }
-
-        return !($status === null && $this->operationQueueWarningShown);
+        return [
+            'inTable' => $inTable,
+            'loading' => $status === InstalledOperationState::STATUS_RUNNING || ($status === null && !$warning),
+            'icon' => match ($status) {
+                InstalledOperationState::STATUS_QUEUED => 'tabler-clock',
+                InstalledOperationState::STATUS_COMPLETED => 'tabler-check',
+                InstalledOperationState::STATUS_FAILED => 'tabler-alert-triangle',
+                default => $warning ? 'tabler-alert-triangle' : null,
+            },
+            'color' => match ($status) {
+                InstalledOperationState::STATUS_RUNNING => 'info',
+                InstalledOperationState::STATUS_COMPLETED => 'success',
+                InstalledOperationState::STATUS_FAILED => 'danger',
+                default => $warning ? 'danger' : 'gray',
+            },
+            'message' => $this->installedOperationStatus(),
+        ];
     }
 
     protected function shouldPollInstalledOperation(?InstalledOperationState $state): bool
@@ -5626,7 +5593,8 @@ class ModManagerPage extends Page implements HasTable
         $operation = $this->installedOperationLabel((string) ($installedOperation['operation'] ?? ''));
         $status = $installedOperation['status'] ?? null;
         $phase = $installedOperation['result']['phase'] ?? null;
-        if (($installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_MODPACK
+        if ($status === InstalledOperationState::STATUS_RUNNING
+            && ($installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_MODPACK
             && in_array($phase, ['resuming', 'downloading', 'verifying', 'installing'], true)) {
             return trans('pelican-mod-manager::strings.modpacks.phases.'.$phase);
         }
@@ -5658,7 +5626,8 @@ class ModManagerPage extends Page implements HasTable
                     'operation' => $this->installedOperationLabel($state->operation),
                 ]))
                 ->body($state->operation === InstalledOperationManager::OPERATION_MODPACK
-                    && $state->error === 'modpack_rejected' ? ($state->result['message'] ?? null) : null)
+                    && in_array($state->error, ['modpack_rejected', 'server_install_unfinished'], true)
+                    ? ($state->result['message'] ?? null) : null)
                 ->danger()
                 ->send();
 
@@ -5832,10 +5801,8 @@ class ModManagerPage extends Page implements HasTable
         }
 
         if ($dispatch['dispatched']) {
-            if ($state !== null && $state->operation === InstalledOperationManager::OPERATION_SCAN) {
-                // Scan progress belongs in the Installed tab, not in a
-                // global notification. The tab condition is enforced by
-                // shouldShowInstalledOperationStatus().
+            if ($state !== null && ($state->operation === InstalledOperationManager::OPERATION_SCAN
+                || $this->shouldShowInstalledOperationStatus())) {
                 return;
             }
 

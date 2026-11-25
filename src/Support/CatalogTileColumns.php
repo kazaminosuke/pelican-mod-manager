@@ -118,12 +118,13 @@ final class CatalogTileColumns
 
                         return Str::limit($description, CatalogFields::DESCRIPTION_MAX_LENGTH, '...');
                     }),
-                Stack::make([
+                Split::make([
                     TextColumn::make('author')
                         ->label(trans('pelican-mod-manager::strings.table.columns.author'))
                         ->icon('tabler-user')
                         ->color('gray')
                         ->size(TextSize::Small)
+                        ->grow(false)
                         ->lineClamp(1)
                         ->toggleable(),
                     Split::make([
@@ -133,6 +134,7 @@ final class CatalogTileColumns
                             ->icon('tabler-download')
                             ->color('gray')
                             ->size(TextSize::Small)
+                            ->grow(false)
                             ->toggleable(),
                         TextColumn::make('date_modified')
                             ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
@@ -152,8 +154,8 @@ final class CatalogTileColumns
                                 return trim($tooltip) !== '' ? $tooltip : null;
                             })
                             ->toggleable(),
-                    ]),
-                ])->space(1),
+                    ])->grow(false)->extraAttributes(['class' => 'mmr-tile-stat-values']),
+                ])->extraAttributes(['class' => 'mmr-tile-stats']),
             ])->space(3),
         ];
     }

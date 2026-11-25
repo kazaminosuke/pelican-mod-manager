@@ -1239,18 +1239,18 @@ final class CatalogViewUnificationTest extends TestCase
         $xpath = $this->xpathFor($html);
         $metadataStacks = $xpath->query(
             '//a[contains(concat(" ", normalize-space(@class), " "), " fi-ta-record-content ")]'
-            .'//div[contains(concat(" ", normalize-space(@class), " "), " fi-ta-stack ") and contains(concat(" ", normalize-space(@class), " "), " fi-gap-sm ")]',
+            .'//div[contains(concat(" ", normalize-space(@class), " "), " mmr-tile-stats ")]',
         );
 
         self::assertNotFalse($metadataStacks);
-        self::assertSame(1, $metadataStacks->length, 'Tile card must contain the nested Stack(..., space: 1) bottom metadata wrapper');
+        self::assertSame(1, $metadataStacks->length);
 
         $stackNode = $metadataStacks->item(0);
         self::assertInstanceOf(DOMElement::class, $stackNode);
 
         $directDivChildren = $xpath->query('./div', $stackNode);
         self::assertNotFalse($directDivChildren);
-        self::assertSame(2, $directDivChildren->length, 'Bottom metadata Stack must have exactly 2 rows: author row + downloads/date Split row');
+        self::assertSame(2, $directDivChildren->length, 'Only the author and the combined download/date group may wrap onto separate rows.');
 
         $authorRow = $directDivChildren->item(0);
         $splitRow = $directDivChildren->item(1);
@@ -1265,7 +1265,7 @@ final class CatalogViewUnificationTest extends TestCase
             self::assertSame(0, $xpath->query('.//*[local-name()="svg"]', $authorRow)?->length, 'Null author must not render a dangling icon');
         }
 
-        $splitDiv = $xpath->query('.//div[contains(concat(" ", normalize-space(@class), " "), " fi-ta-split ")]', $splitRow)?->item(0);
+        $splitDiv = $xpath->query('.//div[contains(concat(" ", normalize-space(@class), " "), " mmr-tile-stat-values ")]', $splitRow)?->item(0);
         self::assertInstanceOf(DOMElement::class, $splitDiv);
 
         $splitChildren = $xpath->query('./div', $splitDiv);
@@ -1277,7 +1277,7 @@ final class CatalogViewUnificationTest extends TestCase
         self::assertInstanceOf(DOMElement::class, $downloadsCol);
         self::assertInstanceOf(DOMElement::class, $dateCol);
 
-        self::assertStringContainsString('fi-growable', $downloadsCol->getAttribute('class'));
+        self::assertStringNotContainsString('fi-growable', $downloadsCol->getAttribute('class'));
         self::assertStringContainsString('fi-align-end', $dateCol->getAttribute('class'));
         self::assertStringNotContainsString('fi-growable', $dateCol->getAttribute('class'));
 

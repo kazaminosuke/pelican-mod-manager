@@ -160,7 +160,7 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('data-mmr-swr-row-action="install_latest"', $html);
 
         // Switching to tile view uses Filament's contentGrid, keeps view toggle & column manager visible,
-        // right-aligns row actions, stacks author above downloads/date_modified, omits MC version/loader,
+        // right-aligns row actions, groups downloads and date_modified, omits MC version/loader,
         // preserves external project links, and avoids nested <a> tags.
         $component->call('toggleCatalogView')
             ->assertDispatched(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_PANEL);
@@ -169,7 +169,7 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('fi-ta-content-grid', $tileHtml);
         self::assertStringContainsString('fi-ta-split', $tileHtml);
         self::assertStringContainsString('fi-ta-stack', $tileHtml);
-        self::assertStringContainsString('fi-gap-sm', $tileHtml);
+        self::assertStringContainsString('mmr-tile-stat-values', $tileHtml);
         self::assertStringContainsString('fi-ta-col fi-align-end', $tileHtml);
         self::assertStringContainsString('data-mmr-view-toggle', $tileHtml);
         self::assertStringContainsString('fi-ta-col-manager', $tileHtml);

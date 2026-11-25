@@ -135,18 +135,53 @@ final class InstalledEmptyStateTest extends TestCase
             {
                 return $this->installedEmptyStateDescription();
             }
+
+            public function exposesPendingScan(): bool
+            {
+                return $this->showInstalledScanInEmptyState();
+            }
+
+            public function exposeStatus(): array
+            {
+                return $this->installedOperationStatusViewData(inTable: true);
+            }
         };
 
-        // 1. Scanning in progress takes precedence.
+        $page->installedScanDataReady = false;
+        $page->installedOperation = [
+            'operation' => InstalledOperationManager::OPERATION_SCAN,
+            'status' => InstalledOperationState::STATUS_QUEUED,
+        ];
+        self::assertTrue($page->exposesPendingScan());
+        self::assertSame('Installed-file scan is queued.', $page->exposeStatus()['message']);
+        self::assertSame('tabler-clock', $page->exposeStatus()['icon']);
+        self::assertFalse($page->exposeStatus()['loading']);
         $page->installedOperation = [
             'operation' => InstalledOperationManager::OPERATION_SCAN,
             'status' => InstalledOperationState::STATUS_RUNNING,
         ];
-        self::assertSame('tabler-loader-2', $page->exposeIcon());
-        self::assertSame('Scanning installed files...', $page->exposeHeading());
+        self::assertTrue($page->exposesPendingScan());
+        self::assertSame('Installed-file scan is running…', $page->exposeStatus()['message']);
+        self::assertTrue($page->exposeStatus()['loading']);
+        $page->installedScanDataReady = true;
+        self::assertFalse($page->exposesPendingScan());
+
+        $page->installedOperation = [
+            'operation' => InstalledOperationManager::OPERATION_MODPACK,
+            'status' => InstalledOperationState::STATUS_QUEUED,
+            'result' => ['phase' => 'resuming'],
+        ];
+        $page->installedScanCompletion = [
+            'operation' => InstalledOperationManager::OPERATION_SCAN,
+            'status' => InstalledOperationState::STATUS_COMPLETED,
+            'finished_at' => now()->toIso8601String(),
+        ];
+        self::assertSame('Modpack install is queued.', $page->exposeStatus()['message']);
+        self::assertFalse($page->exposeStatus()['loading']);
 
         // 2. Metadata read or scan error shows error state.
         $page->installedOperation = null;
+        self::assertFalse($page->exposesPendingScan());
         $page->setMetadataReadFailed(true);
         self::assertSame('tabler-alert-triangle', $page->exposeIcon());
         self::assertSame('Unable to load installed items', $page->exposeHeading());

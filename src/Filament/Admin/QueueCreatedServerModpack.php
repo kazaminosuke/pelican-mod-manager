@@ -38,10 +38,12 @@ final class QueueCreatedServerModpack
                     1200,
                     $plan['selection'],
                 );
-                if ($outcome['dispatched'] || $outcome['reason'] === 'already_active') {
+                if ($outcome['dispatched'] || ($outcome['reason'] === 'already_active' && $outcome['state']?->isActive())) {
                     Notification::make()
-                        ->title(trans('pelican-mod-manager::strings.modpacks.provision_queued'))
-                        ->success()
+                        ->title(trans($outcome['dispatched']
+                            ? 'pelican-mod-manager::strings.modpacks.provision_queued'
+                            : 'pelican-mod-manager::strings.operations.already_active'))
+                        ->info()
                         ->actions([
                             Action::make('modpack_progress')
                                 ->label(trans('pelican-mod-manager::strings.modpacks.open_progress'))

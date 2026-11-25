@@ -115,8 +115,11 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString("view('pelican-mod-manager::components.catalog-sort-select')", $plugin);
         self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE', $plugin);
         self::assertStringNotContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
-        self::assertStringContainsString('wire:click="toggleCatalogView"', $toggleBlade);
-        self::assertStringContainsString('x-filament::icon-button', $toggleBlade);
+        self::assertStringContainsString("'wire:click' => 'toggleCatalogView'", $toggleBlade);
+        self::assertStringContainsString('->iconButton()', $toggleBlade);
+        self::assertStringContainsString('getColumnManagerTriggerAction()', $toggleBlade);
+        self::assertStringContainsString('->size($trigger->getSize())', $toggleBlade);
+        self::assertStringContainsString('->iconSize($trigger->getIconSize())', $toggleBlade);
         self::assertStringContainsString('x-filament::input.wrapper', $sortBlade);
         self::assertStringContainsString('x-filament::input.select', $sortBlade);
         self::assertStringNotContainsString('.mmr-catalog-sort-select', $css);
@@ -188,8 +191,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringNotContainsString('authorUrl', $tableClass);
         self::assertStringNotContainsString('->url(', $tileBuilder);
 
-        // Tile layout places author in a nested Stack above Split([downloads, date_modified->alignEnd()])
-        // and keeps all three toggleable so the toolbar view-toggle hook stays rendered on filterless providers.
+        // Keep the two metrics together when the outer Split wraps.
         $descriptionPos = strpos($tileBuilder, "TextColumn::make('description')");
         $authorPos = strpos($tileBuilder, "TextColumn::make('author')");
         $downloadsPos = strpos($tileBuilder, "TextColumn::make('downloads')");
@@ -201,10 +203,11 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertGreaterThan($descriptionPos, $authorPos);
         self::assertGreaterThan($authorPos, $downloadsPos);
         self::assertGreaterThan($downloadsPos, $datePos);
-        self::assertStringContainsString('Stack::make([', substr($tileBuilder, $descriptionPos, $authorPos - $descriptionPos));
+        self::assertStringContainsString('Split::make([', substr($tileBuilder, $descriptionPos, $authorPos - $descriptionPos));
         self::assertStringContainsString('Split::make([', substr($tileBuilder, $authorPos, $downloadsPos - $authorPos));
         self::assertStringContainsString('->alignEnd()', substr($tileBuilder, $datePos));
-        self::assertStringContainsString('->space(1)', substr($tileBuilder, $datePos));
+        self::assertStringContainsString('.fi-ta-split.mmr-tile-stats{flex-wrap:wrap;', $css);
+        self::assertStringContainsString('.fi-ta-split.mmr-tile-stat-values{gap:.75rem;white-space:nowrap;', $css);
         self::assertSame(3, substr_count($tileBuilder, '->toggleable()'));
 
         // Both catalogs centralize view persistence in CatalogTileColumns and use closure contentGrid().
