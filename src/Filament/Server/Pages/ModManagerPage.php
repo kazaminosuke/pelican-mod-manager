@@ -619,11 +619,23 @@ class ModManagerPage extends Page implements HasTable
 
     public function toggleCatalogView(): void
     {
-        $this->catalogView = CatalogTileColumns::storeView(
+        $this->changeCatalogView(
             $this->catalogView === CatalogTileColumns::VIEW_PANEL
                 ? CatalogTileColumns::VIEW_LIST
                 : CatalogTileColumns::VIEW_PANEL,
         );
+    }
+
+    public function restoreLegacyCatalogView(): void
+    {
+        if (CatalogTileColumns::storedView() === null) {
+            $this->changeCatalogView(CatalogTileColumns::VIEW_PANEL);
+        }
+    }
+
+    private function changeCatalogView(string $view): void
+    {
+        $this->catalogView = CatalogTileColumns::storeView($view);
 
         if (isset($this->table)) {
             $this->table = $this->table($this->makeTable());

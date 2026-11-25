@@ -11,7 +11,6 @@ use Filament\Tables\Columns\Layout\Split;
 use Filament\Tables\Columns\Layout\Stack;
 use Filament\Tables\Columns\TextColumn;
 use Illuminate\Support\Facades\Cookie;
-use Illuminate\Support\Str;
 
 /**
  * Shared Filament-native tile layout (Stack / Split + contentGrid) used across
@@ -46,12 +45,17 @@ final class CatalogTileColumns
 
     public static function resolveInitialView(): string
     {
+        return self::storedView() ?? self::VIEW_LIST;
+    }
+
+    public static function storedView(): ?string
+    {
         $stored = session()->get(self::SESSION_KEY);
         if (!is_string($stored)) {
             $stored = request()->cookie(self::COOKIE_KEY);
         }
 
-        return self::normalizeView($stored);
+        return is_string($stored) ? self::normalizeView($stored) : null;
     }
 
     public static function normalizeView(mixed $view): string
@@ -73,14 +77,14 @@ final class CatalogTileColumns
      * @param  Closure(array<string, mixed>): array<string, string>  $iconImgAttributes
      * @param  Closure(mixed): string  $formatDate
      * @param  Closure(mixed): string  $dateTooltip
-     * @param  Closure(array<string, mixed>): ?string|null  $descriptionFormatter
+     * @param  Closure(array<string, mixed>): ?string  $descriptionFormatter
      * @return list<LayoutComponent>
      */
     public static function columns(
         Closure $iconImgAttributes,
         Closure $formatDate,
         Closure $dateTooltip,
-        ?Closure $descriptionFormatter = null,
+        Closure $descriptionFormatter,
     ): array {
         return [
             Stack::make([
@@ -104,18 +108,7 @@ final class CatalogTileColumns
                     ->lineClamp(2)
                     ->color('gray')
                     ->size(TextSize::Small)
-                    ->state(static function (array $record) use ($descriptionFormatter): ?string {
-                        if ($descriptionFormatter !== null) {
-                            return $descriptionFormatter($record);
-                        }
-
-                        $description = $record['description'] ?? null;
-                        if (!is_string($description) || trim($description) === '') {
-                            return null;
-                        }
-
-                        return Str::limit($description, CatalogFields::DESCRIPTION_MAX_LENGTH, '...');
-                    }),
+                    ->state($descriptionFormatter),
                 Split::make([
                     TextColumn::make('author')
                         ->label(trans('pelican-mod-manager::strings.table.columns.author'))

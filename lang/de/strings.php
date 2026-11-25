@@ -190,8 +190,6 @@ return [
             'installed_datapack' => 'Keine Datapacks installiert',
             'installed_resourcepack' => 'Keine Ressourcenpakete installiert',
             'installed_description' => 'Durchsuche die Katalog-Tabs oben, um einen Eintrag zu installieren.',
-            'installed_scanning_heading' => 'Installierte Dateien werden gescannt...',
-            'installed_scanning_description' => 'Das Serververzeichnis wird überprüft und installierte Einträge werden erkannt.',
             'installed_search_heading' => 'Keine passenden installierten Einträge',
             'installed_search_description' => 'Versuche einen anderen Suchbegriff oder setze die Suche zurück.',
             'installed_error_heading' => 'Installierte Einträge konnten nicht geladen werden',

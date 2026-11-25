@@ -3,6 +3,11 @@
         $isPanelView = ($this->catalogView ?? 'list') === 'panel';
         $label = trans('pelican-mod-manager::strings.table.view.'.($isPanelView ? 'switch_to_list' : 'switch_to_panel'));
         $trigger = $this->getTable()->getColumnManagerTriggerAction();
+        $attributes = ['wire:click' => 'toggleCatalogView', 'data-mmr-view-toggle' => ''];
+        if (\Kazaminosuke\ModManager\Support\CatalogTileColumns::storedView() === null) {
+            $attributes['x-data'] = '{}';
+            $attributes['x-init'] = "(() => { try { if (localStorage.getItem('pelican-mod-manager.catalog-view') === 'panel') { \$wire.restoreLegacyCatalogView() } } catch {} })()";
+        }
     @endphp
 
     {{ \Filament\Actions\Action::make('toggleCatalogView')
@@ -14,5 +19,5 @@
         ->label($label)
         ->tooltip($label)
         ->livewireClickHandlerEnabled(false)
-        ->extraAttributes(['wire:click' => 'toggleCatalogView', 'data-mmr-view-toggle' => '']) }}
+        ->extraAttributes($attributes) }}
 @endunless

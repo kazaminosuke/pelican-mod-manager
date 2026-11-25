@@ -161,6 +161,25 @@ final class CatalogViewUnificationTest extends TestCase
         self::assertSame(CatalogTileColumns::VIEW_PANEL, $panelCookiePage->get('catalogView'));
     }
 
+    public function test_legacy_view_is_restored_only_until_a_server_preference_exists(): void
+    {
+        $this->fakeCatalogSources();
+        $this->bindStubDaemonFileRepository();
+        $this->configureServerPanelFor(ProjectType::Mod);
+        session()->forget(CatalogTileColumns::SESSION_KEY);
+        request()->cookies->remove(CatalogTileColumns::COOKIE_KEY);
+
+        Livewire::test(ModManagerPage::class)
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_LIST)
+            ->assertSeeHtml('restoreLegacyCatalogView()')
+            ->call('restoreLegacyCatalogView')
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_PANEL)
+            ->assertDontSeeHtml('restoreLegacyCatalogView()')
+            ->call('toggleCatalogView')
+            ->call('restoreLegacyCatalogView')
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_LIST);
+    }
+
     /** @return array<string, array{class-string<ModManagerPage>, ProjectType, string}> */
     public static function modManagerCatalogCases(): array
     {

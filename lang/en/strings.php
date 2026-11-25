@@ -190,8 +190,6 @@ return [
             'installed_datapack' => 'No datapacks installed',
             'installed_resourcepack' => 'No resource packs installed',
             'installed_description' => 'Browse the catalog tabs above to install one.',
-            'installed_scanning_heading' => 'Scanning installed files...',
-            'installed_scanning_description' => 'Checking the server directory and identifying installed items.',
             'installed_search_heading' => 'No matching installed items',
             'installed_search_description' => 'Try a different search term or clear the search filter.',
             'installed_error_heading' => 'Unable to load installed items',

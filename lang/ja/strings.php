@@ -190,8 +190,6 @@ return [
             'installed_datapack' => 'インストール済みのデータパックはありません',
             'installed_resourcepack' => 'インストール済みのリソースパックはありません',
             'installed_description' => '上部のカタログタブから検索してインストールできます。',
-            'installed_scanning_heading' => 'インストール済みファイルをスキャン中...',
-            'installed_scanning_description' => 'サーバー内のファイルを確認し、導入済みの項目を識別しています。',
             'installed_search_heading' => '検索結果に一致する項目はありません',
             'installed_search_description' => '検索キーワードを変更するか、検索条件をクリアしてください。',
             'installed_error_heading' => 'インストール済み一覧を取得できませんでした',
