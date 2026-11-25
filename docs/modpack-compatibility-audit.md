@@ -79,13 +79,15 @@ Mod Manager は認証済みの完了通知を確認してから既存ジョブ�
 
 ### 実機ログ
 
-Panel のディレクトリで、`42` を対象サーバーの数値 ID に置き換えて実行します。キューのペイロードと認証情報を表示せず、サーバー状態・予約状態・ジョブの結果コードを確認できます。
+Panel のディレクトリで、`42` を対象サーバーの数値 ID に置き換えて実行します。サーバー状態、ローダーの状態、キューの予約状態、ジョブの結果コードを確認できます。
 
 ```sh
 php artisan schedule:list | grep -F 'mod-manager:process-jobs'
 php artisan tinker --execute='
     $server = App\Models\Server::findOrFail(42);
     dump($server->only(["uuid", "status", "skip_scripts", "installed_at"]));
+    dump(Illuminate\Support\Facades\DB::table("mod_manager_provisioning")
+        ->where("server_id", $server->id)->first(["state", "deadline"]));
     dump(Illuminate\Support\Facades\DB::table("mod_manager_background_jobs")
         ->where("type", "modpack_install")->where("payload->server_id", $server->id)
         ->get(["id", "available_at", "reserved_at", "attempts"]));
@@ -125,10 +127,10 @@ Server Optimization `egRNRK9l` の `.mrpack` はFabric `0.14.22` を指定しま
 
 1. 使い捨ての環境でPanelへPRのプラグインをローカルインストールし、空のDBとユーザーを用意します。公式Fabric Eggをインポートし、ローカルのWingsノードとループバックのテスト用アロケーションを設定します。Wingsとゲーム用ポートを外部へ公開しません。PanelがWingsの応答を待ちながらWingsからのコールバックを受けられるよう、HTTPワーカーを複数起動します。`artisan serve` の場合は `PHP_CLI_SERVER_WORKERS=4` と `--no-reload` を使えます。rootless DockerでWingsをコンテナに入れる場合、Wingsが生成する `passwd`・`group`・`machine-id` とサーバーボリュームのパスをWingsとDockerデーモンで共有します。
 2. Panelにログインしてサーバー作成を開きます。ModpackをONにすると結果が表に出ること、カタログの前後ページ、Technicへ切り替えた際のフィルター表示、Modrinthに戻ってMinecraft `1.19.3`・Fabric・`Fabric Server Optimization` の検索が使えることを確認します。
-3. `vtGmZsbn` を選び、Informationへ進んで戻ります。検索語、フィルター、行とリリースが残ることを確認します。再度進み、名前とテスト用アロケーションを選びます。Egg設定でFabric、`MC_VERSION=1.19.3`、`LOADER_VERSION=0.14.12`、Java 17、インストールスクリプト実行あり、自動起動なしを確認します。
-4. 作成後にWings側のインストールログを確認し、Panelで `php artisan mod-manager:process-jobs` を実行するかSchedulerを稼働させます。Wingsのインストール成功を待ってから、パックの結果、配布由来のModが配置されたこと、実際のリリースID、自動起動されていないことを確認します。隔離サーバーを手動で起動し、`Done` を確認したら `stop` で終了します。
+3. `vtGmZsbn` を選び、Informationへ進んで戻ります。検索語、フィルター、行とリリースが残ることを確認します。再度進み、名前とテスト用アロケーションを選びます。Egg 設定で Fabric、`MC_VERSION=1.19.3`、`LOADER_VERSION=0.14.12`、Java 17、Egg スクリプトのスキップ、自動起動が無効であることを確認します。
+4. 作成後に Wings 側のインストールログを確認し、Panel の Scheduler を稼働させます。ローダー成功後にパックが配置されるまで `installing` が維持されることを確認します。配布元のバージョン ID、配置された Mod、自動起動の有無を確認したら、隔離サーバーを手動で起動し、`Done` の後に `stop` で終了します。
 5. 認証付きCurseForgeの補足試験では、隔離Panelの `MOD_MANAGER_CURSEFORGE_API_KEY` を設定し、ATM10で親 `9620701` を選択します。APIが返した同一プロジェクトの子 `9620727` と公式ダウンロードURLを照合します。APIがURLを提供しない場合は制限として扱います。選択したファイルのIDと固定ビルドを導入結果まで確認します。[ATM10 Additional Files](https://www.curseforge.com/minecraft/modpacks/all-the-mods-10/files/9620701/additional-files)
 
-隔離環境ではPanel `1c3e7b33`、Wings `v1.0.0-rc.2`、公式Fabric Eggを使用しました。Chromiumで手順2・3を実行し、`false` がFilamentの必須ラジオ選択で未入力になる不具合を再現しました。修正後は実ブラウザで作成を完了し、Wingsへの作成要求と、`vtGmZsbn`、`MC_VERSION=1.19.3`、`LOADER_VERSION=0.14.12`、Java 17を持つ永続化ジョブを確認しました。
+旧方式の隔離環境では Panel `1c3e7b33`、Wings `v1.0.0-rc.2`、公式 Fabric Egg を使用しました。Chromium で `false` が Filament の必須ラジオ選択で未入力になる不具合を再現しました。修正後は実ブラウザで Wings への作成要求と、`vtGmZsbn`、`MC_VERSION=1.19.3`、`LOADER_VERSION=0.14.12`、Java 17 を持つ永続化ジョブを確認しました。
 
 公式 `ghcr.io/pelican-eggs/yolks:java_17` と `installers:java_11` のDocker pullは展開時のディスク不足で失敗しました。Wingsは `No such image` を返し、Panelは `installing`、導入ジョブは延期状態でした。実Wings経由のMod配置、起動、正常停止と、保留期限到達後の通知は今回未検証です。先の表にある単体隔離起動では、同じModrinthリリースがJava 17で `Done` と正常停止に到達しています。
