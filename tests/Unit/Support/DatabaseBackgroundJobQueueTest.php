@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Tests\Unit\Support;
 
 use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Support\Carbon;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Models\ModManagerBackgroundJob;
 use Kazaminosuke\ModManager\Support\DatabaseBackgroundJobQueue;
@@ -134,15 +135,55 @@ class DatabaseBackgroundJobQueueTest extends TestCase
         self::assertFalse($queue->heartbeat($firstAttempt['id'], 1));
         $queue->retry($firstAttempt['id'], 0, 1);
         $queue->release($firstAttempt['id'], 0, 1);
-        $queue->ack($firstAttempt['id'], 1);
+        self::assertFalse($queue->ack($firstAttempt['id'], 1));
 
         $row = ModManagerBackgroundJob::query()->find($secondAttempt['id']);
         self::assertNotNull($row);
         self::assertSame(2, (int) $row->attempts);
         self::assertNotNull($row->reserved_at);
 
-        $queue->ack($secondAttempt['id'], 2);
+        // A deliberate defer rolls the attempt count back. A pending row
+        // with that count is no longer reserved by the old attempt.
+        $queue->release($secondAttempt['id'], 0, 2);
+        self::assertFalse($queue->ack($firstAttempt['id'], 1));
+        $queue->retry($firstAttempt['id'], 600, 1);
+        $queue->release($firstAttempt['id'], 600, 1);
+        $thirdAttempt = $queue->claim();
+        self::assertIsArray($thirdAttempt);
+        self::assertSame(2, $thirdAttempt['attempts']);
+
+        self::assertTrue($queue->ack($thirdAttempt['id'], 2));
         self::assertSame(0, ModManagerBackgroundJob::query()->count());
+    }
+
+    public function test_heartbeat_keeps_same_second_reservation_when_unchanged_updates_return_zero(): void
+    {
+        // MySQL and MariaDB report changed rows, so an unchanged timestamp
+        // can report zero even when this attempt still owns the reservation.
+        Capsule::connection()->unprepared(<<<'SQL'
+            CREATE TRIGGER skip_unchanged_reservation
+            BEFORE UPDATE OF reserved_at ON mod_manager_background_jobs
+            WHEN OLD.reserved_at = NEW.reserved_at
+            BEGIN
+                SELECT RAISE(IGNORE);
+            END
+            SQL);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-25 12:00:00'));
+        try {
+            $queue = new DatabaseBackgroundJobQueue();
+            self::assertTrue($queue->push(BackgroundJob::SCAN, ['server_id' => 1]));
+            $claimed = $queue->claim();
+            self::assertIsArray($claimed);
+
+            self::assertTrue($queue->heartbeat($claimed['id'], $claimed['attempts']));
+            self::assertFalse($queue->heartbeat($claimed['id'], $claimed['attempts'] + 1));
+
+            $queue->release($claimed['id'], 15, $claimed['attempts']);
+            self::assertFalse($queue->heartbeat($claimed['id'], $claimed['attempts']));
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_claim_prioritizes_interactive_jobs_ahead_of_speculative_warm_search(): void

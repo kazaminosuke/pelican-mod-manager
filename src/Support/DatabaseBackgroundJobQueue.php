@@ -115,16 +115,18 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
         }
     }
 
-    public function ack(int|string $id, ?int $expectedAttempts = null): void
+    public function ack(int|string $id, ?int $expectedAttempts = null): bool
     {
         try {
             $query = ModManagerBackgroundJob::query()->whereKey($id);
             if ($expectedAttempts !== null) {
-                $query->where('attempts', $expectedAttempts);
+                $query->where('attempts', $expectedAttempts)->whereNotNull('reserved_at');
             }
-            $query->delete();
+
+            return $query->delete() === 1;
         } catch (Throwable) {
             // The row is retried after the reservation TTL if delete fails.
+            return false;
         }
     }
 
@@ -133,7 +135,7 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
         try {
             $query = ModManagerBackgroundJob::query()->whereKey($id);
             if ($expectedAttempts !== null) {
-                $query->where('attempts', $expectedAttempts);
+                $query->where('attempts', $expectedAttempts)->whereNotNull('reserved_at');
             }
             $query->update([
                 'reserved_at' => null,
@@ -151,7 +153,7 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
                 ->whereKey($id)
                 ->where('attempts', '>', 0);
             if ($expectedAttempts !== null) {
-                $query->where('attempts', $expectedAttempts);
+                $query->where('attempts', $expectedAttempts)->whereNotNull('reserved_at');
             }
             $query->decrement('attempts', 1, [
                 'reserved_at' => null,
@@ -165,11 +167,16 @@ final class DatabaseBackgroundJobQueue implements BackgroundJobQueue
     public function heartbeat(int|string $id, int $expectedAttempts): bool
     {
         try {
-            return ModManagerBackgroundJob::query()
+            $claim = ModManagerBackgroundJob::query()
                 ->whereKey($id)
                 ->where('attempts', $expectedAttempts)
-                ->whereNotNull('reserved_at')
-                ->update(['reserved_at' => now()]) === 1;
+                ->whereNotNull('reserved_at');
+            $now = now();
+
+            // MySQL and MariaDB can return zero changed rows for a renewal
+            // in the same second. The matching reservation is still valid.
+            return $claim->update(['reserved_at' => $now]) === 1
+                || $claim->where('reserved_at', $now)->exists();
         } catch (Throwable) {
             return false;
         }

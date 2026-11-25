@@ -70,6 +70,26 @@ class ProcessBackgroundJobsCommandTest extends TestCase
         self::assertFalse($cache->has($uniqueKey));
     }
 
+    public function test_superseded_ack_keeps_the_unique_lock(): void
+    {
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake($cache);
+        $uniqueKey = $runner->uniqueCacheKey('superseded');
+        $cache->add($uniqueKey, 1, 60);
+        $queue = new RecordingBackgroundJobQueue([
+            [
+                'id' => 9,
+                'type' => 'not_a_job',
+                'payload' => ['_unique_key' => $uniqueKey],
+                'attempts' => ProcessBackgroundJobsCommand::MAX_ATTEMPTS,
+            ],
+        ], ackResult: false);
+
+        self::assertSame(0, $this->command()->handle($queue, $runner));
+        self::assertSame([9], $queue->acked);
+        self::assertTrue($cache->has($uniqueKey));
+    }
+
     private function command(): ProcessBackgroundJobsCommand
     {
         $command = new ProcessBackgroundJobsCommand();
@@ -109,7 +129,7 @@ final class RecordingBackgroundJobQueue implements BackgroundJobQueue
     public array $heartbeats = [];
 
     /** @param list<Job> $jobs */
-    public function __construct(private array $jobs = []) {}
+    public function __construct(private array $jobs = [], private readonly bool $ackResult = true) {}
 
     public function push(string $type, array $payload): bool
     {
@@ -138,10 +158,12 @@ final class RecordingBackgroundJobQueue implements BackgroundJobQueue
         return true;
     }
 
-    public function ack(int|string $id, ?int $expectedAttempts = null): void
+    public function ack(int|string $id, ?int $expectedAttempts = null): bool
     {
         $this->acked[] = $id;
         $this->ackedDetails[] = ['id' => $id, 'expectedAttempts' => $expectedAttempts];
+
+        return $this->ackResult;
     }
 
     public function retry(int|string $id, int $delaySeconds = 30, ?int $expectedAttempts = null): void
