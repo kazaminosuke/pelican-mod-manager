@@ -164,7 +164,7 @@ final class ModpackArchive
         }
 
         try {
-            $json = $zip->getFromName('modrinth.index.json', self::MAX_OVERRIDE_BYTES);
+            $json = $zip->getFromName('modrinth.index.json', self::MAX_MANIFEST_BYTES + 1);
             if (!is_string($json)) {
                 throw new ModpackException('The archive has no Modrinth index.');
             }

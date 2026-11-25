@@ -92,6 +92,29 @@ final class ModpackArchiveTest extends TestCase
         self::assertSame(ModpackArchive::modrinthInstallMetadata($required), ModpackArchive::modrinthInstallMetadata($otherPath));
     }
 
+    public function test_modrinth_runtime_metadata_uses_the_same_size_limit_as_archive_parsing(): void
+    {
+        $index = json_encode([
+            'formatVersion' => 1,
+            'game' => 'minecraft',
+            'dependencies' => ['minecraft' => '1.19.3', 'fabric-loader' => '0.14.12'],
+            'files' => [],
+        ], JSON_THROW_ON_ERROR);
+        $path = $this->zip(['modrinth.index.json' => str_repeat(' ', 2_000_000).$index]);
+        $oversized = $this->zip(['modrinth.index.json' => str_pad($index, 8_388_609)]);
+        try {
+            self::assertSame('0.14.12', ModpackArchive::read($path)->loaderVersion);
+            self::assertSame('0.14.12', ModpackArchive::modrinthInstallMetadata($path)['loader_version']);
+
+            $this->expectException(ModpackException::class);
+            $this->expectExceptionMessage('exceeds the size limit');
+            ModpackArchive::modrinthInstallMetadata($oversized);
+        } finally {
+            unlink($path);
+            unlink($oversized);
+        }
+    }
+
     public function test_server_zip_with_a_root_local_kubejs_directory_has_a_single_pack_root(): void
     {
         $path = $this->zip([
