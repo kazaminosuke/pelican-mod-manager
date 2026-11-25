@@ -141,7 +141,7 @@ final class BackgroundJob
             projectId: self::string($payload, 'project_id'),
             leaseToken: self::string($payload, 'lease_token'),
             versionId: self::optionalString($payload, 'version_id') ?? '',
-            deferUntil: is_numeric($payload['defer_until'] ?? null) ? (int) $payload['defer_until'] : 0,
+            legacyCreation: (int) ($payload['defer_until'] ?? 0) > 0 && !isset($payload['selection']['manual_token']),
             selection: is_array($payload['selection'] ?? null) ? $payload['selection'] : null,
             claimEpoch: $claimEpoch,
             heartbeat: $heartbeat,

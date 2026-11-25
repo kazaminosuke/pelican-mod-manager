@@ -2,7 +2,10 @@
 
 namespace Kazaminosuke\ModManager\Providers;
 
+use App\Http\Controllers\Api\Remote\Servers\ServerDetailsController;
+use App\Http\Controllers\Api\Remote\Servers\ServerInstallController;
 use App\Models\Role;
+use App\Services\Servers\ServerCreationService;
 use Filament\Resources\Events\RecordCreated;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
@@ -14,7 +17,10 @@ use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
 use Kazaminosuke\ModManager\Filament\Admin\QueueCreatedServerModpack;
 use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
+use Kazaminosuke\ModManager\Http\Controllers\ModpackDaemonInstallController;
+use Kazaminosuke\ModManager\Http\Controllers\ModpackDaemonServerController;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
+use Kazaminosuke\ModManager\Services\CreateModpackServer;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledMetadataResetService;
@@ -53,6 +59,11 @@ class ModManagerServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        if (CreateModpackServer::canStageBeforeWings()) {
+            $this->app->bind(ServerCreationService::class, CreateModpackServer::class);
+            $this->app->bind(ServerInstallController::class, ModpackDaemonInstallController::class);
+            $this->app->bind(ServerDetailsController::class, ModpackDaemonServerController::class);
+        }
         $this->app->singleton(SourceFetchExecutorInterface::class, SourceFetchExecutor::class);
         $this->app->singleton(BackgroundJobQueue::class, DatabaseBackgroundJobQueue::class);
 

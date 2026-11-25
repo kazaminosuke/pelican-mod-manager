@@ -32,7 +32,7 @@ final class ModpackDeployment
      * @param array<string, array{identity: ?string, sha256: ?string, size: ?int, hashes: array, file_id: ?string, project_id: ?string, open: ?callable, url: ?string}> $target
      * @return array<string, mixed>
      */
-    public function run(Server $server, DaemonFileRepository $repo, array $release, array $target, ?string $approval, bool $preview, ?string $backup, callable $guard, array $warnings = [], bool $unlockBackup = false): array
+    public function run(Server $server, DaemonFileRepository $repo, array $release, array $target, ?string $approval, bool $preview, ?string $backup, callable $guard, array $warnings = [], bool $unlockBackup = false, ?ModpackProvisioning $provisioning = null): array
     {
         $this->listings = [];
         $state = $this->inventory->read($server);
@@ -221,7 +221,15 @@ final class ModpackDeployment
             }
 
             $guard();
-            $this->inventory->finish($server, $token, [...$release, 'files' => $next]);
+            $inventory = [...$release, 'files' => $next];
+            if ($provisioning === null) {
+                $this->inventory->finish($server, $token, $inventory);
+            } else {
+                $server->getConnection()->transaction(function () use ($server, $token, $inventory, $provisioning): void {
+                    $this->inventory->finish($server, $token, $inventory);
+                    $provisioning->finish($server, true);
+                });
+            }
         } catch (Throwable $error) {
             if ($started) {
                 try {

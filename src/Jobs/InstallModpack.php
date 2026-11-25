@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Jobs;
 
+use App\Enums\ServerState;
 use App\Enums\SubuserPermission;
 use App\Models\Server;
 use App\Models\User;
@@ -22,10 +23,12 @@ use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackInstaller;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Services\ModpackReviewArchive;
 use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Throwable;
 
@@ -50,7 +53,7 @@ final class InstallModpack
         public readonly string $projectId,
         public readonly string $leaseToken,
         public readonly string $versionId = '',
-        public readonly int $deferUntil = 0,
+        public readonly bool $legacyCreation = false,
         public readonly ?array $selection = null,
         public readonly ?int $claimEpoch = null,
         private readonly ?Closure $heartbeat = null,
@@ -92,28 +95,59 @@ final class InstallModpack
             return null;
         }
 
-        $status = $server->status instanceof \BackedEnum ? (string) $server->status->value : (string) ($server->status ?? '');
-        if ($this->deferUntil > 0 && in_array($status, ['installing', 'install_failed', 'reinstall_failed'], true)) {
-            if ($status !== 'installing' || time() > $this->deferUntil) {
-                $operations->fail(
-                    $server,
-                    $type,
-                    InstalledOperationManager::OPERATION_MODPACK,
-                    'server_install_unfinished',
-                    ['message' => 'The server install did not finish, so the modpack files were not written.'],
-                    $this->leaseToken,
-                    $this->claimEpoch,
-                );
+        $provisioning = ($this->selection['managed_initial'] ?? false) === true ? app(ModpackProvisioning::class) : null;
+        $failProvisioning = function () use ($server, $type, $leases, $provisioning): void {
+            if ($provisioning !== null && $leases->owns($this->serverId, $type, $this->leaseToken, $this->claimEpoch)) {
+                $provisioning->finish($server, false);
+            }
+        };
+        if ($provisioning !== null) {
+            $loaderInstall = $provisioning->get($server);
+            if ($loaderInstall?->state === ModpackProvisioning::COMPLETE) {
+                $installed = app(ModpackInventory::class)->read($server)['inventory'];
+                if (($installed['provider'] ?? null) === $this->source && ($installed['pack_id'] ?? null) === $this->projectId
+                    && ($installed['version_id'] ?? null) === $this->versionId) {
+                    $operations->complete($server, $type, InstalledOperationManager::OPERATION_MODPACK, [
+                        'name' => $installed['title'] ?? $this->projectId,
+                        'version' => $installed['version_name'] ?? $this->versionId,
+                        'installed' => count($installed['files'] ?? []),
+                    ], $this->leaseToken, $this->claimEpoch);
+
+                    return null;
+                }
+            }
+            if ($server->status === ServerState::Installing && $server->skip_scripts && $loaderInstall !== null
+                && in_array($loaderInstall->state, [ModpackProvisioning::WAITING, ModpackProvisioning::RUNNING], true)
+                && now()->lt($loaderInstall->deadline)) {
+                if ($loaderInstall->state === ModpackProvisioning::RUNNING) {
+                    $operations->start($server, $type, InstalledOperationManager::OPERATION_MODPACK);
+                    $operations->modpackPhase($this->serverId, 'loader');
+                }
+
+                return 15;
+            }
+            if ($loaderInstall?->state !== ModpackProvisioning::READY || !$server->skip_scripts || $server->status !== ServerState::Installing) {
+                $failProvisioning();
+                $operations->fail($server, $type, InstalledOperationManager::OPERATION_MODPACK,
+                    'modpack_rejected', ['message' => trans('pelican-mod-manager::strings.modpacks.managed_loader_failed')],
+                    $this->leaseToken, $this->claimEpoch);
 
                 return null;
             }
+        }
 
-            return 30;
+        if ($this->legacyCreation) {
+            $operations->fail($server, $type, InstalledOperationManager::OPERATION_MODPACK,
+                'modpack_rejected', ['message' => trans('pelican-mod-manager::strings.modpacks.legacy_creation_queued')],
+                $this->leaseToken, $this->claimEpoch);
+
+            return null;
         }
 
         $operations->start($server, $type, InstalledOperationManager::OPERATION_MODPACK);
         $temp = tempnam(sys_get_temp_dir(), 'modpack');
         if ($temp === false) {
+            $failProvisioning();
             $operations->fail(
                 $server,
                 $type,
@@ -137,7 +171,7 @@ final class InstallModpack
             if ($resume !== null && ($operations->waitingCurseForgeModpack($server)['token'] ?? null) !== $resume) {
                 throw new ModpackException('This pending modpack has expired or was cancelled.');
             }
-            if ($isCurseForge || $isFtb) {
+            if ($provisioning !== null || $isCurseForge || $isFtb) {
                 $operations->modpackPhase($this->serverId, 'downloading');
             }
             $this->validateSelection($server);
@@ -263,6 +297,13 @@ final class InstallModpack
                 || JavaRuntimeImage::isTooOld($server->image, $release['minecraft_version'], $minimumJava)) {
                 throw new ModpackException('Set a supported, fixed Minecraft version and loader in the Egg before installing the modpack.');
             }
+            $installed = $current['inventory'];
+            $verifiedBuild = $provisioning !== null ? $release['loader_version']
+                : (($installed['loader'] ?? null) === $loader && ($installed['minecraft_version'] ?? null) === $minecraft
+                    ? ($installed['loader_version'] ?? null) : null);
+            if (is_string($verifiedBuild)) {
+                $runtime[ModpackLoader::buildVariable($loader)] ??= $verifiedBuild;
+            }
             if (JavaRuntimeImage::isTooNew($server->image, $release['minecraft_version'], $loader)) {
                 throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_new', [
                     'loader' => $loader,
@@ -270,7 +311,7 @@ final class InstallModpack
                 ]));
             }
             $lastCheck = 0.0;
-            $guard = function (bool $force = true) use ($server, $type, $leases, $workflow, &$lastCheck, &$leaseRefreshedAt, $backup, $review): void {
+            $guard = function (bool $force = true) use ($server, $type, $leases, $workflow, &$lastCheck, &$leaseRefreshedAt, $backup, $review, $provisioning): void {
                 if (!$force && microtime(true) - $lastCheck < 5) {
                     return;
                 }
@@ -283,7 +324,7 @@ final class InstallModpack
                 if (!$leases->refresh($this->serverId, $type, $this->leaseToken, epoch: $this->claimEpoch)) {
                     throw new ModpackException('The server operation lease expired.');
                 }
-                $workflow->assertStopped($server);
+                $workflow->assertStopped($server, provisioning: $provisioning !== null);
                 if ($force) {
                     $this->validateSelection($server->fresh() ?? $server);
                     if ($review !== null && $workflow->requireBackup($server, $review)->getKey() !== $backup?->getKey()) {
@@ -299,7 +340,7 @@ final class InstallModpack
                     $server, $fileRepository, $temp, $release, $loader,
                     $minecraft, $phase === 'preview',
                     $review['summary']['digest'] ?? null, $backup?->uuid, $guard,
-                    $runtime, verifyInstalledRuntime: true, unlockBackup: $lockedForApply,
+                    $runtime, verifyInstalledRuntime: true, unlockBackup: $lockedForApply, provisioning: $provisioning,
                 );
             } finally {
                 if ($lockedForApply) {
@@ -367,6 +408,7 @@ final class InstallModpack
             );
         } catch (CurseForgeDependenciesPending $pending) {
             if (!$isCurseForge || $file === null || !is_string($archiveHash) || $file['version_id'] === '') {
+                $failProvisioning();
                 $operations->fail(
                     $server,
                     $type,
@@ -394,6 +436,10 @@ final class InstallModpack
             $operations->pauseCurseForgeModpack($this->serverId, $this->leaseToken, $this->projectId, $file['version_id'], $selection, $pending->files);
         } catch (Throwable $exception) {
             report($exception);
+            $failProvisioning();
+            if ($provisioning !== null && $resume !== null) {
+                $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
+            }
             $operations->fail(
                 $server,
                 $type,
@@ -483,6 +529,9 @@ final class InstallModpack
             return;
         }
 
+        if (($this->selection['managed_initial'] ?? false) === true && ($server = Server::query()->find($this->serverId)) !== null) {
+            $container->make(ModpackProvisioning::class)->finish($server, false);
+        }
         $container->make(InstalledOperationManager::class)->fail(
             $this->serverId,
             $type,

@@ -54,6 +54,7 @@ final class ModpackInstaller
         ?array $runtime = null,
         bool $verifyInstalledRuntime = false,
         bool $unlockBackup = false,
+        ?ModpackProvisioning $provisioning = null,
     ): array {
         $snapshots = [];
         $zip = null;
@@ -164,7 +165,7 @@ final class ModpackInstaller
             }
 
             $release['loader_version'] = $verifiedBuild;
-            $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard, $warnings, $unlockBackup);
+            $result = app(ModpackDeployment::class)->run($server, $repo, $release, $target, $approved, $preview, $backup, $guard, $warnings, $unlockBackup, $provisioning);
 
             return [...$result, 'warnings' => array_values(array_unique([...$warnings, ...($result['warnings'] ?? [])])), 'runtime_build' => $verifiedBuild,
                 'version_name' => $release['version_name'] ?? null, 'java' => $release['java'] ?? null];

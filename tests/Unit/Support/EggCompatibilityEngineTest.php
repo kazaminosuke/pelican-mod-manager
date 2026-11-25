@@ -26,6 +26,7 @@ final class EggCompatibilityEngineTest extends TestCase
             $this->profile('fabric', 'fabric-uuid', 'fabric', ['FABRIC_VERSION', 'LOADER_VERSION', 'MC_VERSION', 'SERVER_JARFILE'], 'mod', 'fabric'),
             $this->profile('forge', 'forge-uuid', 'forge', ['BUILD_TYPE', 'FORGE_VERSION', 'MC_VERSION', 'SERVER_JARFILE'], 'mod', 'forge'),
             $this->profile('neoforge', 'neoforge-uuid', 'neoforge', ['MC_VERSION', 'NEOFORGE_VERSION'], 'mod', 'neoforge'),
+            $this->profile('quilt', 'dff33655-6e6a-4430-accf-e5aea04c2912', 'quilt', ['MC_VERSION', 'SERVER_JARFILE'], 'mod', 'quilt'),
             $this->profile('paper', 'paper-uuid', 'paper', ['BUILD_NUMBER', 'MINECRAFT_VERSION', 'SERVER_JARFILE'], 'plugin', 'paper'),
             $this->profile('ftb-server', 'ftb-uuid', 'ftbserver', ['FTB_MODPACK_ID', 'FTB_MODPACK_VERSION_ID', 'FTB_SEARCH_TERM', 'FTB_VERSION_STRING'], null, null, ['java/ftb/egg-f-t-b-server.json']),
             $this->profile('ftb-modpacks-ch', 'ftb-uuid', 'ftbmodpackschserver', ['FTB_MODPACK_ID', 'FTB_MODPACK_VERSION_ID', 'FTB_SEARCH_TERM', 'FTB_VERSION_STRING'], null, null, ['java/ftb/outdated/egg-f-t-b-modpacks-ch-server.json']),
@@ -65,9 +66,9 @@ final class EggCompatibilityEngineTest extends TestCase
         self::assertCount(2, $result->alternatives);
     }
 
-    public function test_quilt_egg_without_fixed_loader_variable_is_unavailable(): void
+    public function test_official_quilt_egg_can_supply_runtime_settings_without_a_loader_variable(): void
     {
-        $egg = $this->engine->classify(1, 'Quilt', null, null, ['MC_VERSION', 'SERVER_JARFILE']);
+        $egg = $this->engine->classify(1, 'Quilt', 'dff33655-6e6a-4430-accf-e5aea04c2912', null, ['MC_VERSION', 'SERVER_JARFILE']);
         $pack = new ModpackDescriptor(
             provider: 'modrinth', id: 'pack', title: 'Quilt Pack', versionId: 'version', versionName: '1',
             minecraftVersion: '1.20.1', loader: 'quilt', loaderVersion: '0.20.2', iconUrl: null,
@@ -75,7 +76,9 @@ final class EggCompatibilityEngineTest extends TestCase
         );
 
         $planner = new ModpackProvisioningPlanner($this->engine);
-        self::assertSame(CompatibilityDisposition::Unsupported, $planner->select($pack, [$egg], EggCompatibilityEngine::CONTEXT_CREATE)->disposition);
+        $result = $planner->select($pack, [$egg], EggCompatibilityEngine::CONTEXT_CREATE);
+        self::assertSame(CompatibilityDisposition::Compatible, $result->disposition);
+        self::assertArrayNotHasKey('QUILT_VERSION', $result->variables);
     }
 
     public function test_unknown_curseforge_compatibility_allows_an_explicit_loader_with_a_warning(): void

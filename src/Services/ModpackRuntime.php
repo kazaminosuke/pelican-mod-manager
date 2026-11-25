@@ -14,7 +14,7 @@ use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Psr\Http\Message\StreamInterface;
 use ZipArchive;
 
-/** Checks the files produced by the loader Egg before Mod Manager deploys a pack. */
+/** Checks the runtime before Mod Manager deploys a pack. */
 final class ModpackRuntime
 {
     public function __construct(private readonly WingsRemoteFilesystem $wings) {}
@@ -137,7 +137,7 @@ final class ModpackRuntime
         $stream = $this->read($repo, $server, $path);
         try {
             if (!ArchiveSignature::isZip(Utils::copyToString($stream, 4))) {
-                throw new ModpackException("The loader Egg did not produce a readable JAR at [$path].");
+                throw new ModpackException("The loader did not produce a readable JAR at [$path].");
             }
         } finally {
             $stream->close();
@@ -149,7 +149,7 @@ final class ModpackRuntime
         try {
             return $this->wings->readStream($repo, $server, $path);
         } catch (Exception $error) {
-            throw new ModpackException("Pelican marked the loader install complete, but [$path] could not be read. Check the Egg installation log.", 0, $error);
+            throw new ModpackException("The runtime file [$path] could not be read. Check the server installation log in Pelican.", 0, $error);
         }
     }
 

@@ -438,7 +438,8 @@ final class ModpackCatalogTable extends Component implements HasActions, HasSche
                                 ->hiddenLabel()
                                 ->columnSpanFull()
                                 ->color('gray')
-                                ->visible(fn (Get $get): bool => $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->mode === ProvisioningMode::Archive)
+                                ->visible(fn (Get $get): bool => $this->mode === self::MODE_CREATE
+                                    && $this->evaluatePlan($selection, $versionId, $get('egg_id'))?->mode === ProvisioningMode::Archive)
                                 ->state(trans('pelican-mod-manager::strings.modpacks.archive_startup')),
                         ]),
                     Select::make('egg_id')

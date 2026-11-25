@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Throwable;
 
@@ -35,8 +36,7 @@ final class QueueCreatedServerModpack
                     $plan['source'],
                     $plan['project_id'],
                     $plan['version_id'],
-                    1200,
-                    $plan['selection'],
+                    selection: $plan['selection'],
                 );
                 if ($outcome['dispatched'] || ($outcome['reason'] === 'already_active' && $outcome['state']?->isActive())) {
                     Notification::make()
@@ -58,6 +58,7 @@ final class QueueCreatedServerModpack
                 report($exception);
             }
 
+            app(ModpackProvisioning::class)->finish($record, false);
             Notification::make()
                 ->title(trans('pelican-mod-manager::strings.modpacks.archive_queue_failed'))
                 ->danger()

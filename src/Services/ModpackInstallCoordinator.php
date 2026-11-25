@@ -83,8 +83,14 @@ final class ModpackInstallCoordinator
             throw new ModpackException('Apply or cancel the existing modpack preview before selecting another release.');
         }
         $variables = $this->eggs->variableValues($server);
+        $runtime = $variables;
+        $installed = app(ModpackInventory::class)->read($server)['inventory'];
+        if ($descriptor->loader !== null && ($installed['loader'] ?? null) === $descriptor->loader
+            && ($installed['minecraft_version'] ?? null) === $descriptor->minecraftVersion && is_string($installed['loader_version'] ?? null)) {
+            $runtime[ModpackLoader::buildVariable($descriptor->loader)] ??= $installed['loader_version'];
+        }
         if ($descriptor->loader !== null && $descriptor->loaderVersion !== null
-            && !ModpackLoader::hasBuild($descriptor->loader, $descriptor->loaderVersion, $descriptor->minecraftVersion, $variables)) {
+            && !ModpackLoader::hasBuild($descriptor->loader, $descriptor->loaderVersion, $descriptor->minecraftVersion, $runtime)) {
             throw new ModpackException("This release requires {$descriptor->loader} {$descriptor->loaderVersion}. Configure and verify that runtime before requesting an in-place update.");
         }
         $selection = [

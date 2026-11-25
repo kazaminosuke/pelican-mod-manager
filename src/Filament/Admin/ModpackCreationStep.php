@@ -12,10 +12,13 @@ use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Components\Wizard\Step;
 use Illuminate\Validation\ValidationException;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
+use Kazaminosuke\ModManager\Services\CreateModpackServer;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackLoaderInstaller;
 use Kazaminosuke\ModManager\Services\ModpackProvisioningPlanner;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
@@ -23,6 +26,7 @@ use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\JavaRuntimeImage;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Throwable;
 
 /**
@@ -214,6 +218,9 @@ final class ModpackCreationStep
         if ($result->mode === ProvisioningMode::Archive && !app(InstalledOperationManager::class)->supportsAsyncDispatch()) {
             return trans('pelican-mod-manager::strings.operations.queue_required');
         }
+        if ($result->mode === ProvisioningMode::Archive && !CreateModpackServer::canStageBeforeWings()) {
+            return trans('pelican-mod-manager::strings.modpacks.managed_panel_required');
+        }
 
         return null;
     }
@@ -237,7 +244,7 @@ final class ModpackCreationStep
         }
 
         if ((string) $get('egg_id') !== (string) $result->selected?->id
-            || (bool) $get('skip_scripts')
+            || (bool) $get('skip_scripts') !== ($result->mode === ProvisioningMode::Archive)
             || (self::requiresManualStart($result) && (bool) $get('start_on_completion'))) {
             throw self::startupValidationError($component);
         }
@@ -276,8 +283,24 @@ final class ModpackCreationStep
         }
 
         [$source, $project] = explode(':', (string) $get('mm_project'), 2);
-        $descriptorTitle = self::descriptor((string) $get('mm_project'), (string) $get('mm_version'))?->title;
-        $title = trim((string) ($get('mm_project_title') ?: ($descriptorTitle ?? '')));
+        $descriptor = self::descriptor((string) $get('mm_project'), (string) $get('mm_version'));
+        $title = trim((string) ($get('mm_project_title') ?: ($descriptor?->title ?? '')));
+        $build = $descriptor?->loaderVersion;
+        $minecraft = $result->minecraftVersion;
+        $startup = (string) $get('startup');
+        if ($result->mode === ProvisioningMode::Archive) {
+            $minecraft = $environment['MC_VERSION'] ?? $environment['MINECRAFT_VERSION'] ?? null;
+            $build ??= $loader === null ? null : ($environment[ModpackLoader::buildVariable($loader)] ?? null);
+            $jar = $environment['SERVER_JARFILE'] ?? 'server.jar';
+            try {
+                ModpackLoaderInstaller::forRelease($loader ?? '', $minecraft, $build, $jar);
+            } catch (ModpackException) {
+                throw ValidationException::withMessages([
+                    $component->resolveRelativeStatePath('mm_project') => trans('pelican-mod-manager::strings.modpacks.managed_runtime_required'),
+                ]);
+            }
+            $startup = ModpackLoaderInstaller::startup($loader, $minecraft, $jar);
+        }
 
         return [
             'mode' => $result->mode->value,
@@ -287,9 +310,10 @@ final class ModpackCreationStep
             'selection' => [
                 'egg_id' => (string) $result->selected?->id,
                 'image' => $image,
-                'startup' => (string) $get('startup'),
-                'minecraft' => $result->minecraftVersion,
+                'startup' => $startup,
+                'minecraft' => $minecraft,
                 'loader' => $loader,
+                ...($result->mode === ProvisioningMode::Archive ? ['managed_initial' => true, 'loader_version' => $build] : []),
                 'server_pack' => $result->serverFileStatus === 'server_pack_selected',
                 'artifact_id' => $result->artifactId,
                 ...($title === '' ? [] : ['title' => $title]),
@@ -366,7 +390,7 @@ final class ModpackCreationStep
             $set('select_image', $image);
         }
         // Panel uses required ToggleButtons with numeric option keys.
-        $set('skip_scripts', 0);
+        $set('skip_scripts', $result->mode === ProvisioningMode::Archive ? 1 : 0);
         if (self::requiresManualStart($result)) {
             $set('start_on_completion', 0);
         }
@@ -383,6 +407,9 @@ final class ModpackCreationStep
         }
         $set('server_variables', $rows);
         $set('environment', $environment);
+        if ($result->mode === ProvisioningMode::Archive && $result->minecraftVersion !== null && $result->loader !== null) {
+            $set('startup', ModpackLoaderInstaller::startup($result->loader, $result->minecraftVersion, $environment['SERVER_JARFILE'] ?? 'server.jar'));
+        }
     }
 
     public static function evaluateSelection(string $project, string $version, mixed $explicitEggId = null): ?CompatibilityResult

@@ -258,7 +258,7 @@ final class EggCompatibilityEngine
         }
 
         $minecraftVariables = ['MC_VERSION', 'MINECRAFT_VERSION'];
-        $buildVariables = array_diff(array_keys($requirement->archiveVariables), $minecraftVariables);
+        $buildVariables = array_diff(array_keys($requirement->archiveVariables), [...$minecraftVariables, 'QUILT_VERSION']);
 
         return ($requirement->minecraftVersion === null || array_intersect($minecraftVariables, $egg->variableNames) !== [])
             && array_diff($buildVariables, $egg->variableNames) === [];
@@ -422,7 +422,9 @@ final class EggCompatibilityEngine
         $sameEgg = $currentEggId !== null && (string) $currentEggId === (string) $selected->id;
         $variables = match (true) {
             $mode === ProvisioningMode::EggInstall => $requirement->variables,
-            $mode === ProvisioningMode::Archive && !$sameEgg => $requirement->archiveVariables,
+            $mode === ProvisioningMode::Archive && !$sameEgg => $selected->variableNames !== null && !in_array('QUILT_VERSION', $selected->variableNames, true)
+                ? array_diff_key($requirement->archiveVariables, ['QUILT_VERSION' => true])
+                : $requirement->archiveVariables,
             default => [],
         };
         $variablesDiffer = false;

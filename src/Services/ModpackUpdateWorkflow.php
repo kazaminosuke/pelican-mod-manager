@@ -3,6 +3,7 @@
 namespace Kazaminosuke\ModManager\Services;
 
 use App\Enums\ContainerStatus;
+use App\Enums\ServerState;
 use App\Exceptions\Service\Backup\TooManyBackupsException;
 use App\Models\Backup;
 use App\Models\Server;
@@ -144,10 +145,12 @@ final class ModpackUpdateWorkflow
         return $review;
     }
 
-    public function assertStopped(Server $server): void
+    public function assertStopped(Server $server, bool $provisioning = false): void
     {
         $fresh = $server->fresh();
-        if ($fresh === null || $fresh->status !== null || $this->daemon->setServer($server)->getState(5) !== ContainerStatus::Offline) {
+        if ($fresh === null || $fresh->status !== ($provisioning ? ServerState::Installing : null)
+            || ($provisioning && !$fresh->skip_scripts)
+            || $this->daemon->setServer($server)->getState(5) !== ContainerStatus::Offline) {
             throw new ModpackException('Stop the server in Pelican and wait for Wings to confirm it is offline.');
         }
     }

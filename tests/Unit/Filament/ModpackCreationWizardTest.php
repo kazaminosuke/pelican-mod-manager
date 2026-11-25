@@ -3,12 +3,20 @@
 namespace Kazaminosuke\ModManager\Tests\Unit\Filament;
 
 use App\Enums\ContainerStatus;
+use App\Enums\ServerState;
+use App\Events\Server\Installed;
 use App\Filament\Admin\Resources\Servers\Pages\CreateServer;
+use App\Http\Controllers\Api\Remote\Servers\ServerDetailsController;
+use App\Http\Controllers\Api\Remote\Servers\ServerInstallController;
+use App\Http\Requests\Api\Remote\InstallationDataRequest;
 use App\Models\Backup;
+use App\Models\Node;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use App\Repositories\Daemon\DaemonServerRepository;
 use App\Services\Backups\InitiateBackupService;
+use App\Services\Eggs\EggConfigurationService;
+use App\Services\Servers\ServerConfigurationStructureService;
 use App\Services\Servers\ServerCreationService;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Hidden;
@@ -18,7 +26,9 @@ use Filament\Schemas\Components\Wizard;
 use Filament\Schemas\Components\Wizard\Step;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\TestCase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\View;
@@ -32,6 +42,8 @@ use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Services\ModpackLoaderInstaller;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
 use Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
@@ -147,7 +159,7 @@ final class ModpackCreationWizardTest extends TestCase
             self::assertSame(7, $data['egg_id']);
             self::assertSame('1.21.1', $data['environment']['MC_VERSION']);
             self::assertSame('21.1.266', $data['environment']['NEOFORGE_VERSION']);
-            self::assertSame('java -jar server.jar', $data['startup']);
+            self::assertSame('java -Xms128M -XX:MaxRAMPercentage=95.0 @unix_args.txt nogui', $data['startup']);
             self::assertSame('ghcr.io/pelican-eggs/yolks:java_21', $data['image']);
             self::assertSame(0, $data['start_on_completion']);
             self::assertSame('9620701', $data['mm_install_plan']['version_id']);
@@ -169,7 +181,7 @@ final class ModpackCreationWizardTest extends TestCase
             ->assertSet('data.egg_id', 7)
             ->assertSet('data.environment.MC_VERSION', '1.21.1');
         if ($manifestAvailable) {
-            $wizard->assertSet('data.skip_scripts', '0')->assertSet('data.start_on_completion', '0')
+            $wizard->assertSet('data.skip_scripts', '1')->assertSet('data.start_on_completion', '0')
                 ->assertSet('data.environment.NEOFORGE_VERSION', '21.1.266')
                 ->assertDontSee('could not determine the required loader build');
         } else {
@@ -201,18 +213,12 @@ final class ModpackCreationWizardTest extends TestCase
         self::assertSame('9620701', $runner->spawned[0]['payload']['version_id']);
         self::assertSame('925200', $runner->spawned[0]['payload']['project_id']);
         self::assertSame([
-            'egg_id' => '7', 'image' => 'ghcr.io/pelican-eggs/yolks:java_21', 'startup' => 'java -jar server.jar', 'minecraft' => '1.21.1', 'loader' => 'neoforge', 'server_pack' => true,
+            'egg_id' => '7', 'image' => 'ghcr.io/pelican-eggs/yolks:java_21', 'startup' => 'java -Xms128M -XX:MaxRAMPercentage=95.0 @unix_args.txt nogui',
+            'minecraft' => '1.21.1', 'loader' => 'neoforge', 'managed_initial' => true, 'loader_version' => '21.1.266', 'server_pack' => true,
             'artifact_id' => '9620727', 'title' => 'All the Mods 10',
             'variables' => ['MC_VERSION' => '1.21.1', 'NEOFORGE_VERSION' => '21.1.266'],
         ], $runner->spawned[0]['payload']['selection']);
-        self::assertGreaterThan(time(), $runner->spawned[0]['payload']['defer_until']);
-
-        // The persisted job must reject a server whose Egg changed while waiting.
-        DB::table('servers')->insert(['id' => 42, 'egg_id' => 99]);
-        BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
-        $state = app(InstalledOperationManager::class)->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
-        self::assertSame('modpack_rejected', $state?->error);
-        self::assertSame('The server Egg changed after the modpack was queued.', $state?->result['message']);
+        self::assertArrayNotHasKey('defer_until', $runner->spawned[0]['payload']);
     }
 
     public function test_resuming_a_curseforge_modpack_rejects_different_archive_bytes_before_wings(): void
@@ -380,6 +386,9 @@ final class ModpackCreationWizardTest extends TestCase
             'empty file has the wrong hash' => ['bad_empty_hash', 'published hash'],
             'partial download then retry' => ['interrupted', 'Could not download and verify'],
             'configured Java too old' => ['wrong_java', 'Java 25'],
+            'managed loader then pack completes Panel installation' => ['managed_success', null],
+            'managed loader fails before pack download' => ['managed_loader_failed', 'managed loader installation did not finish'],
+            'managed pack fails after loader completion' => ['managed_pack_failed', 'could not be downloaded'],
         ];
     }
 
@@ -434,15 +443,77 @@ final class ModpackCreationWizardTest extends TestCase
         }
         $wings->downloadFiles = ['https://ftb-files.example.test/pack.cfg' => 'initial', 'https://ftb-files.example.test/example.jar' => $mod];
         $url = 'https://api.feed-the-beast.com/v1/modpacks/public/modpack/5/89';
-        Http::fake([$url => static fn () => $scenario === 'http_error' ? Http::response([], 503) : Http::response($release)]);
+        Http::fake([$url => static fn () => in_array($scenario, ['http_error', 'managed_pack_failed'], true)
+            ? Http::response([], 503) : Http::response($release)]);
         $selection = ['managed_phase' => 'initial', 'egg_id' => '7', 'image' => $server->image,
             'variables' => app(InstalledEggCatalog::class)->variableValues($server), 'minecraft' => '1.20.1', 'loader' => 'fabric',
             'server_pack' => false, 'artifact_id' => '89', 'manifest_fingerprint' => $fingerprint];
+        $managed = str_starts_with($scenario, 'managed_');
+        if ($managed) {
+            Event::fake();
+            Schema::table('servers', function (Blueprint $table): void {
+                $table->integer('node_id')->default(8);
+                $table->boolean('skip_scripts')->default(true);
+                $table->timestamp('installed_at')->nullable();
+                $table->timestamps();
+            });
+            $migration = require dirname(__DIR__, 3).'/database/migrations/2026_11_25_000007_create_mod_manager_provisioning_table.php';
+            $migration->up();
+            DB::table('servers')->where('id', 42)->update(['status' => ServerState::Installing->value]);
+            $server->refresh();
+            $selection += ['managed_initial' => true, 'loader_version' => '0.15.0'];
+            $provisioning = app(ModpackProvisioning::class);
+            $provisioning->stage($server, ModpackLoaderInstaller::forRelease('fabric', '1.20.1', '0.15.0', 'server.jar'));
+        }
         $operations = app(InstalledOperationManager::class);
         $inventory = app(ModpackInventory::class);
         $dispatch = fn () => $operations->dispatchModpackInstall($server, ProjectType::Mod, 'ftb', '5', '89', selection: $selection);
         self::assertTrue($dispatch()['dispatched']);
+        if ($managed) {
+            self::assertSame(15, BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']));
+            Http::assertNothingSent();
+            $server->setRelation('node', $node = (new Node())->forceFill(['id' => 8]));
+            $controller = app(ServerInstallController::class);
+            self::assertTrue($provisioning->needsInstaller($server));
+            $request = Request::create('/install');
+            $request->attributes->set('node', $node);
+            $server->setRelation('transfer', null);
+            $this->mock(ServerConfigurationStructureService::class)->shouldReceive('handle')->andReturn(['skip_egg_scripts' => true]);
+            $this->mock(EggConfigurationService::class)->shouldReceive('handle')->andReturn([]);
+            $details = app(ServerDetailsController::class);
+            self::assertFalse($details($request, $server)->getData()->settings->skip_egg_scripts);
+            self::assertTrue($server->fresh()->skip_scripts);
+            self::assertStringContainsString('maven.fabricmc.net', $controller->index($request, $server)->getData()->script);
+            $callback = InstallationDataRequest::create('/install', 'POST', ['successful' => $scenario !== 'managed_loader_failed']);
+            $callback->attributes->set('node', $node);
+            self::assertSame(204, $controller->store($callback, $server)->getStatusCode());
+            self::assertTrue($details($request, $server)->getData()->settings->skip_egg_scripts);
+            if ($scenario !== 'managed_loader_failed') {
+                self::assertSame(ServerState::Installing, $server->fresh()->status);
+                self::assertNull($server->fresh()->installed_at);
+                self::assertFalse($provisioning->needsInstaller($server));
+                Event::assertNotDispatched(Installed::class);
+                $provisioning->duringNodeReset(8, static fn () => DB::table('servers')->where('node_id', 8)->update(['status' => null]));
+                self::assertSame(ServerState::Installing, $server->fresh()->status);
+            }
+        }
         BackgroundJob::execute(BackgroundJob::MODPACK, $runner->spawned[0]['payload']);
+        if ($managed) {
+            self::assertSame($failure === null ? null : ServerState::InstallFailed, $server->fresh()->status);
+            self::assertSame($failure === null, $server->fresh()->installed_at !== null);
+            self::assertSame($failure === null ? ModpackProvisioning::COMPLETE : ModpackProvisioning::FAILED, $provisioning->get($server)->state);
+            Event::assertDispatched(Installed::class);
+            if ($scenario === 'managed_loader_failed') {
+                $server->unsetRelation('node')->unsetRelation('transfer')->refresh();
+                $server->status = ServerState::Installing;
+                $server->saveOrFail();
+                $reinstall = InstallationDataRequest::create('/install', 'POST', ['successful' => true, 'reinstall' => true]);
+                $reinstall->attributes->set('node', $node);
+                $controller->store($reinstall, $server->setRelation('node', $node));
+                self::assertSame(ServerState::InstallFailed, $server->fresh()->status);
+                self::assertNull($server->fresh()->installed_at);
+            }
+        }
         if ($failure !== null) {
             $state = $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
             self::assertSame('failed', $state?->status);
@@ -451,7 +522,7 @@ final class ModpackCreationWizardTest extends TestCase
             self::assertNull($inventory->read($server)['recovery']);
             self::assertSame($runtimeFiles, $wings->files);
             if ($scenario !== 'interrupted') {
-                Http::assertSentCount(1);
+                Http::assertSentCount($scenario === 'managed_loader_failed' ? 0 : 1);
 
                 return;
             }
@@ -573,6 +644,9 @@ final class ModpackCreationWizardTest extends TestCase
             ->call('create')
             ->assertHasErrors('data.mm_confirm_compatibility')
             ->set('data.mm_confirm_compatibility', true)
+            ->call('create')
+            ->assertHasErrors('data.mm_project')
+            ->set('data.environment.FORGE_VERSION', '1.20.1-47.4.10')
             ->call('create')
             ->assertHasNoErrors();
     }
@@ -760,7 +834,7 @@ final class ModpackCreationWizardTest extends TestCase
             ->set('data.mm_project', 'modrinth:pack1234')
             ->set('data.mm_version', 'test1234')
             ->assertSet('data.egg_id', 9)
-            ->assertSet('data.skip_scripts', '0')->assertSet('data.start_on_completion', '0')
+            ->assertSet('data.skip_scripts', '1')->assertSet('data.start_on_completion', '0')
             ->call('nextModpackStep')->assertHasErrors('data.mm_confirm_compatibility')
             ->set('data.mm_confirm_compatibility', true)
             ->set('data.start_on_completion', '1')

@@ -867,7 +867,7 @@ final class InstalledOperationManager
         $plan = $this->waitingCurseForgeModpack($server);
 
         return $plan !== null && hash_equals($plan['token'], $token)
-            && $this->dispatchModpackInstall($server, ProjectType::Mod, 'curseforge', $plan['project_id'], $plan['version_id'], 1200, $plan['selection'])['dispatched'];
+            && $this->dispatchModpackInstall($server, ProjectType::Mod, 'curseforge', $plan['project_id'], $plan['version_id'], $plan['selection'])['dispatched'];
     }
 
     public function cancelCurseForgeModpack(Server|int $server, string $token): bool
@@ -883,6 +883,10 @@ final class InstalledOperationManager
             $plan = $this->waitingCurseForgeModpack($server);
             if ($plan === null || !hash_equals($plan['token'], $token)) {
                 return false;
+            }
+            if (($plan['selection']['managed_initial'] ?? false) === true
+                && ($pendingServer = Server::query()->find($serverId)) !== null) {
+                app(ModpackProvisioning::class)->finish($pendingServer, false);
             }
             $this->clearCurseForgeModpack($serverId, $lease);
             $this->forget($serverId, $type, self::OPERATION_MODPACK);
@@ -918,7 +922,6 @@ final class InstalledOperationManager
         string $source,
         string $projectId,
         ?string $versionId = null,
-        ?int $deferSeconds = null,
         ?array $selection = null,
     ): array {
         $serverId = $this->serverId($server);
@@ -987,7 +990,6 @@ final class InstalledOperationManager
                     'project_id' => $projectId,
                     'lease_token' => $leaseToken,
                     'version_id' => $versionId !== null ? trim($versionId) : '',
-                    'defer_until' => $deferSeconds !== null && $deferSeconds > 0 ? time() + $deferSeconds : 0,
                     'selection' => $selection,
                 ],
             )) {

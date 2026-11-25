@@ -5595,7 +5595,7 @@ class ModManagerPage extends Page implements HasTable
         $phase = $installedOperation['result']['phase'] ?? null;
         if ($status === InstalledOperationState::STATUS_RUNNING
             && ($installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_MODPACK
-            && in_array($phase, ['resuming', 'downloading', 'verifying', 'installing'], true)) {
+            && in_array($phase, ['resuming', 'loader', 'downloading', 'verifying', 'installing'], true)) {
             return trans('pelican-mod-manager::strings.modpacks.phases.'.$phase);
         }
         $progress = (int) ($installedOperation['progress'] ?? 0);
