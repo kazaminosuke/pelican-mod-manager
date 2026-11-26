@@ -27,24 +27,21 @@ final class PluginIdentityTest extends TestCase
         self::assertSame(1, $manifest['api_version']);
         $version = $manifest['version'];
         self::assertIsString($version);
-        $tag = str_starts_with($version, 'v') ? $version : 'v'.$version;
-        $isPrerelease = preg_match('/-pre\./', $tag) === 1;
         $publishedVersion = $updates['*']['version'];
         $downloadUrl = $updates['*']['download_url'];
         self::assertIsString($publishedVersion);
         self::assertIsString($downloadUrl);
+        self::assertMatchesRegularExpression('/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/D', $publishedVersion);
+        $publishedVersion = ltrim($publishedVersion, 'v');
+        self::assertSame(
+            'https://github.com/kazaminosuke/'.self::PLUGIN_ID.'/releases/download/'
+                .'v'.$publishedVersion.'/'.self::PLUGIN_ID.'.zip',
+            $downloadUrl,
+        );
 
-        if ($isPrerelease) {
-            self::assertNotSame($version, $publishedVersion);
-            self::assertDoesNotMatchRegularExpression('/-pre\./', $publishedVersion);
-            self::assertStringNotContainsString('-pre.', $downloadUrl);
-        } else {
-            self::assertSame($version, $publishedVersion);
-            self::assertSame(
-                'https://github.com/kazaminosuke/'.self::PLUGIN_ID.'/releases/download/'
-                    .$tag.'/'.self::PLUGIN_ID.'.zip',
-                $downloadUrl,
-            );
+        // A stable bump reaches main before the release workflow updates the feed.
+        if (!str_contains($version, '-')) {
+            self::assertTrue(version_compare($publishedVersion, ltrim($version, 'v'), '<='));
         }
     }
 
