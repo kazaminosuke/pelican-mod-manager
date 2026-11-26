@@ -843,7 +843,17 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
                     }
 
                     $payload = $response->json();
-                    $versions = is_array($payload) && is_array($payload['result'] ?? null) ? $payload['result'] : [];
+                    $versions = $payload['result'] ?? null;
+                    if (!is_array($versions) || !array_is_list($versions)) {
+                        $exception = new Exception("Invalid Hangar versions response for [$projectId].");
+                        report($exception);
+                        $firstFailure ??= $exception;
+                        foreach ($hashesByProjectId[$projectId] as $hash) {
+                            $failedSpecs[] = $pendingSpecs[$hash];
+                        }
+
+                        continue;
+                    }
                     $unmatchedHashes = [];
 
                     foreach ($hashesByProjectId[$projectId] as $hash) {
@@ -1205,10 +1215,10 @@ class HangarSource implements BatchLatestVersionSourceInterface, ProjectMetadata
                 'offset' => $page * self::PAGE_SIZE,
             ], $this->remainingTimeout($deadline));
 
-            $versions = $response['result'] ?? [];
+            $versions = $response['result'] ?? null;
 
-            if (!is_array($versions) || empty($versions)) {
-                break;
+            if (!is_array($versions) || !array_is_list($versions)) {
+                throw new Exception("Invalid Hangar versions response for [$projectId].");
             }
 
             $entry = $this->matchVersionEntryInPage($versions, $projectId, $hash);

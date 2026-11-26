@@ -7,6 +7,8 @@ use App\Repositories\Daemon\DaemonFileRepository;
 use Closure;
 use Exception;
 use GuzzleHttp\Promise\Utils as PromiseUtils;
+use GuzzleHttp\Utils as HttpUtils;
+use Illuminate\Http\Client\Promises\LazyPromise;
 use Illuminate\Http\Client\Response as HttpClientResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -405,9 +407,14 @@ class InstalledProjectService
         $this->assertArchiveMetadataType($type);
 
         $lastHeartbeatAt = microtime(true);
-        $pulseHeartbeat = static function (bool $forcePulse = false) use ($heartbeat, &$lastHeartbeatAt): bool {
+        $ownsScan = true;
+        $pulseHeartbeat = static function (bool $forcePulse = false) use ($heartbeat, &$lastHeartbeatAt, &$ownsScan): bool {
             if ($heartbeat === null) {
                 return true;
+            }
+
+            if (!$ownsScan) {
+                return false;
             }
 
             $now = microtime(true);
@@ -417,7 +424,7 @@ class InstalledProjectService
 
             $lastHeartbeatAt = $now;
 
-            return $heartbeat();
+            return $ownsScan = $heartbeat();
         };
 
         $reportProgress = static function (int $completed, int $total) use ($onProgress): void {
@@ -1446,6 +1453,7 @@ class InstalledProjectService
         Closure $pulseHeartbeat,
     ): void {
         $repo = $fileRepository->setServer($server);
+        $handler = HttpUtils::chooseHandler();
 
         foreach (array_chunk($filenames, self::WINGS_DOWNLOAD_CONCURRENCY) as $chunk) {
             if (!$pulseHeartbeat()) {
@@ -1470,10 +1478,14 @@ class InstalledProjectService
                 }
 
                 try {
-                    $promises[$filename] = $repo->getHttpClient()
+                    $promise = $repo->getHttpClient()
+                        ->setHandler($handler)
                         ->withOptions(['sink' => $tmp])
                         ->async()
                         ->get("/api/servers/{$server->uuid}/files/contents", ['file' => "{$folder}/{$filename}"]);
+                    // Newer Laravel versions defer starting async requests
+                    // until their lazy promises are built or awaited.
+                    $promises[$filename] = $promise instanceof LazyPromise ? $promise->buildPromise() : $promise;
                 } catch (Throwable $exception) {
                     report($exception);
                     @unlink($tmp);
@@ -1502,10 +1514,11 @@ class InstalledProjectService
                     }
 
                     $response = $outcome['value'] ?? null;
-                    if ($response instanceof HttpClientResponse && !$response->successful()) {
-                        $response->throw();
-                    } elseif ($response instanceof Throwable) {
+                    if ($response instanceof Throwable) {
                         throw $response;
+                    }
+                    if (!$response instanceof HttpClientResponse || !$response->successful()) {
+                        throw new Exception("Wings did not return a file for [{$filename}].");
                     }
 
                     $hashesByFilename[$filename] = $this->computeLocalFileHashes($tmp, $computeMurmur2);

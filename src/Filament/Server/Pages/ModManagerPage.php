@@ -685,9 +685,8 @@ class ModManagerPage extends Page implements HasTable
     /**
      * Warm likely-next catalog pages in the background. Hangar's
      * /projects call is ~1s, so its jobs are started first instead of
-     * waiting behind Modrinth. Other sources still run in short-lived
-     * Other sources still run as persisted scheduler jobs so this request never blocks on their APIs. The
-     * active source's current page is fetched by records()/loadTable itself.
+     * waiting behind Modrinth. All sources warm through persisted jobs.
+     * The active source's current page is fetched by records()/loadTable.
      */
     protected function dispatchCatalogWarm(bool $includeOtherSources = true): void
     {
