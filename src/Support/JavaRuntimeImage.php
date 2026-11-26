@@ -10,6 +10,13 @@ final class JavaRuntimeImage
 {
     public static function preferredLabel(?string $minecraftVersion): ?string
     {
+        $required = self::minecraftJava($minecraftVersion);
+
+        return $required === null ? null : 'Java '.$required;
+    }
+
+    private static function minecraftJava(?string $minecraftVersion): ?int
+    {
         $version = strtolower(trim((string) $minecraftVersion));
         if ($version === '') {
             return null;
@@ -23,31 +30,66 @@ final class JavaRuntimeImage
         $minor = (int) $matches[2];
         $patch = isset($matches[3]) ? (int) $matches[3] : 0;
 
-        if ($major >= 26 || $minor > 20 || ($minor === 20 && $patch >= 5)) {
-            return 'Java 21';
+        if ($major >= 26) {
+            return 25;
+        }
+
+        if ($minor > 20 || ($minor === 20 && $patch >= 5)) {
+            return 21;
         }
 
         if ($minor >= 18) {
-            return 'Java 17';
+            return 17;
         }
 
         if ($minor === 17) {
-            return 'Java 16';
+            return 16;
         }
 
-        return 'Java 8';
+        return 8;
+    }
+
+    private static function maximumJava(?string $minecraftVersion, ?string $loader = null): ?int
+    {
+        $version = strtolower(trim((string) $minecraftVersion));
+        if ($version === '' || preg_match('/^(\d+)\.(\d+)(?:\.(\d+))?/', $version, $matches) !== 1) {
+            return null;
+        }
+
+        $major = (int) $matches[1];
+        $minor = (int) $matches[2];
+        if ($major !== 1) {
+            return null;
+        }
+
+        if ($minor <= 12 && ($loader === 'forge' || $loader === null)) {
+            return 8;
+        }
+
+        if ($minor <= 16 && $loader === 'forge') {
+            return 16;
+        }
+
+        return null;
+    }
+
+    private static function imageJava(?string $image): ?int
+    {
+        return preg_match('~(?:^|[/:])java[_-](\d+)(?:$|[.:_@-])~i', (string) $image, $match) === 1 ? (int) $match[1] : null;
     }
 
     /**
      * @param  array<string, string>  $dockerImages
      */
-    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion): ?string
+    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion, ?string $loader = null): ?string
     {
-        $label = self::preferredLabel($minecraftVersion);
-        if ($label === null) {
+        $required = self::minecraftJava($minecraftVersion);
+        $maximum = self::maximumJava($minecraftVersion, $loader);
+        if ($required === null || ($maximum !== null && $required > $maximum)) {
             return null;
         }
 
+        $label = 'Java '.$required;
         foreach ($dockerImages as $name => $image) {
             if (!is_string($image) || $image === '') {
                 continue;
@@ -58,13 +100,29 @@ final class JavaRuntimeImage
             }
         }
 
-        $needle = 'java_'.substr($label, strlen('Java '));
+        $compatible = [];
         foreach ($dockerImages as $image) {
-            if (is_string($image) && str_contains(strtolower($image), $needle)) {
+            if (!is_string($image) || $image === '') {
+                continue;
+            }
+            $actual = self::imageJava($image);
+            if ($actual === null) {
+                continue;
+            }
+            if ($actual === $required) {
                 return $image;
+            }
+            if ($actual >= $required && ($maximum === null || $actual <= $maximum)) {
+                $compatible[] = ['java' => $actual, 'image' => $image];
             }
         }
 
-        return null;
+        if ($compatible === []) {
+            return null;
+        }
+
+        usort($compatible, static fn (array $left, array $right): int => $left['java'] <=> $right['java']);
+
+        return $compatible[0]['image'];
     }
 }

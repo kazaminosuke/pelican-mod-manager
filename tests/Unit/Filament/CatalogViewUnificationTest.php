@@ -12,6 +12,7 @@ use DOMElement;
 use DOMXPath;
 use Filament\Facades\Filament;
 use Filament\Support\Facades\FilamentView;
+use Filament\Tables\Table;
 use Filament\Tables\View\TablesRenderHook;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Carbon;
@@ -73,6 +74,11 @@ final class CatalogViewUnificationTest extends TestCase
         FilamentView::registerRenderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
             static fn () => View::file($root.'/resources/views/components/catalog-sort-select.blade.php'),
+            [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class],
+        );
+        FilamentView::registerRenderHook(
+            TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+            static fn () => View::file($root.'/resources/views/components/catalog-view-toggle.blade.php', ['searchFallback' => true]),
             [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class],
         );
         FilamentView::registerRenderHook(
@@ -268,10 +274,38 @@ final class CatalogViewUnificationTest extends TestCase
             $xpath = $this->xpathFor($tileHtml);
             self::assertSame(
                 1,
+                $xpath->query('//button[@data-mmr-view-toggle and @*[name()="wire:click"]="toggleCatalogView"]')?->length,
+                "Provider {$tab} should render a working switch back to list even without filters",
+            );
+            self::assertSame(
+                1,
                 $xpath->query('//a[contains(concat(" ", normalize-space(@class), " "), " fi-ta-record-content ")]')?->length,
                 "Provider {$tab} should render exactly one card anchor",
             );
         }
+    }
+
+    public function test_catalog_toggle_remains_available_when_filament_skips_the_trigger_group(): void
+    {
+        $this->fakeAllModManagerSources();
+        $this->bindStubDaemonFileRepository();
+        $this->configureServerPanelFor(ProjectType::Plugin);
+
+        Table::configureUsing(
+            static fn (Table $table): Table => $table->columnManager(false),
+            function (): void {
+                $page = Livewire::test(ModManagerPage::class)->set('activeTab', 'spigot')->call('loadTable');
+                foreach ([CatalogTileColumns::VIEW_LIST, CatalogTileColumns::VIEW_PANEL] as $view) {
+                    $page->assertSet('catalogView', $view);
+                    $instance = $page->instance();
+                    assert($instance instanceof ModManagerPage);
+                    self::assertFalse($instance->getTable()->hasColumnManager());
+                    self::assertFalse($instance->getTable()->isFilterable());
+                    self::assertSame(1, $this->xpathFor($page->html())->query('//button[@data-mmr-view-toggle]')?->length);
+                    $page->call('toggleCatalogView');
+                }
+            },
+        );
     }
 
     public function test_mod_manager_page_mounted_in_panel_view_and_tab_switches_preserve_columns_without_session_poisoning(): void
@@ -307,7 +341,7 @@ final class CatalogViewUnificationTest extends TestCase
         $tabSwitchPage = Livewire::test(ModManagerPage::class)->call('loadTable');
         self::assertStringContainsString('fi-ta-content-grid', $tabSwitchPage->html());
 
-        $tabSwitchPage->set('activeTab', 'installed')->call('loadTable');
+        $tabSwitchPage->set('activeTab', 'installed');
         $installedInstance = $tabSwitchPage->instance();
         assert($installedInstance instanceof ModManagerPage);
         self::assertFalse($installedInstance->getTable()->hasColumnsLayout());
@@ -317,6 +351,8 @@ final class CatalogViewUnificationTest extends TestCase
         $installedHtml = $tabSwitchPage->html();
         self::assertStringContainsString('fi-ta-table', $installedHtml);
         self::assertStringNotContainsString('fi-ta-content-grid', $installedHtml);
+        self::assertStringNotContainsString('fi-ta-table-loading-ctn', $installedHtml);
+        self::assertStringNotContainsString('data-mmr-view-toggle', $installedHtml);
         self::assertStringContainsString('data-mmr-swr-cell="source"', $installedHtml);
         self::assertStringContainsString('data-mmr-swr-cell="author"', $installedHtml);
         self::assertStringContainsString('data-mmr-swr-cell="downloads"', $installedHtml);

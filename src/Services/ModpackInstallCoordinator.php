@@ -96,7 +96,7 @@ final class ModpackInstallCoordinator
                 $server,
                 $result->selected->id,
                 $result->variables,
-                $this->imageFor($result->selected->id, $descriptor->minecraftVersion),
+                $this->imageFor($result->selected->id, $descriptor->minecraftVersion, $descriptor->loader),
                 $result->reinstall,
             );
             $server->refresh();
@@ -129,12 +129,12 @@ final class ModpackInstallCoordinator
         ];
     }
 
-    private function imageFor(int|string $eggId, ?string $minecraftVersion): ?string
+    private function imageFor(int|string $eggId, ?string $minecraftVersion, ?string $loader): ?string
     {
         $egg = Egg::query()->find($eggId);
         $images = is_array($egg?->docker_images) ? $egg->docker_images : [];
 
-        return JavaRuntimeImage::fromEggImages($images, $minecraftVersion);
+        return JavaRuntimeImage::fromEggImages($images, $minecraftVersion, $loader);
     }
 
     private function remember(Server $server, ModpackDescriptor $descriptor, CompatibilityResult $result): void

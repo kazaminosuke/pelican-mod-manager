@@ -255,7 +255,8 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             ->get(self::BASE_URL.'/version/'.$versionId)
             ->json();
 
-        if (!is_array($version) || (string) ($version['project_id'] ?? '') !== $projectId) {
+        if (!is_array($version) || ($version['id'] ?? null) !== $versionId
+            || ($version['project_id'] ?? null) !== $projectId) {
             return null;
         }
 
@@ -657,7 +658,66 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             'downloads' => (int) ($project['downloads'] ?? 0),
             'date_modified' => $project['date_modified'] ?? $project['updated'] ?? null,
             'project_type' => $project['project_type'] ?? '',
+            'minecraft_versions' => $this->extractSearchMinecraftVersions($project),
+            'loaders' => $this->extractSearchLoaders($project),
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $project
+     * @return list<string>
+     */
+    private function extractSearchMinecraftVersions(array $project): array
+    {
+        $raw = is_array($project['minecraft_versions'] ?? null)
+            ? $project['minecraft_versions']
+            : (is_array($project['versions'] ?? null) ? $project['versions'] : []);
+
+        $versions = [];
+        foreach ($raw as $version) {
+            if (!is_string($version)) {
+                continue;
+            }
+            $trimmed = trim($version);
+            if (preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $trimmed) === 1) {
+                $versions[$trimmed] = $trimmed;
+            }
+        }
+
+        $list = array_values($versions);
+        usort($list, static fn (string $a, string $b): int => version_compare($b, $a));
+
+        return $list;
+    }
+
+    /**
+     * @param array<string, mixed> $project
+     * @return list<string>
+     */
+    private function extractSearchLoaders(array $project): array
+    {
+        if (is_array($project['loaders'] ?? null)) {
+            $raw = $project['loaders'];
+        } else {
+            $raw = array_merge(
+                is_array($project['display_categories'] ?? null) ? $project['display_categories'] : [],
+                is_array($project['categories'] ?? null) ? $project['categories'] : [],
+            );
+        }
+
+        $allowed = ['fabric', 'forge', 'neoforge', 'quilt'];
+        $loaders = [];
+        foreach ($raw as $entry) {
+            if (!is_string($entry)) {
+                continue;
+            }
+            $slug = strtolower(trim($entry));
+            if (in_array($slug, $allowed, true)) {
+                $loaders[$slug] = $slug;
+            }
+        }
+
+        return array_values($loaders);
     }
 
     /** @return array<int, mixed> */

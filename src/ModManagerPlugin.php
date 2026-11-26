@@ -97,6 +97,13 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             fn () => view('pelican-mod-manager::components.catalog-sort-select'),
             $pageClasses,
         );
+        // Filament skips the column-manager hook when neither the filters nor
+        // the column manager has a trigger. The search toolbar still renders.
+        $panel->renderHook(
+            TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+            fn () => view('pelican-mod-manager::components.catalog-view-toggle', ['searchFallback' => true]),
+            $pageClasses,
+        );
         // Filament renders this hook inside the same toolbar group, directly
         // before its column-manager trigger. This gives us the required DOM
         // order without CSS ordering or client-side node movement.

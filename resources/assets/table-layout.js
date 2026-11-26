@@ -84,12 +84,26 @@
             // against, so the arithmetic below stays exact.
             const viewport = root.clientHeight;
             const rect = target.getBoundingClientRect();
+            const modalWindow = wrapper.closest('.fi-modal-window');
 
-            // rect.top falls by exactly as much as scrollY rises, so this sum
-            // is the same number whether the page sits at the top or at the
-            // bottom. That is what makes repeated measurement idempotent.
-            const top = Math.round(rect.top + window.scrollY);
-            const bottom = measureTrailingSpace(target, viewport);
+            let top;
+            let bottom;
+
+            if (modalWindow) {
+                // Inside a Filament modal, keep the table inside the viewport with
+                // breathing room for the modal footer without touching the
+                // background page's own table measurements.
+                top = Math.max(Math.round(rect.top), 0);
+                const modalFooter = modalWindow.querySelector('.fi-modal-footer');
+                const footerHeight = modalFooter ? Math.round(modalFooter.getBoundingClientRect().height) : 0;
+                bottom = footerHeight + 48;
+            } else {
+                // rect.top falls by exactly as much as scrollY rises, so this sum
+                // is the same number whether the page sits at the top or at the
+                // bottom. That is what makes repeated measurement idempotent.
+                top = Math.round(rect.top + window.scrollY);
+                bottom = measureTrailingSpace(target, viewport);
+            }
 
             if (!Number.isFinite(top) || top < 0 || !Number.isFinite(viewport) || viewport <= 0) {
                 debugLog(`measure skipped (from: ${caller})`, { reason: 'implausible-geometry', top, viewport });

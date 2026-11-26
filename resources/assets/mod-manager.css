@@ -8,7 +8,8 @@
 .mmr-table-scroll-ctn .fi-ta-content-ctn:has(>.fi-ta-table-loading-ctn){display:flex;flex-direction:column;}
 .mmr-table-scroll-ctn .fi-ta-table-loading-ctn{flex:1 1 auto;height:100%;min-height:8rem;}
 .mmr-table-scroll-ctn .fi-ta-empty-state{display:flex;align-items:center;justify-content:center;}
-.mmr-table-scroll-ctn .fi-ta-main:has(.mmr-installed-scan-pending){height:auto;min-height:0;}
+.mmr-table-scroll-ctn .fi-ta-main:has(>.mmr-installed-scan-pending){height:auto;min-height:0;}
+.mmr-table-scroll-ctn .fi-ta-main:has(>.mmr-installed-scan-pending)>.fi-ta-content-ctn{display:none;}
 .mmr-installed-scan-pending{display:flex;align-items:center;gap:.5rem;padding:1rem;}
 .fi-ta-split.mmr-tile-stats{flex-wrap:wrap;gap:.25rem .75rem;}
 .mmr-tile-stats>.fi-ta-col{flex:1 1 max-content;min-inline-size:0;max-inline-size:100%;}

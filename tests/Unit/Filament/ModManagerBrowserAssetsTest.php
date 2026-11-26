@@ -115,11 +115,11 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString("view('pelican-mod-manager::components.catalog-sort-select')", $plugin);
         self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE', $plugin);
         self::assertStringNotContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
-        self::assertStringContainsString("'wire:click' => 'toggleCatalogView'", $toggleBlade);
-        self::assertStringContainsString('->iconButton()', $toggleBlade);
+        self::assertStringContainsString('wire:click="toggleCatalogView"', $toggleBlade);
+        self::assertStringContainsString('<x-filament::icon-button', $toggleBlade);
         self::assertStringContainsString('getColumnManagerTriggerAction()', $toggleBlade);
-        self::assertStringContainsString('->size($trigger->getSize())', $toggleBlade);
-        self::assertStringContainsString('->iconSize($trigger->getIconSize())', $toggleBlade);
+        self::assertStringContainsString(':size="$trigger->getSize()"', $toggleBlade);
+        self::assertStringContainsString(':icon-size="$trigger->getIconSize()"', $toggleBlade);
         self::assertStringContainsString('x-filament::input.wrapper', $sortBlade);
         self::assertStringContainsString('x-filament::input.select', $sortBlade);
         self::assertStringNotContainsString('.mmr-catalog-sort-select', $css);

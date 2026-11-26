@@ -151,7 +151,7 @@ final class ModpackCatalog
                 ProjectSourceKey::Modrinth->value => $this->describeModrinth($server, $projectId, $versionId),
                 ProjectSourceKey::CurseForge->value => $this->describeCurseForge($server, $projectId, $versionId),
                 ModpackProvider::Ftb->value => $this->ftb->describe($projectId, $versionId),
-                ModpackProvider::Technic->value => $this->technic->describe($projectId),
+                ModpackProvider::Technic->value => $this->technic->describe($projectId, $versionId),
                 ModpackProvider::Atlauncher->value => $this->atlauncher->describe($projectId, $versionId),
                 default => null,
             };
@@ -173,9 +173,8 @@ final class ModpackCatalog
                 ProjectSourceKey::CurseForge->value => $this->curseForge->modpackDownloadById($projectId, $versionId),
                 default => null,
             };
-            if ($download !== null) {
-                return ['source' => $source, 'project_id' => $projectId] + $download;
-            }
+
+            return $download === null ? null : ['source' => $source, 'project_id' => $projectId] + $download;
         }
 
         return $this->latestFile($server, $source, $projectId);

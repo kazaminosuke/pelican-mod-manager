@@ -243,12 +243,18 @@ final class EggCompatibilityEngineTest extends TestCase
             'Java 8' => 'ghcr.io/example/java_8',
             'Java 17' => 'ghcr.io/example/java_17',
             'Java 21' => 'ghcr.io/example/java_21',
+            'Java 25' => 'ghcr.io/example/java_25',
         ];
 
+        self::assertSame('ghcr.io/example/java_25', JavaRuntimeImage::fromEggImages($images, '26.1'));
         self::assertSame('ghcr.io/example/java_21', JavaRuntimeImage::fromEggImages($images, '1.21.1'));
         self::assertSame('ghcr.io/example/java_17', JavaRuntimeImage::fromEggImages($images, '1.20.1'));
         self::assertSame('ghcr.io/example/java_8', JavaRuntimeImage::fromEggImages($images, '1.12.2'));
         self::assertNull(JavaRuntimeImage::fromEggImages(['Java 8' => 'ghcr.io/example/java_8'], '1.21.1'));
+        self::assertNull(JavaRuntimeImage::fromEggImages(['ghcr.io/example/java_17'], '1.12.2', 'forge'));
+        self::assertSame('ghcr.io/example/java_16', JavaRuntimeImage::fromEggImages(
+            ['ghcr.io/example/java_21', 'ghcr.io/example/java_16'], '1.16.5', 'forge',
+        ));
     }
 
     public function test_technic_bindings_read_the_version_token_from_the_server_archive_url(): void
