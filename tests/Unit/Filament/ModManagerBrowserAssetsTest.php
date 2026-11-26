@@ -202,7 +202,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertGreaterThan($downloadsPos, $datePos);
         self::assertStringContainsString('Split::make([', substr($tileBuilder, $descriptionPos, $authorPos - $descriptionPos));
         self::assertStringContainsString('Split::make([', substr($tileBuilder, $authorPos, $downloadsPos - $authorPos));
-        self::assertStringContainsString('->alignEnd()', substr($tileBuilder, $datePos));
+        self::assertStringNotContainsString('->alignEnd()', substr($tileBuilder, $datePos));
         self::assertStringContainsString('.fi-ta-split.mmr-tile-stats{flex-wrap:wrap;', $css);
         self::assertStringContainsString('.fi-ta-split.mmr-tile-stat-values{gap:.75rem;white-space:nowrap;', $css);
         self::assertSame(3, substr_count($tileBuilder, '->toggleable()'));

@@ -12,10 +12,11 @@
 .mmr-table-scroll-ctn .fi-ta-main:has(>.mmr-installed-scan-pending)>.fi-ta-content-ctn{display:none;}
 .mmr-installed-scan-pending{display:flex;align-items:center;gap:.5rem;padding:1rem;}
 .fi-ta-split.mmr-tile-stats{flex-wrap:wrap;gap:.25rem .75rem;}
-.mmr-tile-stats>.fi-ta-col{flex:1 1 max-content;min-inline-size:0;max-inline-size:100%;}
-.mmr-tile-stats>:has(>.mmr-tile-stat-values){min-inline-size:0;max-inline-size:100%;margin-inline-start:auto;}
+.mmr-tile-stats>.fi-growable{flex-basis:max-content;min-inline-size:0;max-inline-size:100%;}
+/* Each of the two grouped metrics gets the same share of extra space as the author. */
+.mmr-tile-stats>:has(>.mmr-tile-stat-values){flex-grow:2;}
 .fi-ta-split.mmr-tile-stat-values{gap:.75rem;white-space:nowrap;overflow-x:auto;}
-.mmr-tile-stat-values>div{flex-shrink:0;}
+.mmr-tile-stat-values>.fi-growable{flex-basis:max-content;flex-shrink:0;}
 .mmr-tile-stats>div:not(:has(.fi-ta-text-item)),.mmr-tile-stat-values>div:not(:has(.fi-ta-text-item)){display:none;}
 .mmr-table-scroll-ctn .fi-pagination{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);}
 .mmr-table-scroll-ctn .fi-pagination-overview{grid-column:1;min-inline-size:0;min-block-size:2.5rem;white-space:normal;overflow-wrap:normal;word-break:normal;line-break:strict;}

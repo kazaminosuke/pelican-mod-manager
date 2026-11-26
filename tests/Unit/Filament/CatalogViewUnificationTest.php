@@ -810,6 +810,8 @@ final class CatalogViewUnificationTest extends TestCase
         $splitRow = $directDivChildren->item(1);
         self::assertInstanceOf(DOMElement::class, $authorRow);
         self::assertInstanceOf(DOMElement::class, $splitRow);
+        self::assertStringContainsString('fi-growable', $authorRow->getAttribute('class'));
+        self::assertStringContainsString('fi-growable', $splitRow->getAttribute('class'));
 
         if ($expectedAuthor !== null) {
             self::assertStringContainsString($expectedAuthor, $authorRow->textContent);
@@ -831,9 +833,9 @@ final class CatalogViewUnificationTest extends TestCase
         self::assertInstanceOf(DOMElement::class, $downloadsCol);
         self::assertInstanceOf(DOMElement::class, $dateCol);
 
-        self::assertStringNotContainsString('fi-growable', $downloadsCol->getAttribute('class'));
-        self::assertStringContainsString('fi-align-end', $dateCol->getAttribute('class'));
-        self::assertStringNotContainsString('fi-growable', $dateCol->getAttribute('class'));
+        self::assertStringContainsString('fi-growable', $downloadsCol->getAttribute('class'));
+        self::assertStringContainsString('fi-growable', $dateCol->getAttribute('class'));
+        self::assertStringNotContainsString('fi-align-end', $dateCol->getAttribute('class'));
 
         if ($expectedDownloads !== null) {
             self::assertStringContainsString($expectedDownloads, $downloadsCol->textContent);

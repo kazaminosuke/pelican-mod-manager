@@ -115,7 +115,6 @@ final class CatalogTileColumns
                         ->icon('tabler-user')
                         ->color('gray')
                         ->size(TextSize::Small)
-                        ->grow(false)
                         ->lineClamp(1)
                         ->toggleable(),
                     Split::make([
@@ -125,15 +124,12 @@ final class CatalogTileColumns
                             ->icon('tabler-download')
                             ->color('gray')
                             ->size(TextSize::Small)
-                            ->grow(false)
                             ->toggleable(),
                         TextColumn::make('date_modified')
                             ->label(trans('pelican-mod-manager::strings.table.columns.date_modified'))
                             ->icon('tabler-calendar')
                             ->color('gray')
                             ->size(TextSize::Small)
-                            ->grow(false)
-                            ->alignEnd()
                             ->state(static function (array $record) use ($formatDate): ?string {
                                 $formatted = $formatDate($record['date_modified'] ?? null);
 
@@ -145,7 +141,7 @@ final class CatalogTileColumns
                                 return trim($tooltip) !== '' ? $tooltip : null;
                             })
                             ->toggleable(),
-                    ])->grow(false)->extraAttributes(['class' => 'mmr-tile-stat-values']),
+                    ])->extraAttributes(['class' => 'mmr-tile-stat-values']),
                 ])->extraAttributes(['class' => 'mmr-tile-stats']),
             ])->space(3),
         ];
