@@ -5,6 +5,7 @@ namespace Kazaminosuke\ModManager\Sources;
 use App\Models\Server;
 use Exception;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Contracts\ArchiveMetadataIdentificationInterface;
@@ -36,9 +37,9 @@ use Throwable;
  * Plugin catalog source for SpigotMC resources.
  *
  * Canonical per-resource metadata (Installed rows, identification, project
- * lookups) comes from the official Spigot Simple API. Catalog listings,
- * search, and version listings come from Spiget because those operations are
- * not exposed by the official API. The SpiGet CDN stores the resource's
+ * lookups) comes from the official Spigot Simple API, with public SpiGet
+ * metadata as a fallback for HTTP 403. SpiGet provides catalog listings,
+ * search, and version history. The SpiGet CDN stores the resource's
  * current hosted file, so it is used only when the requested install is that
  * current version. An older version id keeps the official Spigot download
  * URL. Premium, buyer-only, and externally hosted files are never downloaded.
@@ -163,7 +164,14 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
      */
     public function search(Server $server, ProjectType $type, int $page = 1, ?string $search = null, array $filters = []): array
     {
-        return $this->cachedSearch->search($this->buildSearchSpec($server, $type, $page, $search, $filters));
+        $spec = $this->buildSearchSpec($server, $type, $page, $search, $filters);
+        // Version-filtered pages take two upstream round trips: the compact
+        // listing, then one parallel batch for the visible resources.
+        $compact = $spec !== null && $spec->arguments['query'] === '' && filled($spec->arguments['version']);
+        $result = $this->cachedSearch->search($spec, $compact ? 3.0 : null);
+        $result['hits'] = $this->withCachedOfficialProjectOverlay($result['hits']);
+
+        return $result;
     }
 
     /** @param array<string, mixed> $filters */
@@ -191,12 +199,14 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return null;
         }
 
-        $requestedVersions = $this->versionFilterValues(
-            array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []),
-        );
-        $version = count($requestedVersions) === 1
-            ? $requestedVersions[0]
-            : (count($requestedVersions) === 0 ? MinecraftVersionResolver::resolve($server) : null);
+        $rawVersions = array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
+        $version = $disableVersionFilter
+            ? null
+            : (count($requestedVersions) === 1
+                ? $requestedVersions[0]
+                : (count($requestedVersions) === 0 ? MinecraftVersionResolver::resolve($server) : null));
 
         $sort = (string) ($filters['sort'] ?? 'downloads');
         if (!in_array($sort, ['downloads', 'updated', 'newest'], true)) {
@@ -589,7 +599,6 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         }
 
         [$hits, $incompleteDetails] = $this->withSpigetDetails($hits, $compactIds, $deadline);
-        $hits = $this->withCachedOfficialProjectOverlay($hits);
 
         $total = (int) $response->header('X-Total');
         if ($total < 1) {
@@ -605,7 +614,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
         if ($incompleteDetails) {
             throw new PartialSourceFetchException(
                 'Spigot catalog details were only partially resolved within the time budget.',
-                $result,
+                ['hits' => $this->withCachedOfficialProjectOverlay($hits), 'total_hits' => $total],
             );
         }
 
@@ -654,7 +663,11 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             } else {
                 $urls = [];
                 foreach ($missingIds as $projectId) {
-                    $urls[$projectId] = $this->spigetResourceUrl($projectId);
+                    $urls[$projectId] = $this->spigetResourceUrl($projectId, query: [
+                        // SpiGet supports field projection. Skip the embedded
+                        // base64 image while keeping the distribution flags.
+                        'fields' => 'id,name,tag,downloads,icon.url,author,updateDate,releaseDate,file,premium,price,external',
+                    ]);
                 }
 
                 try {
@@ -670,7 +683,13 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                     $response = $responses[$projectId] ?? null;
                     if ($response instanceof Response && $response->successful()) {
                         $resource = $response->json();
-                        if (is_array($resource) && $this->shouldExcludeFromCatalog($resource)) {
+                        if (!is_array($resource) || (string) ($resource['id'] ?? '') !== $projectId) {
+                            $hadFailure = true;
+
+                            continue;
+                        }
+
+                        if ($this->shouldExcludeFromCatalog($resource)) {
                             $excluded = ['excluded' => true];
                             $resolved[$projectId] = $excluded;
                             $toPrime[] = [
@@ -681,7 +700,7 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                             continue;
                         }
 
-                        $normalized = is_array($resource) ? $this->normalizeSpigetProject($resource) : null;
+                        $normalized = $this->normalizeSpigetProject($resource);
                         if ($normalized !== null) {
                             $resolved[$projectId] = $normalized;
                             $toPrime[] = [
@@ -750,14 +769,10 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 return $hit;
             }
 
-            if (($hit['author'] ?? null) === null && is_string($official['author'] ?? null) && $official['author'] !== '') {
-                $hit['author'] = $official['author'];
-            }
-            if (($hit['downloads'] ?? null) === null && is_int($official['downloads'] ?? null)) {
-                $hit['downloads'] = $official['downloads'];
-            }
-            if (($hit['date_modified'] ?? null) === null && is_string($official['date_modified'] ?? null)) {
-                $hit['date_modified'] = $official['date_modified'];
+            foreach (['author', 'description', 'downloads', 'date_modified', 'icon_url'] as $field) {
+                if (($hit[$field] ?? '') === '' && ($official[$field] ?? '') !== '') {
+                    $hit[$field] = $official[$field];
+                }
             }
 
             return $hit;
@@ -772,12 +787,28 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             throw new Exception('Invalid Spigot resource identifier.');
         }
 
-        // A 404 becomes a definitive miss in request(); any other failure is
-        // rethrown so the cache records an outage instead of a missing project.
-        $project = $this->normalizeOfficialProject($this->getJson(self::OFFICIAL_API, [
-            'action' => 'getResource',
-            'id' => $projectId,
-        ], $timeoutSeconds));
+        $deadline = microtime(true) + max(0.1, $timeoutSeconds);
+        try {
+            $project = $this->normalizeOfficialProject($this->getJson(self::OFFICIAL_API, [
+                'action' => 'getResource',
+                'id' => $projectId,
+            ], $timeoutSeconds));
+        } catch (RequestException $exception) {
+            if ($exception->response->status() !== 403) {
+                throw $exception;
+            }
+
+            try {
+                $resource = $this->getJson($this->spigetResourceUrl($projectId), [], $this->remainingTimeout($deadline));
+                $project = $this->normalizeSpigetProject($resource);
+            } catch (Throwable) {
+                throw $exception;
+            }
+
+            if (($project['project_id'] ?? null) !== $projectId) {
+                throw $exception;
+            }
+        }
 
         if ($project === null) {
             throw new SourceFetchNotFoundException("Spigot resource [$projectId] was not found.");
@@ -826,11 +857,17 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 continue;
             }
 
+            $fallbackUrls = [];
             foreach ($chunk as $projectId) {
+                $response = $responses[$projectId] ?? null;
+                if ($response instanceof Response && $response->status() === 403) {
+                    $fallbackUrls[$projectId] = $this->spigetResourceUrl($projectId);
+
+                    continue;
+                }
+
                 try {
-                    $normalized = $this->normalizeOfficialProject(
-                        $this->poolJson($responses[$projectId] ?? null, $projectId),
-                    );
+                    $normalized = $this->normalizeOfficialProject($this->poolJson($response, $projectId));
                 } catch (SourceFetchNotFoundException) {
                     // A definitive miss is left out of the batch map.
                     continue;
@@ -841,6 +878,26 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
                 }
 
                 if ($normalized !== null) {
+                    $resolved[$projectId] = $normalized;
+                }
+            }
+
+            if ($fallbackUrls === []) {
+                continue;
+            }
+
+            try {
+                $fallbacks = $this->pool($fallbackUrls, $this->remainingTimeout($deadline));
+            } catch (Throwable $exception) {
+                report($exception);
+
+                continue;
+            }
+
+            foreach (array_keys($fallbackUrls) as $projectId) {
+                [$resource] = $this->decodeOptionalPoolJson($fallbacks[$projectId] ?? null);
+                $normalized = $resource === null ? null : $this->normalizeSpigetProject($resource);
+                if (($normalized['project_id'] ?? null) === (string) $projectId) {
                     $resolved[$projectId] = $normalized;
                 }
             }
@@ -1519,7 +1576,22 @@ class SpigotSource implements ArchiveMetadataIdentificationInterface, BatchLates
             return $this->withoutDownloadUrl($version, DownloadUnavailableException::RATE_LIMITED);
         }
 
-        return $this->withoutDownloadUrl($version, DownloadUnavailableException::VERSION_UNAVAILABLE);
+        // This documented endpoint normally redirects to SpigotMC. Accept a
+        // JAR served directly for the requested id, never an unversioned redirect.
+        $versionUrl = $this->spigetResourceUrl($resourceId, '/versions/'.$versionId.'/download');
+        $probe = $this->probeDownloadArchive($versionUrl, $deadline, allowRedirects: false);
+        if ($probe === 'ok') {
+            unset($version['download_unavailable']);
+            $version['files'][0]['url'] = $versionUrl;
+            $version['files'][0]['download_channel'] = 'spiget_version';
+
+            return $version;
+        }
+
+        return $this->withoutDownloadUrl(
+            $version + ['manual_download_url' => $officialUrl],
+            $probe === 'rate_limited' ? DownloadUnavailableException::RATE_LIMITED : DownloadUnavailableException::VERSION_UNAVAILABLE,
+        );
     }
 
     /**

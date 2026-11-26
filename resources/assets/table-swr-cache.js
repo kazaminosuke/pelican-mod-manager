@@ -302,8 +302,19 @@
             }
         };
 
+        const effectiveCatalogView = (wire) => {
+            const activeTab = String(getWireValue(wire, 'activeTab', '') ?? '');
+
+            if (activeTab === 'installed') {
+                return 'list';
+            }
+
+            return getWireValue(wire, 'catalogView', 'list') === 'panel' ? 'panel' : 'list';
+        };
+
         const describeViewState = (wire) => ({
             activeTab: String(getWireValue(wire, 'activeTab', '') ?? ''),
+            catalogView: effectiveCatalogView(wire),
             paginators: normalize(getWireValue(wire, 'paginators', {})) ?? {},
             catalogSort: String(getWireValue(wire, 'catalogSort', 'downloads') ?? 'downloads'),
             minecraftVersionOverride: getWireValue(wire, 'minecraftVersionOverride', null),
@@ -330,29 +341,33 @@
             const changed = Object.keys(target).filter((key) => !equalStateValue(previous[key], target[key]));
             const type = changed.includes('activeTab')
                 ? 'active-tab'
-                : changed.includes('paginators')
-                    ? 'pagination'
-                    : changed.includes('tableSearchDigest')
-                        ? 'search'
-                        : changed.includes('tableFiltersDigest')
-                            ? 'filters'
-                            : changed.includes('catalogSort')
-                                ? 'sort'
-                                : changed.includes('minecraftVersionOverride') || changed.includes('loaderOverride')
-                                    ? 'compatibility'
-                                : changed.includes('tableColumnsDigest')
-                                    ? 'columns'
-                                    : 'other';
+                : changed.includes('catalogView')
+                    ? 'view'
+                    : changed.includes('paginators')
+                        ? 'pagination'
+                        : changed.includes('tableSearchDigest')
+                            ? 'search'
+                            : changed.includes('tableFiltersDigest')
+                                ? 'filters'
+                                : changed.includes('catalogSort')
+                                    ? 'sort'
+                                    : changed.includes('minecraftVersionOverride') || changed.includes('loaderOverride')
+                                        ? 'compatibility'
+                                        : changed.includes('tableColumnsDigest')
+                                            ? 'columns'
+                                            : 'other';
 
             return {
                 type,
                 changed,
                 from: {
                     activeTab: previous.activeTab,
+                    catalogView: previous.catalogView,
                     paginators: previous.paginators,
                 },
                 to: {
                     activeTab: target.activeTab,
+                    catalogView: target.catalogView,
                     paginators: target.paginators,
                 },
             };
@@ -363,6 +378,7 @@
                 schema: SCHEMA_VERSION,
                 scope: readScope(wrapper),
                 activeTab: getWireValue(wire, 'activeTab'),
+                catalogView: effectiveCatalogView(wire),
                 tableSearch: getWireValue(wire, 'tableSearch', ''),
                 catalogSort: getWireValue(wire, 'catalogSort', 'downloads'),
                 minecraftVersionOverride: getWireValue(wire, 'minecraftVersionOverride', null),
@@ -476,10 +492,8 @@
                     return false;
                 }
 
-                if (actionDescriptorsMatch(getRowActionDescriptors(row), cachedActions)) {
-                    continue;
-                }
-
+                // A matching icon can still belong to a different record.
+                // Only the fresh Livewire response supplies record handlers.
                 const projectedActions = document.createDocumentFragment();
                 cachedActions.forEach((descriptor) => projectedActions.append(createProjectedRowAction(descriptor)));
                 container.replaceChildren(projectedActions);
@@ -521,9 +535,9 @@
             const parts = [];
 
             const visit = (element) => {
-                // Record URLs and the Modrinth author URL wrap otherwise
-                // identical text in <a> elements. Those links are inert while
-                // stale, so they are not part of the display-value structure.
+                // Record URLs wrap otherwise identical text in <a> elements.
+                // Those links are inert while stale, so they are not part of
+                // the display-value structure.
                 const isTransparentWrapper = element.matches('a, .fi-ta-col');
 
                 if (!isTransparentWrapper) {

@@ -151,7 +151,7 @@ final class ModpackCreationStep
         }
 
         $images = is_array($egg->docker_images) ? $egg->docker_images : [];
-        $image = JavaRuntimeImage::fromEggImages($images, $result->minecraftVersion);
+        $image = JavaRuntimeImage::fromEggImages($images, $result->minecraftVersion, $result->loader);
         if ($image !== null) {
             $set('image', $image);
             $set('select_image', $image);

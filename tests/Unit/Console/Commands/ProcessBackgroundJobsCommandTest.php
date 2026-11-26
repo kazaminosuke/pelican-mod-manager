@@ -42,6 +42,7 @@ class ProcessBackgroundJobsCommandTest extends TestCase
 
         self::assertSame(0, $command->handle($queue, $runner));
         self::assertSame([7], $queue->retried);
+        self::assertSame([['id' => 7, 'delay' => 30, 'expectedAttempts' => 1]], $queue->retriedDetails);
         self::assertSame([], $queue->acked);
         self::assertTrue($cache->has($uniqueKey));
     }
@@ -64,8 +65,29 @@ class ProcessBackgroundJobsCommandTest extends TestCase
 
         self::assertSame(0, $command->handle($queue, $runner));
         self::assertSame([8], $queue->acked);
+        self::assertSame([['id' => 8, 'expectedAttempts' => ProcessBackgroundJobsCommand::MAX_ATTEMPTS]], $queue->ackedDetails);
         self::assertSame([], $queue->retried);
         self::assertFalse($cache->has($uniqueKey));
+    }
+
+    public function test_superseded_ack_keeps_the_unique_lock(): void
+    {
+        $cache = new LaravelCacheRepository(new ArrayStore());
+        $runner = PluginBackgroundRunner::fake($cache);
+        $uniqueKey = $runner->uniqueCacheKey('superseded');
+        $cache->add($uniqueKey, 1, 60);
+        $queue = new RecordingBackgroundJobQueue([
+            [
+                'id' => 9,
+                'type' => 'not_a_job',
+                'payload' => ['_unique_key' => $uniqueKey],
+                'attempts' => ProcessBackgroundJobsCommand::MAX_ATTEMPTS,
+            ],
+        ], ackResult: false);
+
+        self::assertSame(0, $this->command()->handle($queue, $runner));
+        self::assertSame([9], $queue->acked);
+        self::assertTrue($cache->has($uniqueKey));
     }
 
     private function command(): ProcessBackgroundJobsCommand
@@ -94,11 +116,20 @@ final class RecordingBackgroundJobQueue implements BackgroundJobQueue
     /** @var list<int|string> */
     public array $retried = [];
 
-    /** @var list<array{id: int|string, delay: int}> */
+    /** @var list<array{id: int|string, expectedAttempts: ?int}> */
+    public array $ackedDetails = [];
+
+    /** @var list<array{id: int|string, delay: int, expectedAttempts: ?int}> */
+    public array $retriedDetails = [];
+
+    /** @var list<array{id: int|string, delay: int, expectedAttempts: ?int}> */
     public array $released = [];
 
+    /** @var list<array{id: int|string, expectedAttempts: int}> */
+    public array $heartbeats = [];
+
     /** @param list<Job> $jobs */
-    public function __construct(private array $jobs = []) {}
+    public function __construct(private array $jobs = [], private readonly bool $ackResult = true) {}
 
     public function push(string $type, array $payload): bool
     {
@@ -120,19 +151,29 @@ final class RecordingBackgroundJobQueue implements BackgroundJobQueue
         return $job;
     }
 
-    public function ack(int|string $id): void
+    public function heartbeat(int|string $id, int $expectedAttempts): bool
+    {
+        $this->heartbeats[] = ['id' => $id, 'expectedAttempts' => $expectedAttempts];
+
+        return true;
+    }
+
+    public function ack(int|string $id, ?int $expectedAttempts = null): bool
     {
         $this->acked[] = $id;
+        $this->ackedDetails[] = ['id' => $id, 'expectedAttempts' => $expectedAttempts];
+
+        return $this->ackResult;
     }
 
-    public function retry(int|string $id, int $delaySeconds = 30): void
+    public function retry(int|string $id, int $delaySeconds = 30, ?int $expectedAttempts = null): void
     {
-        unset($delaySeconds);
         $this->retried[] = $id;
+        $this->retriedDetails[] = ['id' => $id, 'delay' => $delaySeconds, 'expectedAttempts' => $expectedAttempts];
     }
 
-    public function release(int|string $id, int $delaySeconds): void
+    public function release(int|string $id, int $delaySeconds, ?int $expectedAttempts = null): void
     {
-        $this->released[] = ['id' => $id, 'delay' => $delaySeconds];
+        $this->released[] = ['id' => $id, 'delay' => $delaySeconds, 'expectedAttempts' => $expectedAttempts];
     }
 }

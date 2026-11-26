@@ -80,6 +80,39 @@ final class ModpackSearchTest extends TestCase
         self::assertSame('modpack', $executor->spec->arguments['catalog']);
     }
 
+    public function test_modrinth_rejects_a_different_release_in_the_selected_version_response(): void
+    {
+        Http::fake([
+            'api.modrinth.com/v2/version/requested' => Http::response([
+                'id' => 'different',
+                'project_id' => 'project',
+                'version_number' => '2',
+                'files' => [['filename' => 'pack.mrpack', 'url' => 'https://cdn.modrinth.com/pack.mrpack']],
+            ]),
+        ]);
+
+        $source = new ModrinthSource($this->cache(new CapturingExecutor()));
+        self::assertNull($source->modpackDownloadById('project', 'requested'));
+    }
+
+    public function test_curseforge_uses_the_official_endpoint_for_a_missing_archive_url(): void
+    {
+        Http::fake([
+            'api.curseforge.com/v1/mods/10/files/9' => Http::response(['data' => [
+                'id' => 9,
+                'fileName' => 'server.zip',
+                'isServerPack' => true,
+            ]]),
+            'api.curseforge.com/v1/mods/10/files/9/download-url' => Http::sequence()
+                ->push(['data' => 'https://edge.forgecdn.net/server.zip'])
+                ->push([], 403),
+        ]);
+        $source = new CurseForgeSource($this->cache(new CapturingExecutor()));
+
+        self::assertSame('https://edge.forgecdn.net/server.zip', $source->modpackDownloadById('10', '9')['url']);
+        self::assertNull($source->modpackDownloadById('10', '9'));
+    }
+
     public function test_curseforge_modpack_search_uses_the_modpack_class(): void
     {
         $executor = new CapturingExecutor();

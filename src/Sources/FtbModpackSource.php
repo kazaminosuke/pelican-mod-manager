@@ -2,18 +2,17 @@
 
 namespace Kazaminosuke\ModManager\Sources;
 
+use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\UpstreamHttp;
-use Throwable;
 
 /**
- * FTB packs installed by the current FTB Server egg.
- *
- * The egg runs api.feed-the-beast.com's server installer from FTB_MODPACK_ID
- * and FTB_MODPACK_VERSION_ID during installation. Search hits that exist only
- * as CurseForge ids are ignored, because that installer does not accept them.
+ * Public FTB catalog for packs installed by the existing FTB Server Egg.
  */
 final class FtbModpackSource
 {
@@ -43,21 +42,48 @@ final class FtbModpackSource
             ->throw()
             ->json();
 
-        $ids = is_array($response['packs'] ?? null) ? $response['packs'] : [];
+        $ids = [];
+        foreach (array_slice(is_array($response['packs'] ?? null) ? $response['packs'] : [], 0, 6) as $id) {
+            if (self::isId($id)) {
+                $ids[(string) $id] = (string) $id;
+            }
+        }
+        if ($ids === []) {
+            return [];
+        }
+
+        $packs = $pending = [];
+        foreach ($ids as $id) {
+            $pack = Cache::get(self::summaryKey($id));
+            if (is_array($pack)) {
+                $packs[$id] = $pack;
+            } else {
+                $pending[] = $id;
+            }
+        }
+        if ($pending !== []) {
+            $responses = Http::pool(static fn (Pool $pool): array => array_map(
+                static fn (string $id) => $pool->as($id)->acceptJson()->timeout(8)->connectTimeout(3)->get(self::PACK.$id),
+                $pending,
+            ));
+            foreach ($pending as $id) {
+                $response = $responses[$id] ?? null;
+                if ($response instanceof Response && $response->successful()) {
+                    $pack = $this->publicPack($response->json(), $id);
+                    if ($pack !== []) {
+                        $packs[$id] = $pack;
+                        Cache::put(self::summaryKey($id), $pack, 60);
+                    }
+                }
+            }
+        }
+
         $descriptors = [];
-        foreach (array_slice($ids, 0, 6) as $id) {
-            if (!is_numeric($id)) {
-                continue;
-            }
-
-            try {
-                $pack = $this->describe((string) (int) $id);
-            } catch (Throwable) {
-                continue;
-            }
-
-            if ($pack !== null) {
-                $descriptors[] = $pack;
+        foreach ($ids as $id) {
+            $pack = $packs[$id] ?? [];
+            $version = $this->publicVersions($pack)[0] ?? null;
+            if ($version !== null) {
+                $descriptors[] = $this->descriptor($pack, $version);
             }
         }
 
@@ -65,16 +91,26 @@ final class FtbModpackSource
     }
 
     /**
-     * @return list<array{id: string, label: string}>
+     * @return list<array{id: string, label: string, version_number: string, version_type: ?string, date_published: ?string, minecraft: ?string, loader: ?string}>
      */
     public function versions(string $packId): array
     {
         $pack = $this->fetchPack($packId);
         $versions = [];
         foreach ($this->publicVersions($pack) as $version) {
+            [$loader, , $minecraft] = $this->targets($version);
+            $timestamp = $version['released'] ?? $version['updated'] ?? null;
+            $published = is_numeric($timestamp) && (int) $timestamp > 0 ? gmdate('c', (int) $timestamp) : null;
+            $type = is_string($version['type'] ?? null) ? strtolower(trim($version['type'])) : null;
+
             $versions[] = [
                 'id' => (string) $version['id'],
                 'label' => (string) $version['name'],
+                'version_number' => (string) $version['name'],
+                'version_type' => $type !== '' ? $type : null,
+                'date_published' => $published,
+                'minecraft' => $minecraft,
+                'loader' => $loader,
             ];
         }
 
@@ -84,7 +120,7 @@ final class FtbModpackSource
     public function describe(string $packId, ?string $versionId = null): ?ModpackDescriptor
     {
         $pack = $this->fetchPack($packId);
-        if (!is_numeric($pack['id'] ?? null) || ($pack['private'] ?? false) === true) {
+        if ($pack === []) {
             return null;
         }
 
@@ -111,21 +147,42 @@ final class FtbModpackSource
         return $this->descriptor($pack, $selected);
     }
 
+    private static function isId(mixed $value): bool
+    {
+        return (is_string($value) || is_int($value)) && preg_match('/^[1-9]\d*$/D', (string) $value) === 1;
+    }
+
+    private static function summaryKey(string $id): string
+    {
+        return 'mod-manager:ftb-summary:'.$id;
+    }
+
     /** @return array<string, mixed> */
     private function fetchPack(string $packId): array
     {
-        if (preg_match('/^[1-9]\d*$/', $packId) !== 1) {
+        if (!self::isId($packId)) {
             return [];
         }
 
-        $response = UpstreamHttp::json()
-            ->timeout(8)
-            ->connectTimeout(3)
-            ->get(self::PACK.$packId)
-            ->throw()
-            ->json();
+        $cached = Cache::get(self::summaryKey($packId));
+        if (is_array($cached)) {
+            return $cached;
+        }
 
-        return is_array($response) ? $response : [];
+        $response = UpstreamHttp::json()->timeout(8)->connectTimeout(3)->get(self::PACK.$packId)->throw();
+        $pack = $this->publicPack($response->json(), $packId);
+        if ($pack !== []) {
+            Cache::put(self::summaryKey($packId), $pack, 60);
+        }
+
+        return $pack;
+    }
+
+    /** @return array<string, mixed> */
+    private function publicPack(mixed $pack, string $id): array
+    {
+        return is_array($pack) && self::isId($pack['id'] ?? null) && (string) $pack['id'] === $id
+            && ($pack['private'] ?? false) === false ? $pack : [];
     }
 
     /**
@@ -136,7 +193,7 @@ final class FtbModpackSource
     {
         $versions = [];
         foreach (is_array($pack['versions'] ?? null) ? $pack['versions'] : [] as $version) {
-            if (!is_array($version) || ($version['private'] ?? false) === true || !is_numeric($version['id'] ?? null)) {
+            if (!is_array($version) || ($version['private'] ?? false) !== false || !self::isId($version['id'] ?? null)) {
                 continue;
             }
 
@@ -144,7 +201,8 @@ final class FtbModpackSource
         }
 
         usort($versions, static function (array $left, array $right): int {
-            return ((int) ($right['released'] ?? 0)) <=> ((int) ($left['released'] ?? 0));
+            return [(int) ($right['released'] ?? $right['updated'] ?? 0), (int) $right['id']]
+                <=> [(int) ($left['released'] ?? $left['updated'] ?? 0), (int) $left['id']];
         });
 
         return $versions;

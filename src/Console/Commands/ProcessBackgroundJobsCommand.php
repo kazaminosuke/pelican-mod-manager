@@ -23,7 +23,7 @@ final class ProcessBackgroundJobsCommand extends Command
 
     public const TIME_BUDGET_SECONDS = 50;
 
-    public const MAX_JOBS_PER_RUN = 25;
+    public const MAX_JOBS_PER_RUN = 50;
 
     protected $signature = 'mod-manager:process-jobs';
 
@@ -53,19 +53,20 @@ final class ProcessBackgroundJobsCommand extends Command
             $processed++;
             $payload = $job['payload'];
             $uniqueKey = $payload['_unique_key'] ?? null;
+            $attempts = (int) ($job['attempts'] ?? 1);
             $finished = false;
+            $heartbeat = static fn (): bool => $queue->heartbeat($job['id'], $attempts);
 
             try {
-                $releaseAfter = BackgroundJob::execute($job['type'], $payload);
+                $releaseAfter = BackgroundJob::execute($job['type'], $payload, $attempts, $heartbeat);
 
                 if ($releaseAfter !== null) {
                     // The job is waiting for another managed operation. It
                     // stays pending (and keeps its unique lock) without
                     // sleeping inside this shared scheduler process.
-                    $queue->release($job['id'], $releaseAfter);
+                    $queue->release($job['id'], $releaseAfter, $attempts);
                 } else {
-                    $queue->ack($job['id']);
-                    $finished = true;
+                    $finished = $queue->ack($job['id'], $attempts);
                 }
             } catch (Throwable $exception) {
                 try {
@@ -76,11 +77,10 @@ final class ProcessBackgroundJobsCommand extends Command
 
                 $this->error($exception->getMessage());
 
-                if (($job['attempts'] ?? 1) < self::MAX_ATTEMPTS) {
-                    $queue->retry($job['id']);
+                if ($attempts < self::MAX_ATTEMPTS) {
+                    $queue->retry($job['id'], expectedAttempts: $attempts);
                 } else {
-                    $queue->ack($job['id']);
-                    $finished = true;
+                    $finished = $queue->ack($job['id'], $attempts);
                 }
             } finally {
                 if ($finished) {

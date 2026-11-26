@@ -16,6 +16,8 @@ final class ModpackArchive
 {
     private const MAX_OVERRIDE_BYTES = 2_000_000;
 
+    private const MAX_MANIFEST_BYTES = 8_388_608;
+
     private const MAX_OVERRIDE_TOTAL_BYTES = 32_000_000;
 
     public static function read(string $zipPath): ModpackManifest
@@ -31,12 +33,12 @@ final class ModpackArchive
         }
 
         try {
-            $modrinth = $zip->getFromName('modrinth.index.json');
+            $modrinth = $zip->getFromName('modrinth.index.json', self::MAX_MANIFEST_BYTES + 1);
             if (is_string($modrinth) && $modrinth !== '') {
                 return self::fromModrinth($zip, $modrinth);
             }
 
-            $curse = $zip->getFromName('manifest.json');
+            $curse = $zip->getFromName('manifest.json', self::MAX_MANIFEST_BYTES + 1);
             if (is_string($curse) && $curse !== '') {
                 return self::fromCurseForge($zip, $curse);
             }
@@ -98,7 +100,7 @@ final class ModpackArchive
             );
         }
 
-        [$overrides, $overrideSkips] = self::overrides($zip, 'overrides/');
+        [$overrides, $overrideSkips] = self::overrides($zip, 'server-overrides/', 'overrides/');
 
         return new ModpackManifest(
             format: ModpackManifest::FORMAT_MODRINTH,
@@ -222,52 +224,61 @@ final class ModpackArchive
     /**
      * @return array{0: list<ModpackOverrideFile>, 1: list<string>}
      */
-    private static function overrides(ZipArchive $zip, string $prefix): array
+    private static function overrides(ZipArchive $zip, string ...$prefixes): array
     {
         $overrides = [];
         $skipped = [];
         $total = 0;
-        $prefix = str_replace('\\', '/', $prefix);
+        // Prefixes are ordered from most to least specific.
+        foreach ($prefixes as $prefix) {
+            for ($index = 0; $index < $zip->numFiles; $index++) {
+                $name = $zip->getNameIndex($index);
+                if (!is_string($name)) {
+                    continue;
+                }
 
-        for ($index = 0; $index < $zip->numFiles; $index++) {
-            $name = $zip->getNameIndex($index);
-            if (!is_string($name)) {
-                continue;
+                $name = str_replace('\\', '/', $name);
+                if (!str_starts_with($name, $prefix) || str_ends_with($name, '/')) {
+                    continue;
+                }
+
+                $relative = ModpackPaths::safeRelative(substr($name, strlen($prefix)));
+                if ($relative === null) {
+                    throw new ModpackException('The modpack contains an unsafe override path.');
+                }
+
+                if (isset($overrides[$relative])) {
+                    continue;
+                }
+
+                $stat = $zip->statIndex($index);
+                $size = is_array($stat) ? (int) ($stat['size'] ?? 0) : 0;
+                if ($size > self::MAX_OVERRIDE_BYTES || $total + $size > self::MAX_OVERRIDE_TOTAL_BYTES) {
+                    $skipped[] = 'override-too-large:'.$relative;
+
+                    continue;
+                }
+
+                $contents = $zip->getFromIndex($index);
+                if (!is_string($contents)) {
+                    throw new ModpackException("Override [{$relative}] could not be read.");
+                }
+
+                $total += strlen($contents);
+                $overrides[$relative] = new ModpackOverrideFile($relative, $contents);
             }
-
-            $name = str_replace('\\', '/', $name);
-            if (!str_starts_with($name, $prefix) || str_ends_with($name, '/')) {
-                continue;
-            }
-
-            $relative = ModpackPaths::safeRelative(substr($name, strlen($prefix)));
-            if ($relative === null) {
-                throw new ModpackException('The modpack contains an unsafe override path.');
-            }
-
-            $stat = $zip->statIndex($index);
-            $size = is_array($stat) ? (int) ($stat['size'] ?? 0) : 0;
-            if ($size > self::MAX_OVERRIDE_BYTES || $total + $size > self::MAX_OVERRIDE_TOTAL_BYTES) {
-                $skipped[] = 'override-too-large:'.$relative;
-
-                continue;
-            }
-
-            $contents = $zip->getFromIndex($index);
-            if (!is_string($contents)) {
-                throw new ModpackException("Override [{$relative}] could not be read.");
-            }
-
-            $total += strlen($contents);
-            $overrides[] = new ModpackOverrideFile($relative, $contents);
         }
 
-        return [$overrides, $skipped];
+        return [array_values($overrides), $skipped];
     }
 
     /** @return array<string, mixed> */
     private static function decodeObject(string $json, string $name): array
     {
+        if (strlen($json) > self::MAX_MANIFEST_BYTES) {
+            throw new ModpackException("Modpack manifest [$name] exceeds the size limit.");
+        }
+
         try {
             $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {

@@ -4,7 +4,12 @@ namespace Kazaminosuke\ModManager\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use Closure;
 use Exception;
+use GuzzleHttp\Promise\Utils as PromiseUtils;
+use GuzzleHttp\Utils as HttpUtils;
+use Illuminate\Http\Client\Promises\LazyPromise;
+use Illuminate\Http\Client\Response as HttpClientResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -13,6 +18,7 @@ use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\PartialSourceFetchException;
 use Kazaminosuke\ModManager\Repositories\InstalledMetadataRepository;
 use Kazaminosuke\ModManager\Sources\ModrinthSource;
 use Kazaminosuke\ModManager\Sources\SpigotSource;
@@ -24,6 +30,7 @@ use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
 use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
+use ReflectionMethod;
 use Throwable;
 
 class InstalledProjectService
@@ -47,6 +54,12 @@ class InstalledProjectService
     private const HASH_SCAN_LOCK_SECONDS = 180;
 
     private const ARCHIVE_IDENTIFICATION_MAX_FILES = 20;
+
+    /** Bound concurrent Wings file downloads during cold-cache hashing. */
+    private const WINGS_DOWNLOAD_CONCURRENCY = 4;
+
+    /** Minimum seconds between periodic scan heartbeats. */
+    private const HEARTBEAT_INTERVAL_SECONDS = 5.0;
 
     public function __construct(
         protected ProjectSourceRegistry $sourceRegistry,
@@ -106,12 +119,17 @@ class InstalledProjectService
      *
      * `$force` (an explicit rescan) ignores a fresh cache and re-identifies
      * unknown files that were checked recently.
+     *
+     * @param  (Closure(int, int): void)|null  $onProgress
+     * @param  (Closure(): bool)|null  $heartbeat
      */
     public function scanAndImportModsResult(
         Server $server,
         DaemonFileRepository $fileRepository,
         ?ProjectType $type = null,
         bool $force = false,
+        ?Closure $onProgress = null,
+        ?Closure $heartbeat = null,
     ): InstalledScanResult {
         set_time_limit(240);
 
@@ -144,7 +162,14 @@ class InstalledProjectService
                         $result = $cachedAfterLock;
                     } else {
                         $scanExecuted = true;
-                        $result = $this->performScan($server, $fileRepository, $resolvedType, $force);
+                        $result = $this->performScan(
+                            $server,
+                            $fileRepository,
+                            $resolvedType,
+                            $force,
+                            $onProgress,
+                            $heartbeat,
+                        );
                         $this->rememberScanResult($cacheKey, $result);
                     }
                 } finally {
@@ -359,13 +384,19 @@ class InstalledProjectService
         return $properties;
     }
 
+    /**
+     * @param  (Closure(int, int): void)|null  $onProgress
+     * @param  (Closure(): bool)|null  $heartbeat
+     */
     protected function performScan(
         Server $server,
         DaemonFileRepository $fileRepository,
         ?ProjectType $type = null,
         bool $force = false,
+        ?Closure $onProgress = null,
+        ?Closure $heartbeat = null,
     ): InstalledScanResult {
-        set_time_limit(120);
+        set_time_limit(240);
 
         $type ??= ProjectType::fromServer($server);
 
@@ -374,6 +405,33 @@ class InstalledProjectService
         }
 
         $this->assertArchiveMetadataType($type);
+
+        $lastHeartbeatAt = microtime(true);
+        $ownsScan = true;
+        $pulseHeartbeat = static function (bool $forcePulse = false) use ($heartbeat, &$lastHeartbeatAt, &$ownsScan): bool {
+            if ($heartbeat === null) {
+                return true;
+            }
+
+            if (!$ownsScan) {
+                return false;
+            }
+
+            $now = microtime(true);
+            if (!$forcePulse && ($now - $lastHeartbeatAt) < self::HEARTBEAT_INTERVAL_SECONDS) {
+                return true;
+            }
+
+            $lastHeartbeatAt = $now;
+
+            return $ownsScan = $heartbeat();
+        };
+
+        $reportProgress = static function (int $completed, int $total) use ($onProgress): void {
+            if ($onProgress !== null) {
+                $onProgress(max(0, min($completed, $total)), max(0, $total));
+            }
+        };
 
         try {
             $folder = $this->getProjectFolder($server, $fileRepository, $type);
@@ -419,6 +477,13 @@ class InstalledProjectService
             ];
         }
 
+        $totalDiskFiles = count($diskFiles);
+        $reportProgress(0, $totalDiskFiles);
+
+        if (!$pulseHeartbeat()) {
+            return InstalledScanResult::failed('scan_ownership_lost');
+        }
+
         $metadataResult = $this->metadataRepository->read($server, $fileRepository, $folder);
 
         if (in_array($metadataResult->status, [InstalledMetadataReadStatus::Invalid, InstalledMetadataReadStatus::Unavailable], true)) {
@@ -449,13 +514,29 @@ class InstalledProjectService
         $keptUnknownFilenames = [];
         $filesToResolve = [];
         $hashesByFilename = [];
+        $hashSources = $this->getHashLookupSourcesInPriorityOrder($server, $type);
+        $requiredAlgorithms = ['sha512', 'sha256'];
+        $computeMurmur2 = false;
+        foreach ($hashSources as $hashSource) {
+            if (!$hashSource->isConfigured()) {
+                continue;
+            }
+            $algorithm = $hashSource->getHashAlgorithm();
+            if ($algorithm === 'murmur2') {
+                $computeMurmur2 = true;
+            }
+            if ($algorithm !== null && !in_array($algorithm, $requiredAlgorithms, true)) {
+                $requiredAlgorithms[] = $algorithm;
+            }
+        }
+
         $reusedHashCount = 0;
 
         foreach ($diskFiles as $key => $diskFile) {
             $existingInstalled = $installedByFilename[$key] ?? null;
             $indexed = $existingInstalled ?? ($unresolvedByFilename[$key] ?? null);
             $reusableHashes = is_array($indexed)
-                ? $this->reusableHashes($indexed, $diskFile['file_signature'])
+                ? $this->reusableHashes($indexed, $diskFile['file_signature'], $requiredAlgorithms)
                 : null;
 
             // A tracked file whose size and mtime still match the signature
@@ -492,31 +573,58 @@ class InstalledProjectService
             }
         }
 
+        $completedProgress = count($scannedInstalled) + count($keptUnresolved);
+        if ($completedProgress > 0) {
+            $reportProgress($completedProgress, $totalDiskFiles);
+        }
+
         $hashResolutionStartedAt = $this->debugTimingEnabled ? microtime(true) : 0.0;
         $hashComputationStartedAt = $hashResolutionStartedAt;
         $hashFailures = [];
+        /** @var array<string, BukkitPluginDescriptor|null> $preextractedDescriptors */
+        $preextractedDescriptors = [];
+        $shouldExtractDescriptors = $type === ProjectType::Plugin && $this->canIdentifyFromArchiveMetadata($server, $type);
 
+        $filesNeedingHash = [];
         foreach ($filesToResolve as $filename => $diskFile) {
-            if (isset($hashesByFilename[$filename])) {
-                continue;
+            if (!isset($hashesByFilename[$filename])) {
+                $filesNeedingHash[] = $filename;
             }
+        }
 
-            try {
-                $hashesByFilename[$filename] = $this->computeDaemonFileHashes(
-                    $fileRepository,
-                    $server,
-                    "{$folder}/{$filename}",
-                );
-            } catch (Exception $exception) {
-                report($exception);
-                $hashFailures[] = $filename;
-            }
+        if ($filesNeedingHash !== []) {
+            $hashedCount = 0;
+            $onFileHashed = static function () use (&$hashedCount, $completedProgress, $totalDiskFiles, $reportProgress): void {
+                $hashedCount++;
+                // Cap pre-persistence progress at total - 1 so the UI stays visibly
+                // active while upstream lookups and metadata commit finish.
+                $displayProgress = min(max(0, $totalDiskFiles - 1), $completedProgress + $hashedCount);
+                $reportProgress($displayProgress, $totalDiskFiles);
+            };
+
+            $this->computeScanHashesBatch(
+                $fileRepository,
+                $server,
+                $folder,
+                $filesNeedingHash,
+                $shouldExtractDescriptors,
+                $computeMurmur2,
+                $hashesByFilename,
+                $preextractedDescriptors,
+                $hashFailures,
+                $onFileHashed,
+                $pulseHeartbeat,
+            );
+        }
+
+        if (!$pulseHeartbeat()) {
+            return InstalledScanResult::failed('scan_ownership_lost');
         }
 
         if ($this->debugTimingEnabled) {
             $this->logModManagerTiming('hash_computation', $hashComputationStartedAt, [
                 'source' => 'shared',
-                'algorithms' => ['murmur2', 'sha512', 'sha256'],
+                'algorithms' => $requiredAlgorithms,
                 'files_count' => count($filesToResolve),
                 'hashed_files_count' => count($hashesByFilename) - $reusedHashCount,
                 'reused_hashes_count' => $reusedHashCount,
@@ -529,9 +637,13 @@ class InstalledProjectService
         $matchedEntries = [];
         $lookupFailures = [];
 
-        foreach ($this->getHashLookupSourcesInPriorityOrder($server, $type) as $hashSource) {
+        foreach ($hashSources as $hashSource) {
             if ($remainingFilenames === []) {
                 break;
+            }
+
+            if (!$pulseHeartbeat()) {
+                return InstalledScanResult::failed('scan_ownership_lost');
             }
 
             if (!$hashSource->isConfigured() || !$hashSource->supportsHashLookup()) {
@@ -562,6 +674,11 @@ class InstalledProjectService
                 $versionsByHash = $hashSource instanceof SourceFetchAuthoritativeInterface
                     ? $hashSource->findVersionsByHashAuthoritatively($hashMap)
                     : $hashSource->findVersionsByHash($hashMap);
+            } catch (PartialSourceFetchException $exception) {
+                report($exception);
+                $lookupFailures[] = $hashSource->getKey()->value;
+                $fallback = $exception->fallback();
+                $versionsByHash = is_array($fallback) ? $fallback : [];
             } catch (Exception $exception) {
                 report($exception);
                 $lookupFailures[] = $hashSource->getKey()->value;
@@ -622,6 +739,28 @@ class InstalledProjectService
                 ]);
             }
 
+            if ($hashSource instanceof ModrinthSource) {
+                $authorIds = [];
+                foreach ($matchedVersions as $versionData) {
+                    $pid = (string) ($versionData['project_id'] ?? '');
+                    $project = $projectsMap[$pid] ?? null;
+                    if (is_string($project['author'] ?? null) && $project['author'] !== '') {
+                        continue;
+                    }
+                    if (is_string($project['team'] ?? null) && $project['team'] !== '') {
+                        continue;
+                    }
+                    if (is_string($versionData['author_id'] ?? null) && $versionData['author_id'] !== '') {
+                        $authorIds[] = $versionData['author_id'];
+                    }
+                }
+                if (count(array_unique($authorIds)) >= 2) {
+                    $hashSource->primeAuthorsByUserIds($authorIds);
+                }
+            }
+
+            $projectsToPrime = [];
+
             foreach ($matchedVersions as $filename => $versionData) {
                 if (!isset($versionData['project_id'], $versionData['id'], $versionData['version_number'])) {
                     continue;
@@ -641,20 +780,44 @@ class InstalledProjectService
                     'file_signature' => $filesToResolve[$filename]['file_signature'],
                     'hashes' => $hashesByFilename[$filename],
                 ];
+
                 $author = $this->resolveMatchAuthor($hashSource, $project, $versionData);
 
                 if ($author !== null) {
                     $entry['author'] = $author;
                 }
 
+                if (is_array($project)) {
+                    $primedProject = $project;
+                    if (($primedProject['author'] ?? null) === null || $primedProject['author'] === '') {
+                        if ($author !== null) {
+                            $primedProject['author'] = $author;
+                        }
+                    }
+                    $projectsToPrime[$projectId] = $primedProject;
+                }
+
                 $matchedEntries[$filename] = $entry;
+            }
+
+            if ($projectsToPrime !== []) {
+                try {
+                    $hashSource->primeProjects($projectsToPrime);
+                } catch (Exception $exception) {
+                    report($exception);
+                }
             }
 
             $remainingFilenames = array_values(array_diff($remainingFilenames, array_keys($matchedEntries)));
         }
 
         if ($type === ProjectType::Plugin && $remainingFilenames !== []) {
+            if (!$pulseHeartbeat()) {
+                return InstalledScanResult::failed('scan_ownership_lost');
+            }
+
             $archiveStartedAt = $this->debugTimingEnabled ? microtime(true) : 0.0;
+            $archiveHadFailure = false;
             try {
                 $archiveMatches = $this->identifyRemainingFromArchiveMetadata(
                     $server,
@@ -665,11 +828,18 @@ class InstalledProjectService
                     $filesToResolve,
                     $hashesByFilename,
                     $installedByFilename,
+                    $preextractedDescriptors,
+                    $archiveHadFailure,
+                    $pulseHeartbeat,
                 );
             } catch (Exception $exception) {
                 report($exception);
-                $lookupFailures[] = ProjectSourceKey::Spigot->value;
+                $archiveHadFailure = true;
                 $archiveMatches = [];
+            }
+
+            if ($archiveHadFailure) {
+                $lookupFailures[] = ProjectSourceKey::Spigot->value;
             }
 
             foreach ($archiveMatches as $filename => $entry) {
@@ -684,6 +854,10 @@ class InstalledProjectService
                     'matches_count' => count($archiveMatches),
                 ]);
             }
+        }
+
+        if (!$pulseHeartbeat(forcePulse: true)) {
+            return InstalledScanResult::failed('scan_ownership_lost');
         }
 
         foreach ($matchedEntries as $entry) {
@@ -756,11 +930,13 @@ class InstalledProjectService
             ]);
         }
 
+        $reportProgress($totalDiskFiles, $totalDiskFiles);
+
         if ($failure !== null) {
-            return InstalledScanResult::failed($failure, $unknownFilenames, count($diskFiles));
+            return InstalledScanResult::failed($failure, $unknownFilenames, $totalDiskFiles);
         }
 
-        return InstalledScanResult::success($unknownFilenames, count($diskFiles));
+        return InstalledScanResult::success($unknownFilenames, $totalDiskFiles);
     }
 
     /**
@@ -773,25 +949,35 @@ class InstalledProjectService
     }
 
     /**
-     * @param array<string, mixed> $entry
-     * @param array{size: int, modified_at: string}|null $signature
-     * @return array{murmur2: string, sha512: string, sha256: string}|null
+     * @param  array<string, mixed>  $entry
+     * @param  array{size: int, modified_at: string}|null  $signature
+     * @param  array<int, string>  $requiredAlgorithms
+     * @return array{murmur2?: string, sha512?: string, sha256?: string}|null
      */
-    protected function reusableHashes(array $entry, ?array $signature): ?array
-    {
+    protected function reusableHashes(
+        array $entry,
+        ?array $signature,
+        array $requiredAlgorithms = ['murmur2', 'sha512', 'sha256'],
+    ): ?array {
         if ($signature === null || ($entry['file_signature'] ?? null) !== $signature || !is_array($entry['hashes'] ?? null)) {
             return null;
+        }
+
+        foreach ($requiredAlgorithms as $algorithm) {
+            $hash = $entry['hashes'][$algorithm] ?? null;
+
+            if (!is_string($hash) || $hash === '') {
+                return null;
+            }
         }
 
         $hashes = [];
         foreach (['murmur2', 'sha512', 'sha256'] as $algorithm) {
             $hash = $entry['hashes'][$algorithm] ?? null;
 
-            if (!is_string($hash) || $hash === '') {
-                return null;
+            if (is_string($hash) && $hash !== '') {
+                $hashes[$algorithm] = $hash;
             }
-
-            $hashes[$algorithm] = $hash;
         }
 
         return $hashes;
@@ -1124,6 +1310,234 @@ class InstalledProjectService
         ));
     }
 
+    protected function canIdentifyFromArchiveMetadata(Server $server, ProjectType $type): bool
+    {
+        if ($type !== ProjectType::Plugin) {
+            return false;
+        }
+
+        $source = $this->sourceRegistry->get(ProjectSourceKey::Spigot);
+
+        return $source instanceof ArchiveMetadataIdentificationInterface
+            && $source->isConfigured()
+            && $source->supportsProjectType($type)
+            && in_array($source, $this->sourceRegistry->availableFor($server, $type), true);
+    }
+
+    /**
+     * Download and hash files needing resolution. For Plugin JARs when archive
+     * metadata identification is enabled, extract plugin.yml / paper-plugin.yml
+     * during the same single download so unmatched JARs are never downloaded a
+     * second time from Wings.
+     *
+     * @param  array<int, string>  $filenames
+     * @param  array<string, array{murmur2?: string, sha512?: string, sha256?: string}>  $hashesByFilename
+     * @param  array<string, BukkitPluginDescriptor|null>  $preextractedDescriptors
+     * @param  array<int, string>  $hashFailures
+     * @param  Closure(): void  $onFileHashed
+     * @param  Closure(bool=): bool  $pulseHeartbeat
+     */
+    protected function computeScanHashesBatch(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $folder,
+        array $filenames,
+        bool $extractPluginDescriptors,
+        bool $computeMurmur2,
+        array &$hashesByFilename,
+        array &$preextractedDescriptors,
+        array &$hashFailures,
+        Closure $onFileHashed,
+        Closure $pulseHeartbeat,
+    ): void {
+        if ($this->canUseParallelWingsDownload($filenames)) {
+            $this->computeScanHashesParallel(
+                $fileRepository,
+                $server,
+                $folder,
+                $filenames,
+                $extractPluginDescriptors,
+                $computeMurmur2,
+                $hashesByFilename,
+                $preextractedDescriptors,
+                $hashFailures,
+                $onFileHashed,
+                $pulseHeartbeat,
+            );
+
+            return;
+        }
+
+        foreach ($filenames as $filename) {
+            if (!$pulseHeartbeat()) {
+                return;
+            }
+
+            $path = "{$folder}/{$filename}";
+            $extractDescriptor = $extractPluginDescriptors && str_ends_with(strtolower($filename), '.jar');
+
+            try {
+                if ($extractDescriptor && !$this->hasCustomHashComputationOverride()) {
+                    [$hashes, $descriptor] = $this->computeDaemonFileHashesAndDescriptor(
+                        $fileRepository,
+                        $server,
+                        $path,
+                        $filename,
+                        $computeMurmur2,
+                    );
+                    $hashesByFilename[$filename] = $hashes;
+                    $preextractedDescriptors[$filename] = $descriptor;
+                } elseif (!$computeMurmur2 && !$this->hasCustomHashComputationOverride()) {
+                    $hashesByFilename[$filename] = $this->computeDaemonFileCryptoHashes(
+                        $fileRepository,
+                        $server,
+                        $path,
+                    );
+                } else {
+                    $hashesByFilename[$filename] = $this->computeDaemonFileHashes(
+                        $fileRepository,
+                        $server,
+                        $path,
+                    );
+                }
+            } catch (Exception $exception) {
+                report($exception);
+                $hashFailures[] = $filename;
+            }
+
+            $onFileHashed();
+        }
+    }
+
+    /** @param array<int, string> $filenames */
+    protected function canUseParallelWingsDownload(array $filenames): bool
+    {
+        return count($filenames) > 1
+            && !$this->hasCustomHashComputationOverride()
+            && !$this->hasCustomStreamOverride();
+    }
+
+    protected function hasCustomHashComputationOverride(): bool
+    {
+        return (new ReflectionMethod($this, 'computeDaemonFileHashes'))->getDeclaringClass()->getName() !== self::class;
+    }
+
+    protected function hasCustomStreamOverride(): bool
+    {
+        return (new ReflectionMethod($this, 'openDaemonFileStream'))->getDeclaringClass()->getName() !== self::class;
+    }
+
+    /**
+     * Download files from Wings in bounded parallel batches straight to local
+     * temp files, then compute all hashes (and Plugin descriptors) locally
+     * before unlinking each temp file.
+     *
+     * @param  array<int, string>  $filenames
+     * @param  array<string, array{murmur2?: string, sha512?: string, sha256?: string}>  $hashesByFilename
+     * @param  array<string, BukkitPluginDescriptor|null>  $preextractedDescriptors
+     * @param  array<int, string>  $hashFailures
+     * @param  Closure(): void  $onFileHashed
+     * @param  Closure(bool=): bool  $pulseHeartbeat
+     */
+    protected function computeScanHashesParallel(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $folder,
+        array $filenames,
+        bool $extractPluginDescriptors,
+        bool $computeMurmur2,
+        array &$hashesByFilename,
+        array &$preextractedDescriptors,
+        array &$hashFailures,
+        Closure $onFileHashed,
+        Closure $pulseHeartbeat,
+    ): void {
+        $repo = $fileRepository->setServer($server);
+        $handler = HttpUtils::chooseHandler();
+
+        foreach (array_chunk($filenames, self::WINGS_DOWNLOAD_CONCURRENCY) as $chunk) {
+            if (!$pulseHeartbeat()) {
+                return;
+            }
+
+            $tempPaths = [];
+            $promises = [];
+
+            foreach ($chunk as $filename) {
+                $tmp = tempnam(sys_get_temp_dir(), 'pmm-scan-');
+                if ($tmp === false) {
+                    $hashFailures[] = $filename;
+                    $onFileHashed();
+
+                    continue;
+                }
+
+                $tempPaths[$filename] = $tmp;
+                if ($this->debugTimingEnabled) {
+                    $this->hashScanWingsGetCount++;
+                }
+
+                try {
+                    $promise = $repo->getHttpClient()
+                        ->setHandler($handler)
+                        ->withOptions(['sink' => $tmp])
+                        ->async()
+                        ->get("/api/servers/{$server->uuid}/files/contents", ['file' => "{$folder}/{$filename}"]);
+                    // Newer Laravel versions defer starting async requests
+                    // until their lazy promises are built or awaited.
+                    $promises[$filename] = $promise instanceof LazyPromise ? $promise->buildPromise() : $promise;
+                } catch (Throwable $exception) {
+                    report($exception);
+                    @unlink($tmp);
+                    unset($tempPaths[$filename]);
+                    $hashFailures[] = $filename;
+                    $onFileHashed();
+                }
+            }
+
+            if ($promises === []) {
+                continue;
+            }
+
+            $settled = PromiseUtils::settle($promises)->wait();
+
+            foreach ($promises as $filename => $_promise) {
+                $tmp = $tempPaths[$filename];
+
+                try {
+                    $outcome = $settled[$filename] ?? null;
+                    if (!is_array($outcome) || ($outcome['state'] ?? null) !== 'fulfilled') {
+                        $reason = is_array($outcome) ? ($outcome['reason'] ?? null) : null;
+                        throw $reason instanceof Throwable
+                            ? $reason
+                            : new Exception("Wings download failed for [{$filename}].");
+                    }
+
+                    $response = $outcome['value'] ?? null;
+                    if ($response instanceof Throwable) {
+                        throw $response;
+                    }
+                    if (!$response instanceof HttpClientResponse || !$response->successful()) {
+                        throw new Exception("Wings did not return a file for [{$filename}].");
+                    }
+
+                    $hashesByFilename[$filename] = $this->computeLocalFileHashes($tmp, $computeMurmur2);
+
+                    if ($extractPluginDescriptors && str_ends_with(strtolower($filename), '.jar')) {
+                        $preextractedDescriptors[$filename] = BukkitPluginDescriptor::fromJar($tmp, $filename);
+                    }
+                } catch (Throwable $exception) {
+                    report($exception);
+                    $hashFailures[] = $filename;
+                } finally {
+                    @unlink($tmp);
+                }
+
+                $onFileHashed();
+            }
+        }
+    }
+
     /**
      * Identify remaining Plugin JARs from plugin.yml / paper-plugin.yml when
      * upstream sources have no hash reverse lookup. Ambiguous matches are
@@ -1133,6 +1547,8 @@ class InstalledProjectService
      * @param  array<string, array<string, mixed>>  $filesToResolve
      * @param  array<string, array{murmur2?: string, sha512?: string, sha256?: string}>  $hashesByFilename
      * @param  array<string, array<string, mixed>>  $installedByFilename
+     * @param  array<string, BukkitPluginDescriptor|null>  $preextractedDescriptors
+     * @param  (Closure(bool=): bool)|null  $pulseHeartbeat
      * @return array<string, array<string, mixed>>
      */
     protected function identifyRemainingFromArchiveMetadata(
@@ -1144,6 +1560,9 @@ class InstalledProjectService
         array $filesToResolve,
         array $hashesByFilename,
         array $installedByFilename,
+        array $preextractedDescriptors = [],
+        bool &$hadFailure = false,
+        ?Closure $pulseHeartbeat = null,
     ): array {
         $source = $this->sourceRegistry->get(ProjectSourceKey::Spigot);
         if (!$source instanceof ArchiveMetadataIdentificationInterface
@@ -1154,9 +1573,16 @@ class InstalledProjectService
         }
 
         $matched = [];
+        /** @var array<string, array{version: array<string, mixed>, descriptor: BukkitPluginDescriptor}> $identified */
+        $identified = [];
+        $identifiedProjectIds = [];
         $examined = 0;
 
         foreach ($remainingFilenames as $filename) {
+            if ($pulseHeartbeat !== null && !$pulseHeartbeat()) {
+                return $matched;
+            }
+
             if (!str_ends_with(strtolower($filename), '.jar')) {
                 continue;
             }
@@ -1185,12 +1611,14 @@ class InstalledProjectService
             }
 
             $examined++;
-            $descriptor = $this->extractBukkitPluginDescriptor(
-                $fileRepository,
-                $server,
-                "{$folder}/{$filename}",
-                $filename,
-            );
+            $descriptor = array_key_exists($filename, $preextractedDescriptors)
+                ? $preextractedDescriptors[$filename]
+                : $this->extractBukkitPluginDescriptor(
+                    $fileRepository,
+                    $server,
+                    "{$folder}/{$filename}",
+                    $filename,
+                );
             if ($descriptor === null) {
                 continue;
             }
@@ -1216,10 +1644,9 @@ class InstalledProjectService
                 );
             } catch (Throwable $exception) {
                 report($exception);
+                $hadFailure = true;
 
-                throw $exception instanceof Exception
-                    ? $exception
-                    : new Exception($exception->getMessage(), 0, $exception);
+                continue;
             }
 
             if (!is_array($versionData) || !isset($versionData['project_id'], $versionData['id'], $versionData['version_number'])) {
@@ -1227,16 +1654,33 @@ class InstalledProjectService
             }
 
             $projectId = (string) $versionData['project_id'];
-            try {
-                $projectsMap = $source instanceof SourceFetchAuthoritativeInterface
-                    ? $source->getProjectsByIdsAuthoritatively([$projectId])
-                    : $source->getProjectsByIds([$projectId]);
-            } catch (Exception $exception) {
-                report($exception);
-                $projectsMap = [];
-            }
+            $identified[$filename] = [
+                'version' => $versionData,
+                'descriptor' => $descriptor,
+            ];
+            $identifiedProjectIds[] = $projectId;
+        }
 
+        if ($identified === []) {
+            return $matched;
+        }
+
+        $uniqueProjectIds = array_values(array_unique($identifiedProjectIds));
+        try {
+            $projectsMap = $source instanceof SourceFetchAuthoritativeInterface
+                ? $source->getProjectsByIdsAuthoritatively($uniqueProjectIds)
+                : $source->getProjectsByIds($uniqueProjectIds);
+        } catch (Exception $exception) {
+            report($exception);
+            $projectsMap = [];
+        }
+
+        foreach ($identified as $filename => $item) {
+            $versionData = $item['version'];
+            $descriptor = $item['descriptor'];
+            $projectId = (string) $versionData['project_id'];
             $project = $projectsMap[$projectId] ?? null;
+
             $entry = [
                 'source' => $source->getKey()->value,
                 'project_id' => $projectId,
@@ -1354,6 +1798,178 @@ class InstalledProjectService
 
         return [
             'murmur2' => (string) $murmur2,
+            'sha512' => hash_final($sha512),
+            'sha256' => hash_final($sha256),
+        ];
+    }
+
+    /**
+     * Downloads a daemon file once and computes only native cryptographic
+     * hashes (SHA-512 and SHA-256) when CurseForge MurmurHash2 is not needed.
+     *
+     * @return array{sha512: string, sha256: string}
+     */
+    protected function computeDaemonFileCryptoHashes(DaemonFileRepository $fileRepository, Server $server, string $path): array
+    {
+        $sha512 = hash_init('sha512');
+        $sha256 = hash_init('sha256');
+        $stream = $this->openDaemonFileStream($fileRepository, $server, $path);
+
+        try {
+            while (!$stream->eof()) {
+                $chunk = $stream->read(262_144);
+                if ($chunk === '') {
+                    continue;
+                }
+                hash_update($sha512, $chunk);
+                hash_update($sha256, $chunk);
+            }
+        } finally {
+            $stream->close();
+        }
+
+        return [
+            'sha512' => hash_final($sha512),
+            'sha256' => hash_final($sha256),
+        ];
+    }
+
+    /**
+     * Downloads a Plugin JAR once, computes required hashes, and extracts its
+     * Bukkit/Paper descriptor before immediately removing the temporary file.
+     *
+     * @return array{0: array{murmur2?: string, sha512: string, sha256: string}, 1: ?BukkitPluginDescriptor}
+     */
+    protected function computeDaemonFileHashesAndDescriptor(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $path,
+        string $filename,
+        bool $computeMurmur2 = true,
+    ): array {
+        $tmp = tempnam(sys_get_temp_dir(), 'pmm-scan-jar-');
+        $jarPath = $tmp !== false ? $tmp.'.jar' : null;
+        if ($tmp !== false) {
+            @unlink($tmp);
+        }
+
+        $jarOut = $jarPath !== null ? fopen($jarPath, 'wb') : false;
+        if ($jarOut === false) {
+            $jarPath = null;
+        }
+
+        $sha512 = hash_init('sha512');
+        $sha256 = hash_init('sha256');
+
+        try {
+            $consumeChunk = static function (string $chunk) use ($sha512, $sha256, &$jarOut): void {
+                hash_update($sha512, $chunk);
+                hash_update($sha256, $chunk);
+                if (is_resource($jarOut)) {
+                    if (fwrite($jarOut, $chunk) !== strlen($chunk)) {
+                        fclose($jarOut);
+                        $jarOut = false;
+                    }
+                }
+            };
+
+            $murmur2 = null;
+            if ($computeMurmur2) {
+                $murmur2 = (string) CurseForgeFingerprint::hashStream(
+                    fn () => $this->openDaemonFileStream($fileRepository, $server, $path),
+                    $consumeChunk,
+                );
+            } else {
+                $stream = $this->openDaemonFileStream($fileRepository, $server, $path);
+                try {
+                    while (!$stream->eof()) {
+                        $chunk = $stream->read(262_144);
+                        if ($chunk === '') {
+                            continue;
+                        }
+                        $consumeChunk($chunk);
+                    }
+                } finally {
+                    $stream->close();
+                }
+            }
+
+            $descriptor = null;
+            if (is_resource($jarOut)) {
+                fclose($jarOut);
+                $jarOut = false;
+                if ($jarPath !== null) {
+                    $descriptor = BukkitPluginDescriptor::fromJar($jarPath, $filename);
+                }
+            }
+
+            $hashes = [
+                'sha512' => hash_final($sha512),
+                'sha256' => hash_final($sha256),
+            ];
+            if ($murmur2 !== null) {
+                $hashes['murmur2'] = $murmur2;
+            }
+
+            return [$hashes, $descriptor];
+        } finally {
+            if (is_resource($jarOut)) {
+                fclose($jarOut);
+            }
+            if ($jarPath !== null) {
+                @unlink($jarPath);
+            }
+        }
+    }
+
+    /**
+     * Computes required hashes from an already-downloaded local file in one pass.
+     *
+     * @return array{murmur2?: string, sha512: string, sha256: string}
+     */
+    protected function computeLocalFileHashes(string $path, bool $computeMurmur2 = true): array
+    {
+        $sha512 = hash_init('sha512');
+        $sha256 = hash_init('sha256');
+
+        if ($computeMurmur2) {
+            $murmur2 = CurseForgeFingerprint::hashFile(
+                $path,
+                static function (string $chunk) use ($sha512, $sha256): void {
+                    hash_update($sha512, $chunk);
+                    hash_update($sha256, $chunk);
+                },
+            );
+
+            return [
+                'murmur2' => (string) $murmur2,
+                'sha512' => hash_final($sha512),
+                'sha256' => hash_final($sha256),
+            ];
+        }
+
+        $handle = fopen($path, 'rb');
+        if ($handle === false) {
+            throw new Exception("Unable to open [{$path}] for hashing.");
+        }
+
+        try {
+            while (!feof($handle)) {
+                $chunk = fread($handle, 262_144);
+                if ($chunk === false) {
+                    throw new Exception("Unable to read [{$path}] for hashing.");
+                }
+                if ($chunk === '') {
+                    continue;
+                }
+                hash_update($sha512, $chunk);
+                hash_update($sha256, $chunk);
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        return [
             'sha512' => hash_final($sha512),
             'sha256' => hash_final($sha256),
         ];

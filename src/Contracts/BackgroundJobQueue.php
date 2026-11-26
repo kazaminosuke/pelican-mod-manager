@@ -23,13 +23,20 @@ interface BackgroundJobQueue
      */
     public function claim(): ?array;
 
-    public function ack(int|string $id): void;
+    /** Delete this claim and report whether a job was actually removed. */
+    public function ack(int|string $id, ?int $expectedAttempts = null): bool;
 
-    public function retry(int|string $id, int $delaySeconds = 30): void;
+    public function retry(int|string $id, int $delaySeconds = 30, ?int $expectedAttempts = null): void;
 
     /**
      * Return a claimed job that asked to wait (for example, for a busy
      * operation lease) without counting that claim as a failed attempt.
      */
-    public function release(int|string $id, int $delaySeconds): void;
+    public function release(int|string $id, int $delaySeconds, ?int $expectedAttempts = null): void;
+
+    /**
+     * Extend the reservation timestamp of a still-running job while verifying
+     * that this worker's claim attempt has not been superseded.
+     */
+    public function heartbeat(int|string $id, int $expectedAttempts): bool;
 }

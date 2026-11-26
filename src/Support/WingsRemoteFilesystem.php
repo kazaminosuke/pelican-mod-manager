@@ -5,6 +5,8 @@ namespace Kazaminosuke\ModManager\Support;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
+use Illuminate\Http\Client\RequestException;
+use Psr\Http\Message\StreamInterface;
 
 /**
  * Thin Wings file operations used by install/update transactions.
@@ -104,11 +106,21 @@ class WingsRemoteFilesystem
         Server $server,
         string $directory,
     ): array {
-        $listing = $fileRepository
-            ->setServer($server)
-            ->getDirectory($directory === '' ? '/' : $directory);
+        try {
+            $listing = $fileRepository
+                ->setServer($server)
+                ->getDirectory($directory === '' ? '/' : $directory);
+        } catch (RequestException $exception) {
+            // A foreground pull creates its parent directory on the first install.
+            if (trim($directory, '/') !== '' && $exception->response->status() === 404
+                && $exception->response->json('error') === 'The requested directory was not found on the server.') {
+                return [];
+            }
 
-        return is_array($listing) ? array_values($listing) : [];
+            throw $exception;
+        }
+
+        return array_values($listing);
     }
 
     /**
@@ -148,14 +160,7 @@ class WingsRemoteFilesystem
     ): string {
         $directory = trim($directory, '/');
         $path = $directory === '' ? $filename : $directory.'/'.$filename;
-        $response = $fileRepository
-            ->setServer($server)
-            ->getHttpClient()
-            ->withOptions(['stream' => true])
-            ->get("/api/servers/{$server->uuid}/files/contents", ['file' => $path]);
-        $response->throw();
-
-        $body = $response->toPsrResponse()->getBody();
+        $body = $this->readStream($fileRepository, $server, $path);
         try {
             $prefix = $body->read(max(1, $bytes));
         } finally {
@@ -163,6 +168,18 @@ class WingsRemoteFilesystem
         }
 
         return is_string($prefix) ? $prefix : '';
+    }
+
+    public function readStream(DaemonFileRepository $fileRepository, Server $server, string $path): StreamInterface
+    {
+        $response = $fileRepository
+            ->setServer($server)
+            ->getHttpClient()
+            ->withOptions(['stream' => true])
+            ->get("/api/servers/{$server->uuid}/files/contents", ['file' => $path]);
+        $response->throw();
+
+        return $response->toPsrResponse()->getBody();
     }
 
     public function put(
@@ -175,6 +192,21 @@ class WingsRemoteFilesystem
         if ($response->failed()) {
             throw new Exception("Failed to write [{$path}].");
         }
+    }
+
+    public function putStream(
+        DaemonFileRepository $fileRepository,
+        Server $server,
+        string $path,
+        StreamInterface $contents,
+    ): void {
+        $fileRepository->setServer($server)
+            ->getHttpClient()
+            ->timeout(self::FOREGROUND_PULL_TIMEOUT_SECONDS)
+            ->withQueryParameters(['file' => $path])
+            ->withBody($contents, 'application/octet-stream')
+            ->post("/api/servers/{$server->uuid}/files/write")
+            ->throw();
     }
 
     public function listedFileSize(array $item): ?int

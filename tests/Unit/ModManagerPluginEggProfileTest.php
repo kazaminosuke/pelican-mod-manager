@@ -3,9 +3,11 @@
 namespace Kazaminosuke\ModManager\Tests\Unit;
 
 use App\Models\Egg;
+use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Session\ArraySessionHandler;
 use Illuminate\Session\Store;
 use Illuminate\Support\Facades\Facade;
 use Kazaminosuke\ModManager\Models\ModManagerEggProfile;
@@ -37,19 +39,16 @@ class ModManagerPluginEggProfileTest extends TestCase
         $this->previousContainer = Container::getInstance();
         $this->previousFacadeApplication = Facade::getFacadeApplication();
 
-        // saveEggProfile() sends a Notification::make()->title(trans(...))
-        // confirmation - stub just enough of the container for trans(),
-        // Notification::send() (which pushes onto the session), and the
-        // Facade root to resolve (matches Support\ProjectSourceRegistryTest's
-        // established translator-binding pattern, extended with a session
-        // stub for the notification itself).
+        // Filament notifications use the session for both the legacy queue
+        // and the newer notification mailbox.
         $translator = Mockery::mock(Translator::class);
         $translator->shouldReceive('get')->andReturnUsing(fn (string $key) => $key);
-        $session = Mockery::mock(Store::class);
-        $session->shouldReceive('push')->with('filament.notifications', Mockery::type('array'))->zeroOrMoreTimes();
+        $session = new Store('test', new ArraySessionHandler(120));
+        $session->start();
         $container = new Container();
         $container->instance('translator', $translator);
         $container->instance('session', $session);
+        $container->instance('config', new Repository(['app' => ['key' => 'mod-manager-test']]));
         Container::setInstance($container);
         Facade::setFacadeApplication($container);
 

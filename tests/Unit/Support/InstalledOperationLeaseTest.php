@@ -126,4 +126,19 @@ class InstalledOperationLeaseTest extends TestCase
 
         self::assertSame(3, $cache->guardCalls);
     }
+
+    public function test_lower_epoch_cannot_own_or_refresh_a_newer_worker_epoch(): void
+    {
+        $leases = new InstalledOperationLease(new Repository(new ArrayStore()));
+        $token = $leases->tryAcquire(7, ProjectType::Mod, InstalledOperationLease::OPERATION_BULK_UPDATE);
+
+        self::assertNotNull($token);
+        self::assertTrue($leases->refresh(7, ProjectType::Mod, $token, epoch: 1));
+        self::assertTrue($leases->owns(7, ProjectType::Mod, $token, 1));
+
+        self::assertTrue($leases->refresh(7, ProjectType::Mod, $token, epoch: 2));
+        self::assertFalse($leases->owns(7, ProjectType::Mod, $token, 1));
+        self::assertFalse($leases->refresh(7, ProjectType::Mod, $token, epoch: 1));
+        self::assertTrue($leases->owns(7, ProjectType::Mod, $token, 2));
+    }
 }

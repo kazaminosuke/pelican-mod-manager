@@ -9,6 +9,34 @@ the complete matching version section and adds the comparison information to the
 
 ### English
 
+## [0.1.7] - 2026-11-27
+
+[Compare with the previous stable release / 前回の安定版との差分](https://github.com/kazaminosuke/pelican-mod-manager/compare/v0.1.6...v0.1.7)
+
+### 日本語
+
+#### 変更
+
+- Mod・Plugin・Datapack・Resource Packのカタログで、一覧とカードを切り替え、表示設定を保存できるようにした。カード下部の作者名・ダウンロード数・日付は、幅が足りる場合は1行、狭い場合は2段で表示する。インストール済み画面にはスキャンの進捗や空状態を表示する。
+- Pluginの配布元にSpigotを追加した。有料・外部配布・非JARと確認できた項目をカタログから除外する。導入時に選んだ版のJARを検証し、旧版を自動取得できない場合は、同じ版の公式ページと手動導入手順を案内する。
+- 配布制限付きのCurseForge単体Modを手動で導入できるようにした。PelicanのFilesでアップロードしたJARを、選択したファイルのハッシュやサイズと照合してから配置する。
+- 対応するModサーバーにModrinth・CurseForgeのModpackを導入できるようにした。サーバー作成時はパックに対応するEggを選べる。FTBとTechnicの導入には対応する専用Eggを使用する。
+- インストール済みファイルのスキャン、カタログの事前取得、一括更新をPelicanのスケジューラで処理するようにした。スキャン待ちで導入や削除がブロックされる問題を修正し、Wingsからの並列取得、ハッシュの再利用、配布元への一括照会でスキャンを高速化した。
+- 配布元が一時的に応答しない場合も、取得済みのカタログやインストール済み情報を表示する。Hangarの並び順と外部配布JARのファイル名、Wingsに対象フォルダーがない場合の初回導入、更新失敗時に旧ファイルを保護する処理を修正した。
+- 配布元とEggの設定を確認する管理者向けコマンド `mod-manager:diagnose` を追加した。
+
+### English
+
+#### Changed
+
+- Added a saved list or card view for Mod, Plugin, Datapack, and Resource Pack catalogs. Card footers show the author, download count, and date on one row when space permits and on two rows at narrower widths. The Installed tab shows scan progress and empty states.
+- Added Spigot as a Plugin source. The catalog excludes confirmed premium, externally hosted, and non-JAR resources. Installation verifies the JAR for the selected version. When an older version cannot be downloaded automatically, Mod Manager links to that version’s official page and provides manual installation instructions.
+- Added manual installation for individual CurseForge mods with distribution restrictions. Upload the JAR through Pelican Files, and Mod Manager checks the selected file’s hashes and size before installing it.
+- Added Modrinth and CurseForge modpack installation on supported mod servers, plus compatible Egg selection during server creation. FTB and Technic installation uses matching dedicated Eggs.
+- Moved installed-file scans, catalog warming, and bulk updates to Pelican’s scheduler. A queued scan no longer blocks installation or removal. Concurrent Wings downloads, hash reuse, and batched provider lookups speed up scans.
+- Kept previously fetched catalog and installed metadata visible during temporary provider failures. Fixed Hangar sorting and external JAR filenames, first installations into missing Wings folders, and rollback behavior when an update fails.
+- Added `mod-manager:diagnose` for administrators to check provider and Egg configuration.
+
 ## [0.2.0-pre.3] - 2026-10-17
 
 ### 日本語

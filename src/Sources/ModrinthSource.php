@@ -255,7 +255,8 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             ->get(self::BASE_URL.'/version/'.$versionId)
             ->json();
 
-        if (!is_array($version) || (string) ($version['project_id'] ?? '') !== $projectId) {
+        if (!is_array($version) || ($version['id'] ?? null) !== $versionId
+            || ($version['project_id'] ?? null) !== $projectId) {
             return null;
         }
 
@@ -435,16 +436,18 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         $projectType = in_array($type, [ProjectType::Plugin, ProjectType::Datapack], true)
             ? ProjectType::Mod->value
             : $type->value;
-        $requestedVersions = $this->versionFilterValues(
-            array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []),
-        );
+        $rawVersions = array_key_exists('versions', $filters) ? $filters['versions'] : ($filters['version'] ?? []);
+        $disableVersionFilter = CatalogFields::disablesVersionFilter($rawVersions);
+        $requestedVersions = $disableVersionFilter ? [] : $this->versionFilterValues($rawVersions);
         $minecraftVersion = MinecraftVersionResolver::resolve($server);
         $selectedLoaders = $this->slugFilterValues($filters['loaders'] ?? []);
         $selectedPlatforms = $this->slugFilterValues($filters['platforms'] ?? []);
 
-        $versionFacetValues = $requestedVersions !== []
-            ? $requestedVersions
-            : ($minecraftVersion !== null ? [$minecraftVersion] : []);
+        $versionFacetValues = $disableVersionFilter
+            ? []
+            : ($requestedVersions !== []
+                ? $requestedVersions
+                : ($minecraftVersion !== null ? [$minecraftVersion] : []));
 
         if ($type === ProjectType::ResourcePack) {
             $facetGroups = [
@@ -655,7 +658,66 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
             'downloads' => (int) ($project['downloads'] ?? 0),
             'date_modified' => $project['date_modified'] ?? $project['updated'] ?? null,
             'project_type' => $project['project_type'] ?? '',
+            'minecraft_versions' => $this->extractSearchMinecraftVersions($project),
+            'loaders' => $this->extractSearchLoaders($project),
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $project
+     * @return list<string>
+     */
+    private function extractSearchMinecraftVersions(array $project): array
+    {
+        $raw = is_array($project['minecraft_versions'] ?? null)
+            ? $project['minecraft_versions']
+            : (is_array($project['versions'] ?? null) ? $project['versions'] : []);
+
+        $versions = [];
+        foreach ($raw as $version) {
+            if (!is_string($version)) {
+                continue;
+            }
+            $trimmed = trim($version);
+            if (preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $trimmed) === 1) {
+                $versions[$trimmed] = $trimmed;
+            }
+        }
+
+        $list = array_values($versions);
+        usort($list, static fn (string $a, string $b): int => version_compare($b, $a));
+
+        return $list;
+    }
+
+    /**
+     * @param array<string, mixed> $project
+     * @return list<string>
+     */
+    private function extractSearchLoaders(array $project): array
+    {
+        if (is_array($project['loaders'] ?? null)) {
+            $raw = $project['loaders'];
+        } else {
+            $raw = array_merge(
+                is_array($project['display_categories'] ?? null) ? $project['display_categories'] : [],
+                is_array($project['categories'] ?? null) ? $project['categories'] : [],
+            );
+        }
+
+        $allowed = ['fabric', 'forge', 'neoforge', 'quilt'];
+        $loaders = [];
+        foreach ($raw as $entry) {
+            if (!is_string($entry)) {
+                continue;
+            }
+            $slug = strtolower(trim($entry));
+            if (in_array($slug, $allowed, true)) {
+                $loaders[$slug] = $slug;
+            }
+        }
+
+        return array_values($loaders);
     }
 
     /** @return array<int, mixed> */
@@ -897,15 +959,59 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
      */
     private function getProjectsByIdsUsingCache(array $projectIds, bool $authoritative, bool $freshRequired = false): array
     {
-        if (empty($projectIds)) {
+        $projectIds = array_values(array_unique(array_filter(
+            array_map(static fn (mixed $id): string => trim((string) $id), $projectIds),
+            static fn (string $id): bool => $id !== '',
+        )));
+
+        if ($projectIds === []) {
             return [];
         }
 
-        $projectIds = array_values(array_unique($projectIds));
-        sort($projectIds);
-        $spec = $this->spec(self::OPERATION_PROJECTS, ['project_ids' => $projectIds]);
+        $projects = [];
+        $pendingIds = $projectIds;
 
-        return $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
+        if (!$freshRequired) {
+            $peeked = $this->cachedProjectMetadata->peekMany($projectIds, $this->projectSpec(...));
+            $pendingIds = [];
+
+            foreach ($projectIds as $projectId) {
+                $probe = $peeked[$projectId] ?? null;
+                if (is_array($probe['data'] ?? null)) {
+                    $projects[$projectId] = $probe['data'];
+
+                    continue;
+                }
+
+                $pendingIds[] = $projectId;
+            }
+        }
+
+        if ($pendingIds === []) {
+            return $projects;
+        }
+
+        sort($pendingIds);
+        $fetchedToPrime = [];
+
+        foreach (array_chunk($pendingIds, 100) as $chunk) {
+            $spec = $this->spec(self::OPERATION_PROJECTS, ['project_ids' => $chunk]);
+            $batch = $this->cachedProjectMetadata->getBatch($spec, $authoritative, $freshRequired);
+
+            foreach ($batch as $id => $project) {
+                if (is_array($project)) {
+                    $key = (string) $id;
+                    $projects[$key] = $project;
+                    $fetchedToPrime[$key] = $project;
+                }
+            }
+        }
+
+        if ($fetchedToPrime !== []) {
+            $this->primeProjects($fetchedToPrime);
+        }
+
+        return $projects;
     }
 
     /** @return array<string, mixed>|null */
@@ -969,6 +1075,84 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         );
 
         return is_string($username) && $username !== '' ? $username : null;
+    }
+
+    /**
+     * Batch-prime Modrinth usernames for multiple author IDs via GET /v2/users
+     * so cold scans avoid N sequential /v2/user/{id} round trips.
+     *
+     * @param  array<int, string>  $userIds
+     */
+    public function primeAuthorsByUserIds(array $userIds): void
+    {
+        $userIds = array_values(array_unique(array_filter(
+            array_map(static fn (mixed $id): string => trim((string) $id), $userIds),
+            static fn (string $id): bool => $id !== '',
+        )));
+
+        if (count($userIds) < 2) {
+            return;
+        }
+
+        $specsByUserId = [];
+        foreach ($userIds as $userId) {
+            $specsByUserId[$userId] = $this->spec(self::OPERATION_USER, ['user_id' => $userId]);
+        }
+
+        $peeked = $this->sourceCache->peekMany($specsByUserId);
+        $missingIds = [];
+        foreach ($specsByUserId as $userId => $_spec) {
+            $probe = $peeked[$userId] ?? null;
+            if (!is_array($probe) || (!$probe['hit'] && !$probe['retry_delayed'])) {
+                $missingIds[] = $userId;
+            }
+        }
+
+        if (count($missingIds) < 2) {
+            return;
+        }
+
+        $timeoutSeconds = CacheProfile::Identity->backgroundTimeoutSeconds();
+        $toPrime = [];
+
+        foreach (array_chunk($missingIds, 50) as $chunk) {
+            try {
+                $users = $this->http($timeoutSeconds)
+                    ->throw()
+                    ->get(self::BASE_URL.'/users', [
+                        'ids' => json_encode($chunk, JSON_THROW_ON_ERROR),
+                    ])
+                    ->json();
+            } catch (Throwable $exception) {
+                report($exception);
+
+                continue;
+            }
+
+            if (!is_array($users)) {
+                continue;
+            }
+
+            foreach ($users as $user) {
+                if (!is_array($user)) {
+                    continue;
+                }
+
+                $id = is_string($user['id'] ?? null) ? $user['id'] : '';
+                $username = is_string($user['username'] ?? null) ? $user['username'] : '';
+
+                if ($id !== '' && $username !== '' && isset($specsByUserId[$id])) {
+                    $toPrime[] = [
+                        'spec' => $specsByUserId[$id],
+                        'data' => $username,
+                    ];
+                }
+            }
+        }
+
+        if ($toPrime !== []) {
+            $this->sourceCache->primeMany($toPrime, CacheProfile::Identity);
+        }
     }
 
     protected function fetchUsernameByUserId(string $userId): ?string
@@ -1131,6 +1315,12 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
         if (!is_array($project)) {
             throw new Exception('Invalid Modrinth project response.');
         }
+
+        $project['project_id'] = (string) ($project['project_id'] ?? $project['id'] ?? $projectId);
+        if (!array_key_exists('date_modified', $project)) {
+            $project['date_modified'] = $project['updated'] ?? null;
+        }
+        $project['downloads'] = (int) ($project['downloads'] ?? 0);
 
         return $project;
     }
@@ -1371,7 +1561,7 @@ class ModrinthSource implements AuthoritativeBatchProjectSourceInterface, BatchL
 
         return UpstreamHttp::json($headers)
             ->timeout($timeoutSeconds)
-            ->connectTimeout(min(1.0, $timeoutSeconds));
+            ->connectTimeout(min(3.0, $timeoutSeconds));
     }
 
     protected function getModManagerTimingElapsedMs(?float $timestamp = null): ?int
