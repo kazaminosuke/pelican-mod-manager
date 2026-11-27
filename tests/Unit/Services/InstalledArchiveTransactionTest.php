@@ -10,16 +10,17 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Exceptions\CurseForgeManualFileException;
 use Kazaminosuke\ModManager\Services\CurseForgeManualFiles;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\InstalledProjectService;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadResult;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
 use Kazaminosuke\ModManager\Support\InstalledMetadataWriteSession;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
-use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Mockery;
 use PHPUnit\Framework\TestCase;
@@ -92,6 +93,20 @@ class InstalledArchiveTransactionTest extends TestCase
             self::assertStringContainsString('does not match the selected file', $exception->getMessage());
         }
         self::assertSame([], $wings->events);
+
+        $wings->manualUploads[$manual->stagingPath()] = str_repeat('x', strlen($bytes));
+        try {
+            $service->installOrUpdate($this->server(), Mockery::mock(DaemonFileRepository::class), ProjectType::Mod, $record,
+                $version, primaryFile: $primary, manualFile: $manual);
+            self::fail('An upload with a different hash cannot be installed.');
+        } catch (CurseForgeManualFileException $exception) {
+            self::assertSame('hash_mismatch', $exception->reason);
+        }
+        self::assertSame(['list'], $wings->events);
+        self::assertFalse($lease->isHeld(7, ProjectType::Mod));
+
+        $wings->events = [];
+        $wings->manualUploads[$manual->stagingPath()] = $bytes;
         $filename = $service->installOrUpdate($this->server(), Mockery::mock(DaemonFileRepository::class), ProjectType::Mod, $record,
             $version, primaryFile: $primary, manualFile: $manual);
 

@@ -482,6 +482,24 @@ final class ModpackSearchTest extends TestCase
         self::assertSame([], $technicPage['hits'][0]['loaders']);
     }
 
+    public function test_curseforge_uses_the_official_endpoint_for_a_missing_archive_url(): void
+    {
+        Http::fake([
+            'api.curseforge.com/v1/mods/10/files/9' => Http::response(['data' => [
+                'id' => 9,
+                'fileName' => 'server.zip',
+                'isServerPack' => true,
+            ]]),
+            'api.curseforge.com/v1/mods/10/files/9/download-url' => Http::sequence()
+                ->push(['data' => 'https://edge.forgecdn.net/server.zip'])
+                ->push([], 403),
+        ]);
+        $source = new CurseForgeSource($this->cache(new CapturingExecutor()));
+
+        self::assertSame('https://edge.forgecdn.net/server.zip', $source->modpackDownloadById('10', '9')['url']);
+        self::assertNull($source->modpackDownloadById('10', '9'));
+    }
+
     private function cache(SourceFetchExecutorInterface $executor): SourceCache
     {
         $cache = new LaravelCacheRepository(new ArrayStore());

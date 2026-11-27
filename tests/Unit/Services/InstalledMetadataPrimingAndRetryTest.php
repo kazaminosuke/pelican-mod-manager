@@ -343,7 +343,7 @@ class InstalledMetadataPrimingAndRetryTest extends TestCase
         self::assertArrayNotHasKey('retry_delayed', $recovered[0]);
     }
 
-    public function test_warm_project_metadata_matches_slug_and_case_without_negative_caching(): void
+    public function test_warm_project_metadata_folds_slug_case_but_requires_exact_modrinth_ids(): void
     {
         [$container, $cache, $operations, $sourceCache] = $this->bootEnvironment();
         $modrinth = new ModrinthSource($sourceCache);
@@ -367,13 +367,15 @@ class InstalledMetadataPrimingAndRetryTest extends TestCase
             return Http::response([], 404);
         });
 
-        (new WarmProjectMetadata('modrinth', ['viaversion', 'p1ozgk5p']))->handle($registry, $cache);
+        $projectIds = ['ViaVersion', 'P1OZGk5p', 'p1ozgk5p'];
+        (new WarmProjectMetadata('modrinth', $projectIds))->handle($registry, $cache);
 
-        $peeked = $modrinth->peekProjects(['viaversion', 'p1ozgk5p']);
-        self::assertIsArray($peeked['viaversion']['data']);
-        self::assertSame('Slug matched project', $peeked['viaversion']['data']['description']);
-        self::assertIsArray($peeked['p1ozgk5p']['data']);
-        self::assertSame('ViaVersion', $peeked['p1ozgk5p']['data']['title']);
+        $peeked = $modrinth->peekProjects($projectIds);
+        self::assertIsArray($peeked['ViaVersion']['data']);
+        self::assertSame('Slug matched project', $peeked['ViaVersion']['data']['description']);
+        self::assertSame('ViaVersion', $peeked['P1OZGk5p']['data']['title']);
+        self::assertNull($peeked['p1ozgk5p']['data']);
+        self::assertFalse($peeked['p1ozgk5p']['pending']);
     }
 
     public function test_modrinth_single_project_request_exposes_normalized_display_and_raw_fields(): void

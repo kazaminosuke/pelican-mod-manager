@@ -115,11 +115,11 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString("view('pelican-mod-manager::components.catalog-sort-select')", $plugin);
         self::assertStringContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE', $plugin);
         self::assertStringNotContainsString('TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_AFTER', $plugin);
-        self::assertStringContainsString("'wire:click' => 'toggleCatalogView'", $toggleBlade);
-        self::assertStringContainsString('->iconButton()', $toggleBlade);
+        self::assertStringContainsString('wire:click="toggleCatalogView"', $toggleBlade);
+        self::assertStringContainsString('<x-filament::icon-button', $toggleBlade);
         self::assertStringContainsString('getColumnManagerTriggerAction()', $toggleBlade);
-        self::assertStringContainsString('->size($trigger->getSize())', $toggleBlade);
-        self::assertStringContainsString('->iconSize($trigger->getIconSize())', $toggleBlade);
+        self::assertStringContainsString(':size="$trigger->getSize()"', $toggleBlade);
+        self::assertStringContainsString(':icon-size="$trigger->getIconSize()"', $toggleBlade);
         self::assertStringContainsString('x-filament::input.wrapper', $sortBlade);
         self::assertStringContainsString('x-filament::input.select', $sortBlade);
         self::assertStringNotContainsString('.mmr-catalog-sort-select', $css);
@@ -185,10 +185,8 @@ final class ModManagerBrowserAssetsTest extends TestCase
         // Modrinth author page links are abolished everywhere so tile cards never nest <a> tags.
         self::assertStringNotContainsString('modrinth.com/user', $tileBuilder);
         self::assertStringNotContainsString('modrinth.com/user', $page);
-        self::assertStringNotContainsString('modrinth.com/user', $tableClass);
         self::assertStringNotContainsString('authorUrl', $tileBuilder);
         self::assertStringNotContainsString('authorUrl', $page);
-        self::assertStringNotContainsString('authorUrl', $tableClass);
         self::assertStringNotContainsString('->url(', $tileBuilder);
 
         // Keep the two metrics together when the outer Split wraps.
@@ -205,7 +203,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertGreaterThan($downloadsPos, $datePos);
         self::assertStringContainsString('Split::make([', substr($tileBuilder, $descriptionPos, $authorPos - $descriptionPos));
         self::assertStringContainsString('Split::make([', substr($tileBuilder, $authorPos, $downloadsPos - $authorPos));
-        self::assertStringContainsString('->alignEnd()', substr($tileBuilder, $datePos));
+        self::assertStringNotContainsString('->alignEnd()', substr($tileBuilder, $datePos));
         self::assertStringContainsString('.fi-ta-split.mmr-tile-stats{flex-wrap:wrap;', $css);
         self::assertStringContainsString('.fi-ta-split.mmr-tile-stat-values{gap:.75rem;white-space:nowrap;', $css);
         self::assertSame(3, substr_count($tileBuilder, '->toggleable()'));

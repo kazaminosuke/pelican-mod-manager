@@ -495,6 +495,7 @@ final class ModpackArchive
         if (strlen($json) > self::MAX_MANIFEST_BYTES) {
             throw new ModpackException("Modpack manifest [$name] exceeds the size limit.");
         }
+
         try {
             $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {

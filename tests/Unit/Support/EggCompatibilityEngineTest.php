@@ -338,6 +338,10 @@ final class EggCompatibilityEngineTest extends TestCase
         self::assertTrue(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_21', '1.16.5', 'forge'));
         self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_16', '1.16.5', 'forge'));
         self::assertFalse(JavaRuntimeImage::isTooNew('ghcr.io/pelican-eggs/yolks:java_21', '1.20.1', 'forge'));
+        self::assertNull(JavaRuntimeImage::fromEggImages(['ghcr.io/example/java_17'], '1.12.2', loader: 'forge'));
+        self::assertSame('ghcr.io/example/java_16', JavaRuntimeImage::fromEggImages(
+            ['ghcr.io/example/java_21', 'ghcr.io/example/java_16'], '1.16.5', loader: 'forge',
+        ));
     }
 
     public function test_technic_bindings_read_the_version_token_from_the_server_archive_url(): void

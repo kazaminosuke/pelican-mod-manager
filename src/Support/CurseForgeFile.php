@@ -1,9 +1,11 @@
 <?php
 
-namespace Kazaminosuke\ModManager\Support\Modpacks;
+namespace Kazaminosuke\ModManager\Support;
 
 final readonly class CurseForgeFile
 {
+    public const STAGING_DIRECTORY = '.mod-manager-curseforge';
+
     /** @param array<string, string> $hashes */
     public function __construct(
         public int $projectId,
@@ -27,7 +29,7 @@ final readonly class CurseForgeFile
 
     public function stagingPath(): string
     {
-        return ".mod-manager-curseforge/{$this->projectId}-{$this->fileId}.jar";
+        return self::STAGING_DIRECTORY."/{$this->projectId}-{$this->fileId}.jar";
     }
 
     /** @return array<string, mixed> */

@@ -102,9 +102,10 @@ class ScanPerformanceAndResilienceTest extends TestCase
         $hashOk = str_repeat('a', 64);
         $hashMiss = str_repeat('b', 64);
         $hashFail = str_repeat('c', 64);
+        $hashMalformed = str_repeat('d', 64);
         $projectEndpointHits = 0;
 
-        Http::fake(static function (HttpClientRequest $request) use ($hashOk, $hashMiss, $hashFail, &$projectEndpointHits) {
+        Http::fake(static function (HttpClientRequest $request) use ($hashOk, $hashMiss, $hashFail, $hashMalformed, &$projectEndpointHits) {
             $url = $request->url();
 
             if (str_contains($url, '/versions/hash/'.$hashOk)) {
@@ -146,6 +147,14 @@ class ScanPerformanceAndResilienceTest extends TestCase
                 return Http::response(['message' => 'upstream error'], 500);
             }
 
+            if (str_contains($url, '/versions/hash/'.$hashMalformed)) {
+                return Http::response(['id' => 43]);
+            }
+
+            if (str_contains($url, '/projects/43/versions')) {
+                return Http::response(['result' => ['message' => 'invalid versions payload']]);
+            }
+
             if (preg_match('~/projects/[^/]+$~', $url) === 1) {
                 $projectEndpointHits++;
             }
@@ -159,6 +168,7 @@ class ScanPerformanceAndResilienceTest extends TestCase
                 'Geyser.jar' => $hashOk,
                 'Unknown.jar' => $hashMiss,
                 'Broken.jar' => $hashFail,
+                'Malformed.jar' => $hashMalformed,
             ]);
         } catch (PartialSourceFetchException $exception) {
             $caught = $exception;
@@ -170,6 +180,17 @@ class ScanPerformanceAndResilienceTest extends TestCase
         self::assertArrayHasKey($hashOk, $partial);
         self::assertSame('42', $partial[$hashOk]['project_id']);
         self::assertArrayNotHasKey($hashMiss, $partial);
+        self::assertArrayNotHasKey($hashMalformed, $partial);
+
+        // The malformed versions response should cool down, even if the
+        // first failure reported by the batch was for another hash.
+        try {
+            $hangar->findVersionsByHashAuthoritatively(['Malformed.jar' => $hashMalformed]);
+            self::fail('An invalid versions response must not be treated as a definitive miss.');
+        } catch (\Exception $exception) {
+            self::assertStringContainsString('temporarily unavailable', $exception->getMessage());
+        }
+        Http::assertSentCount(6);
 
         // Project metadata from the hash match was primed immediately into the project cache.
         $projects = $hangar->getProjectsByIdsAuthoritatively(['42']);

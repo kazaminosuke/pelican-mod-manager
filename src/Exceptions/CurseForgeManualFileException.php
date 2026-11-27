@@ -3,7 +3,7 @@
 namespace Kazaminosuke\ModManager\Exceptions;
 
 use Exception;
-use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 
 final class CurseForgeManualFileException extends Exception
 {

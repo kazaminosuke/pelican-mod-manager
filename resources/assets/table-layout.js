@@ -90,8 +90,7 @@
             let bottom;
 
             if (modalWindow) {
-                // Inside a Filament modal (such as the existing-server Modpack
-                // modal), keep the table inside the viewport with comfortable
+                // Inside a Filament modal, keep the table inside the viewport with
                 // breathing room for the modal footer without touching the
                 // background page's own table measurements.
                 top = Math.max(Math.round(rect.top), 0);
@@ -358,9 +357,7 @@
                     scheduleRefresh(context, 'morphed');
                 }
 
-                // A toggle (such as enabling the Modpack wizard step) or an
-                // action modal can mount a new scroll container after initial
-                // page load. Discover any newly attached wrapper safely.
+                // Discover scroll containers attached by a later Livewire render.
                 if (component?.el?.querySelector(WRAPPER_SELECTOR)) {
                     discoverContexts();
                 }

@@ -12,7 +12,6 @@ use Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\UpstreamHttp;
-use Throwable;
 
 /**
  * Public FTB catalog and fixed-release manifests used by the managed installer.

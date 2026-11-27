@@ -106,13 +106,13 @@ final class JavaRuntimeImage
      */
     public static function fromEggImages(array $dockerImages, ?string $minecraftVersion, ?int $minimumJava = null, ?string $loader = null): ?string
     {
-        $label = self::preferredLabel($minecraftVersion, $minimumJava);
         $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
         $maximum = self::maximumJava($minecraftVersion, $loader);
-        if ($label === null || ($maximum !== null && $required > $maximum)) {
+        if ($required === 0 || ($maximum !== null && $required > $maximum)) {
             return null;
         }
 
+        $label = 'Java '.$required;
         foreach ($dockerImages as $name => $image) {
             if (!is_string($image) || $image === '') {
                 continue;
@@ -123,7 +123,6 @@ final class JavaRuntimeImage
             }
         }
 
-        $version = (int) substr($label, strlen('Java '));
         $compatible = [];
         foreach ($dockerImages as $image) {
             if (!is_string($image) || $image === '') {
@@ -133,7 +132,7 @@ final class JavaRuntimeImage
             if ($actual === null) {
                 continue;
             }
-            if ($actual === $version) {
+            if ($actual === $required) {
                 return $image;
             }
             if ($actual >= $required && ($maximum === null || $actual <= $maximum)) {

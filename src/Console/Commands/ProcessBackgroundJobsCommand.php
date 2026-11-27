@@ -66,8 +66,7 @@ final class ProcessBackgroundJobsCommand extends Command
                     // sleeping inside this shared scheduler process.
                     $queue->release($job['id'], $releaseAfter, $attempts);
                 } else {
-                    $queue->ack($job['id'], $attempts);
-                    $finished = true;
+                    $finished = $queue->ack($job['id'], $attempts);
                 }
             } catch (Throwable $exception) {
                 try {
@@ -81,8 +80,7 @@ final class ProcessBackgroundJobsCommand extends Command
                 if ($attempts < self::MAX_ATTEMPTS) {
                     $queue->retry($job['id'], expectedAttempts: $attempts);
                 } else {
-                    $queue->ack($job['id'], $attempts);
-                    $finished = true;
+                    $finished = $queue->ack($job['id'], $attempts);
                 }
             } finally {
                 if ($finished) {

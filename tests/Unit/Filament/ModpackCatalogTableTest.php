@@ -170,7 +170,7 @@ final class ModpackCatalogTableTest extends TestCase
         self::assertStringContainsString('fi-ta-split', $tileHtml);
         self::assertStringContainsString('fi-ta-stack', $tileHtml);
         self::assertStringContainsString('mmr-tile-stat-values', $tileHtml);
-        self::assertStringContainsString('fi-ta-col fi-align-end', $tileHtml);
+        self::assertStringNotContainsString('fi-ta-col fi-align-end', $tileHtml);
         self::assertStringContainsString('data-mmr-view-toggle', $tileHtml);
         self::assertStringContainsString('fi-ta-col-manager', $tileHtml);
         self::assertStringContainsString('Fabulously Optimized', $tileHtml);

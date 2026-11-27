@@ -7,8 +7,8 @@ use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\InstalledOperationLease;
-use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
 
 /**

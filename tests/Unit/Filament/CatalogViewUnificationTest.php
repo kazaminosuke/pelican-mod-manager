@@ -12,6 +12,7 @@ use DOMElement;
 use DOMXPath;
 use Filament\Facades\Filament;
 use Filament\Support\Facades\FilamentView;
+use Filament\Tables\Table;
 use Filament\Tables\View\TablesRenderHook;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Carbon;
@@ -74,13 +75,13 @@ final class CatalogViewUnificationTest extends TestCase
 
         FilamentView::registerRenderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
-            static fn () => View::file($root.'/resources/views/components/modpack-provider-select.blade.php'),
-            [ModpackCatalogTable::class],
+            static fn () => View::file($root.'/resources/views/components/catalog-sort-select.blade.php'),
+            [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class],
         );
         FilamentView::registerRenderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
-            static fn () => View::file($root.'/resources/views/components/catalog-sort-select.blade.php'),
-            [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class],
+            static fn () => View::file($root.'/resources/views/components/catalog-view-toggle.blade.php', ['searchFallback' => true]),
+            [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class, ModpackCatalogTable::class],
         );
         FilamentView::registerRenderHook(
             TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
@@ -137,33 +138,9 @@ final class CatalogViewUnificationTest extends TestCase
 
     public function test_clean_session_and_cookie_default_to_list_view_across_all_catalogs(): void
     {
-        $this->fakeModrinthAndModpackCatalogs();
+        $this->fakeCatalogSources();
         $this->bindStubDaemonFileRepository();
 
-        // Clean ModpackCatalogTable (MODE_CREATE & MODE_SERVER).
-        Filament::setCurrentPanel(Filament::getPanel('admin'));
-        foreach ([ModpackCatalogTable::MODE_CREATE, ModpackCatalogTable::MODE_SERVER] as $mode) {
-            session()->forget(CatalogTileColumns::SESSION_KEY);
-            request()->cookies->remove(CatalogTileColumns::COOKIE_KEY);
-
-            $component = Livewire::test(ModpackCatalogTable::class, [
-                'mode' => $mode,
-                'provider' => ModpackProvider::Modrinth->value,
-                'query' => 'optimized',
-                'serverId' => $mode === ModpackCatalogTable::MODE_SERVER ? 10 : null,
-                'targetStatePath' => 'data.mm_project',
-            ]);
-
-            self::assertSame(CatalogTileColumns::VIEW_LIST, $component->get('catalogView'));
-            $instance = $component->instance();
-            assert($instance instanceof ModpackCatalogTable);
-            self::assertFalse($instance->getTable()->hasColumnsLayout());
-            $html = $component->html();
-            self::assertStringContainsString('fi-ta-table', $html);
-            self::assertStringNotContainsString('fi-ta-content-grid', $html);
-        }
-
-        // Clean ModManagerPage (Mod, Plugin, Datapack, ResourcePack).
         $pageCases = [
             [ModManagerPage::class, ProjectType::Mod],
             [ModManagerPage::class, ProjectType::Plugin],
@@ -186,30 +163,30 @@ final class CatalogViewUnificationTest extends TestCase
             self::assertStringNotContainsString('fi-ta-content-grid', $html);
         }
 
-        // Saved cookie ('panel') is respected on mount across both components; invalid cookie falls back to 'list'.
-        session()->forget(CatalogTileColumns::SESSION_KEY);
-        Filament::setCurrentPanel(Filament::getPanel('admin'));
-        $panelCookieModpack = Livewire::withCookies([CatalogTileColumns::COOKIE_KEY => CatalogTileColumns::VIEW_PANEL])
-            ->test(ModpackCatalogTable::class, [
-                'provider' => ModpackProvider::Modrinth->value,
-                'query' => 'optimized',
-                'targetStatePath' => 'data.mm_project',
-            ]);
-        self::assertSame(CatalogTileColumns::VIEW_PANEL, $panelCookieModpack->get('catalogView'));
-
-        $invalidCookieModpack = Livewire::withCookies([CatalogTileColumns::COOKIE_KEY => 'bogus'])
-            ->test(ModpackCatalogTable::class, [
-                'provider' => ModpackProvider::Modrinth->value,
-                'query' => 'optimized',
-                'targetStatePath' => 'data.mm_project',
-            ]);
-        self::assertSame(CatalogTileColumns::VIEW_LIST, $invalidCookieModpack->get('catalogView'));
-
         $this->configureServerPanelFor(ProjectType::Mod);
         $panelCookiePage = Livewire::withCookies([CatalogTileColumns::COOKIE_KEY => CatalogTileColumns::VIEW_PANEL])
             ->test(ModManagerPage::class)
             ->call('loadTable');
         self::assertSame(CatalogTileColumns::VIEW_PANEL, $panelCookiePage->get('catalogView'));
+    }
+
+    public function test_legacy_view_is_restored_only_until_a_server_preference_exists(): void
+    {
+        $this->fakeCatalogSources();
+        $this->bindStubDaemonFileRepository();
+        $this->configureServerPanelFor(ProjectType::Mod);
+        session()->forget(CatalogTileColumns::SESSION_KEY);
+        request()->cookies->remove(CatalogTileColumns::COOKIE_KEY);
+
+        Livewire::test(ModManagerPage::class)
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_LIST)
+            ->assertSeeHtml('restoreLegacyCatalogView()')
+            ->call('restoreLegacyCatalogView')
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_PANEL)
+            ->assertDontSeeHtml('restoreLegacyCatalogView()')
+            ->call('toggleCatalogView')
+            ->call('restoreLegacyCatalogView')
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_LIST);
     }
 
     /** @return array<string, array{class-string<ModManagerPage>, ProjectType, string}> */
@@ -230,7 +207,7 @@ final class CatalogViewUnificationTest extends TestCase
         ProjectType $type,
         string $expectedProjectUrl,
     ): void {
-        $this->fakeModrinthAndModpackCatalogs();
+        $this->fakeCatalogSources();
         $this->bindStubDaemonFileRepository();
         $this->configureServerPanelFor($type);
 
@@ -300,130 +277,187 @@ final class CatalogViewUnificationTest extends TestCase
             $xpath = $this->xpathFor($tileHtml);
             self::assertSame(
                 1,
+                $xpath->query('//button[@data-mmr-view-toggle and @*[name()="wire:click"]="toggleCatalogView"]')?->length,
+                "Provider {$tab} should render a working switch back to list even without filters",
+            );
+            self::assertSame(
+                1,
                 $xpath->query('//a[contains(concat(" ", normalize-space(@class), " "), " fi-ta-record-content ")]')?->length,
                 "Provider {$tab} should render exactly one card anchor",
             );
         }
     }
 
-    public function test_modpack_catalog_tiles_omit_author_links_and_preserve_project_links_and_toolbar_toggle_across_modes_and_providers(): void
+    public function test_catalog_toggle_remains_available_when_filament_skips_the_trigger_group(): void
     {
-        $this->fakeModrinthAndModpackCatalogs();
-        Filament::setCurrentPanel(Filament::getPanel('admin'));
-        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+        $this->fakeAllModManagerSources();
+        $this->bindStubDaemonFileRepository();
+        $this->configureServerPanelFor(ProjectType::Plugin);
 
-        $cases = [
-            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Modrinth->value, 'optimized', 'https://modrinth.com/modpack/fabulously-optimized', 2],
-            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::Modrinth->value, 'optimized', 'https://modrinth.com/modpack/fabulously-optimized', 2],
-            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::CurseForge->value, 'All the Mods', 'https://www.curseforge.com/minecraft/modpacks/all-the-mods-10', 1],
-            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::CurseForge->value, 'All the Mods', 'https://www.curseforge.com/minecraft/modpacks/all-the-mods-10', 1],
-            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Ftb->value, 'Direwolf', 'https://www.feed-the-beast.com/modpacks/126-ftb-direwolf20', 1],
-            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::Ftb->value, 'Direwolf', 'https://www.feed-the-beast.com/modpacks/126-ftb-direwolf20', 1],
-            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Technic->value, 'Tekkit', 'https://www.technicpack.net/modpack/tekkit-2', 1],
-            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Atlauncher->value, 'SevTech', 'https://atlauncher.com/pack/SevTechAges', 1],
-        ];
-
-        foreach ($cases as [$mode, $provider, $query, $expectedUrl, $expectedCards]) {
-            $component = Livewire::test(ModpackCatalogTable::class, [
-                'mode' => $mode,
-                'provider' => $provider,
-                'query' => $query,
-                'serverId' => $mode === ModpackCatalogTable::MODE_SERVER ? 10 : null,
-                'targetStatePath' => 'data.mm_project',
-            ]);
-
-            $tileHtml = $component->html();
-            self::assertStringContainsString('fi-ta-content-grid', $tileHtml, "{$mode}/{$provider} should render tile grid");
-            self::assertStringContainsString('data-mmr-view-toggle', $tileHtml, "{$mode}/{$provider} must keep toolbar view-toggle visible even without filters");
-            self::assertStringContainsString('href="'.$expectedUrl.'"', $tileHtml, "{$mode}/{$provider} missing external recordUrl");
-            self::assertStringNotContainsString('modrinth.com/user/', $tileHtml);
-            $this->assertNoNestedAnchors($tileHtml);
-
-            $xpath = $this->xpathFor($tileHtml);
-            self::assertSame(
-                $expectedCards,
-                $xpath->query('//a[contains(concat(" ", normalize-space(@class), " "), " fi-ta-record-content ")]')?->length,
-                "{$mode}/{$provider} card anchor count mismatch",
-            );
-        }
+        Table::configureUsing(
+            static fn (Table $table): Table => $table->columnManager(false),
+            function (): void {
+                $page = Livewire::test(ModManagerPage::class)->set('activeTab', 'spigot')->call('loadTable');
+                foreach ([CatalogTileColumns::VIEW_LIST, CatalogTileColumns::VIEW_PANEL] as $view) {
+                    $page->assertSet('catalogView', $view);
+                    $instance = $page->instance();
+                    assert($instance instanceof ModManagerPage);
+                    self::assertFalse($instance->getTable()->hasColumnManager());
+                    self::assertFalse($instance->getTable()->isFilterable());
+                    self::assertSame(1, $this->xpathFor($page->html())->query('//button[@data-mmr-view-toggle]')?->length);
+                    $page->call('toggleCatalogView');
+                }
+            },
+        );
     }
 
-    public function test_tile_bottom_metadata_uses_filament_stack_with_author_above_downloads_and_date_split(): void
+    public function test_mod_manager_page_mounted_in_panel_view_and_tab_switches_preserve_columns_without_session_poisoning(): void
     {
-        $longAuthor = 'SuperLongUnbreakableModpackCreatorHandle_2026_Edition';
+        $this->fakeCatalogSources();
+        $this->bindStubDaemonFileRepository(includeInstalledMetadata: true);
+        $this->configureServerPanelFor(ProjectType::Mod);
+
+        // (a) Mount directly in 'panel' view -> toggle to 'list' recovers all toggleable columns.
+        session()->flush();
+        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+
+        $panelPage = Livewire::test(ModManagerPage::class)->call('loadTable');
+        self::assertSame(CatalogTileColumns::VIEW_PANEL, $panelPage->get('catalogView'));
+        self::assertSame([], $panelPage->get('tableColumns'));
+        self::assertStringContainsString('fi-ta-content-grid', $panelPage->html());
+
+        $panelPage->call('toggleCatalogView');
+        self::assertSame(CatalogTileColumns::VIEW_LIST, $panelPage->get('catalogView'));
+        $panelPageInstance = $panelPage->instance();
+        assert($panelPageInstance instanceof ModManagerPage);
+        self::assertSame(['icon_url', 'title', 'author', 'downloads', 'date_modified'], array_keys($panelPageInstance->getTable()->getVisibleColumns()));
+        $recoveredHtml = $panelPage->html();
+        self::assertStringContainsString('data-mmr-swr-cell="author"', $recoveredHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="downloads"', $recoveredHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="date_modified"', $recoveredHtml);
+        self::assertStringContainsString('ATMTeam', $recoveredHtml);
+
+        // (b) Mount directly in 'panel' view -> switch Catalog -> Installed -> Catalog -> toggle 'list'.
+        session()->flush();
+        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+
+        $tabSwitchPage = Livewire::test(ModManagerPage::class)->call('loadTable');
+        self::assertStringContainsString('fi-ta-content-grid', $tabSwitchPage->html());
+
+        $tabSwitchPage->set('activeTab', 'installed');
+        $installedInstance = $tabSwitchPage->instance();
+        assert($installedInstance instanceof ModManagerPage);
+        self::assertFalse($installedInstance->getTable()->hasColumnsLayout());
+        self::assertSame(['icon_url', 'title', 'source', 'author', 'downloads', 'date_modified'], array_keys($installedInstance->getTable()->getVisibleColumns()));
+        self::assertNotSame([], session()->get($installedInstance->getTableColumnsSessionKey()));
+
+        $installedHtml = $tabSwitchPage->html();
+        self::assertStringContainsString('fi-ta-table', $installedHtml);
+        self::assertStringNotContainsString('fi-ta-content-grid', $installedHtml);
+        self::assertStringNotContainsString('fi-ta-table-loading-ctn', $installedHtml);
+        self::assertStringNotContainsString('data-mmr-view-toggle', $installedHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="source"', $installedHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="author"', $installedHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="downloads"', $installedHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="date_modified"', $installedHtml);
+
+        // Switch back to Modrinth catalog tab (still tile view) then toggle to list view.
+        $tabSwitchPage->set('activeTab', 'modrinth')->call('loadTable');
+        self::assertStringContainsString('fi-ta-content-grid', $tabSwitchPage->html());
+        $tabSwitchPage->call('toggleCatalogView');
+        $afterReturnInstance = $tabSwitchPage->instance();
+        assert($afterReturnInstance instanceof ModManagerPage);
+        self::assertSame(['icon_url', 'title', 'author', 'downloads', 'date_modified'], array_keys($afterReturnInstance->getTable()->getVisibleColumns()));
+
+        // (c) Bug B2: customize list columns -> switch to panel -> apply/reset in panel -> switch to Installed & back -> toggle list preserves customization!
+        session()->flush();
+        $customPage = Livewire::test(ModManagerPage::class)->call('loadTable');
+        $tableColumns = $customPage->get('tableColumns');
+        self::assertIsArray($tableColumns);
+        $customized = array_map(static function (mixed $col): mixed {
+            if (is_array($col) && ($col['name'] ?? null) === 'downloads') {
+                $col['isToggled'] = false;
+            }
+
+            return $col;
+        }, $tableColumns);
+        $customPage->call('applyTableColumnManager', $customized);
+
+        $customPage->call('toggleCatalogView');
+        self::assertSame(CatalogTileColumns::VIEW_PANEL, $customPage->get('catalogView'));
+        $customPage->call('applyTableColumnManager');
+        $customPage->call('resetTableColumnManager');
+
+        $customPage->set('activeTab', 'installed')->call('loadTable');
+        $customPage->set('activeTab', 'modrinth')->call('loadTable');
+        $customPage->call('toggleCatalogView');
+
+        $finalInstance = $customPage->instance();
+        assert($finalInstance instanceof ModManagerPage);
+        self::assertSame(['icon_url', 'title', 'author', 'date_modified'], array_keys($finalInstance->getTable()->getVisibleColumns()));
+        self::assertStringNotContainsString('data-mmr-swr-cell="downloads"', $customPage->html());
+    }
+
+    public function test_tile_date_modified_suppresses_calendar_icon_on_unparseable_dates_and_preserves_tooltip_on_valid_dates(): void
+    {
+        $validIso = '2026-10-01T12:00:00Z';
 
         Http::fake([
             'api.modrinth.com/v2/tag/game_version' => Http::response([
                 ['version' => '1.21.1', 'version_type' => 'release'],
             ]),
-            'api.modrinth.com/v2/search*' => Http::response([
-                'hits' => [[
-                    'project_id' => '1KVo5zza',
-                    'slug' => 'long-author-pack',
-                    'title' => 'Long Author Pack',
-                    'description' => 'Verifies nested Stack+Split metadata rendering.',
-                    'icon_url' => null,
-                    'author' => $longAuthor,
-                    'downloads' => 9876543,
-                    'date_modified' => '2026-10-01T12:00:00Z',
-                    'versions' => ['1.21.1'],
-                    'categories' => ['fabric'],
-                ]],
-                'total_hits' => 1,
-            ]),
-            'api.feed-the-beast.com/v1/modpacks/public/modpack/search/*' => Http::response(['packs' => [126]]),
-            'api.feed-the-beast.com/v1/modpacks/public/modpack/126' => Http::response([
-                'id' => 126,
-                'name' => 'FTB Null Author Pack',
-                'synopsis' => 'FTB pack with null author.',
-                'plays' => 42000,
-                'updated' => 1700000000,
-                'versions' => [[
-                    'id' => 1001,
-                    'name' => '1.0.0',
-                    'updated' => 1700000000,
-                    'targets' => [['type' => 'game', 'name' => 'minecraft', 'version' => '1.21.1']],
-                ]],
-            ]),
-            'api.technicpack.net/search?*' => Http::response([
-                'modpacks' => [['slug' => 'tekkit-2', 'name' => 'Tekkit 2']],
-            ]),
+            'api.modrinth.com/v2/tag/category' => Http::response([]),
+            'api.modrinth.com/v2/tag/loader' => Http::response([]),
+            'api.modrinth.com/v2/search*' => static function ($request) use ($validIso) {
+                $url = $request->url();
+                $isBadDate = str_contains($url, 'bad-date');
+
+                return Http::response([
+                    'hits' => [[
+                        'project_id' => $isBadDate ? 'badDate1' : 'goodDate1',
+                        'slug' => $isBadDate ? 'bad-date-project' : 'good-date-project',
+                        'title' => $isBadDate ? 'Bad Date Project' : 'Good Date Project',
+                        'description' => 'Date formatting regression check.',
+                        'icon_url' => null,
+                        'author' => 'robotkoer',
+                        'downloads' => $isBadDate ? 0 : 1234567,
+                        'date_modified' => $isBadDate ? 'not-a-real-date' : $validIso,
+                        'versions' => ['1.21.1'],
+                        'categories' => ['fabric'],
+                    ]],
+                    'total_hits' => 1,
+                ]);
+            },
         ]);
 
-        Filament::setCurrentPanel(Filament::getPanel('admin'));
+        $this->bindStubDaemonFileRepository();
+        $this->configureServerPanelFor(ProjectType::Mod);
         session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
 
-        // 1. Long unbreakable author + Japanese locale date alignment inside Stack([author, Split([downloads, date->alignEnd()])]).
-        $this->app->setLocale('ja');
-        $modrinthHtml = Livewire::test(ModpackCatalogTable::class, [
-            'provider' => ModpackProvider::Modrinth->value,
-            'query' => 'long',
-            'targetStatePath' => 'data.mm_project',
-        ])->html();
+        $badDatePage = Livewire::test(ModManagerPage::class)
+            ->set('activeTab', 'modrinth')
+            ->set('tableSearch', 'bad-date')
+            ->call('loadTable');
+        $this->assertBottomMetadataDomStructure($badDatePage->html(), 'robotkoer', '0', expectDateIcon: false);
 
-        $this->assertNoNestedAnchors($modrinthHtml);
-        $this->assertBottomMetadataDomStructure($modrinthHtml, $longAuthor, '9,876,543', expectDateIcon: true);
-
-        // 2. Null author (FTB): empty author cell emits ZERO dangling <svg> icons, downloads & date remain aligned.
-        $this->app->setLocale('en');
-        $ftbHtml = Livewire::test(ModpackCatalogTable::class, [
-            'provider' => ModpackProvider::Ftb->value,
-            'query' => 'Direwolf',
-            'targetStatePath' => 'data.mm_project',
-        ])->html();
-
-        $this->assertNoNestedAnchors($ftbHtml);
-        $this->assertBottomMetadataDomStructure($ftbHtml, null, '42,000', expectDateIcon: true);
-
-        // 3. All null metadata (Technic): zero dangling <svg> icons across author, downloads, and date_modified.
-        $technicHtml = Livewire::test(ModpackCatalogTable::class, [
-            'provider' => ModpackProvider::Technic->value,
-            'query' => 'Tekkit',
-            'targetStatePath' => 'data.mm_project',
-        ])->html();
-
-        $this->assertNoNestedAnchors($technicHtml);
-        $this->assertBottomMetadataDomStructure($technicHtml, null, null, expectDateIcon: false);
+        $goodDatePage = Livewire::test(ModManagerPage::class)
+            ->set('activeTab', 'modrinth')
+            ->set('tableSearch', 'good-date')
+            ->call('loadTable');
+        $goodPageInstance = $goodDatePage->instance();
+        assert($goodPageInstance instanceof ModManagerPage);
+        $expectedPageTooltip = Carbon::parse($validIso, 'UTC')->format(
+            $goodPageInstance->getTable()->getDefaultDateTimeDisplayFormat(),
+        );
+        self::assertStringContainsString('2026', $expectedPageTooltip);
+        self::assertStringContainsString('12:00:00', $expectedPageTooltip);
+        $this->assertBottomMetadataDomStructure(
+            $goodDatePage->html(),
+            'robotkoer',
+            '1,234,567',
+            expectDateIcon: true,
+            expectedDateTooltip: $expectedPageTooltip,
+        );
     }
 
     public function test_modpack_catalog_table_mounted_in_panel_view_preserves_toggleable_columns_and_custom_toggles(): void
@@ -514,89 +548,46 @@ final class CatalogViewUnificationTest extends TestCase
         }
     }
 
-    public function test_mod_manager_page_mounted_in_panel_view_and_tab_switches_preserve_columns_without_session_poisoning(): void
+    public function test_modpack_catalog_tiles_omit_author_links_and_preserve_project_links_and_toolbar_toggle_across_modes_and_providers(): void
     {
         $this->fakeModrinthAndModpackCatalogs();
-        $this->bindStubDaemonFileRepository(includeInstalledMetadata: true);
-        $this->configureServerPanelFor(ProjectType::Mod);
-
-        // (a) Mount directly in 'panel' view -> toggle to 'list' recovers all toggleable columns.
-        session()->flush();
+        Filament::setCurrentPanel(Filament::getPanel('admin'));
         session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
 
-        $panelPage = Livewire::test(ModManagerPage::class)->call('loadTable');
-        self::assertSame(CatalogTileColumns::VIEW_PANEL, $panelPage->get('catalogView'));
-        self::assertSame([], $panelPage->get('tableColumns'));
-        self::assertStringContainsString('fi-ta-content-grid', $panelPage->html());
+        $cases = [
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Modrinth->value, 'optimized', 'https://modrinth.com/modpack/fabulously-optimized', 2],
+            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::Modrinth->value, 'optimized', 'https://modrinth.com/modpack/fabulously-optimized', 2],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::CurseForge->value, 'All the Mods', 'https://www.curseforge.com/minecraft/modpacks/all-the-mods-10', 1],
+            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::CurseForge->value, 'All the Mods', 'https://www.curseforge.com/minecraft/modpacks/all-the-mods-10', 1],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Ftb->value, 'Direwolf', 'https://www.feed-the-beast.com/modpacks/126-ftb-direwolf20', 1],
+            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::Ftb->value, 'Direwolf', 'https://www.feed-the-beast.com/modpacks/126-ftb-direwolf20', 1],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Technic->value, 'Tekkit', 'https://www.technicpack.net/modpack/tekkit-2', 1],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Atlauncher->value, 'SevTech', 'https://atlauncher.com/pack/SevTechAges', 1],
+        ];
 
-        $panelPage->call('toggleCatalogView');
-        self::assertSame(CatalogTileColumns::VIEW_LIST, $panelPage->get('catalogView'));
-        $panelPageInstance = $panelPage->instance();
-        assert($panelPageInstance instanceof ModManagerPage);
-        self::assertSame(['icon_url', 'title', 'author', 'downloads', 'date_modified'], array_keys($panelPageInstance->getTable()->getVisibleColumns()));
-        $recoveredHtml = $panelPage->html();
-        self::assertStringContainsString('data-mmr-swr-cell="author"', $recoveredHtml);
-        self::assertStringContainsString('data-mmr-swr-cell="downloads"', $recoveredHtml);
-        self::assertStringContainsString('data-mmr-swr-cell="date_modified"', $recoveredHtml);
-        self::assertStringContainsString('ATMTeam', $recoveredHtml);
+        foreach ($cases as [$mode, $provider, $query, $expectedUrl, $expectedCards]) {
+            $component = Livewire::test(ModpackCatalogTable::class, [
+                'mode' => $mode,
+                'provider' => $provider,
+                'query' => $query,
+                'serverId' => $mode === ModpackCatalogTable::MODE_SERVER ? 10 : null,
+                'targetStatePath' => 'data.mm_project',
+            ]);
 
-        // (b) Mount directly in 'panel' view -> switch Catalog -> Installed -> Catalog -> toggle 'list'.
-        session()->flush();
-        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+            $tileHtml = $component->html();
+            self::assertStringContainsString('fi-ta-content-grid', $tileHtml, "{$mode}/{$provider} should render tile grid");
+            self::assertStringContainsString('data-mmr-view-toggle', $tileHtml, "{$mode}/{$provider} must keep toolbar view-toggle visible even without filters");
+            self::assertStringContainsString('href="'.$expectedUrl.'"', $tileHtml, "{$mode}/{$provider} missing external recordUrl");
+            self::assertStringNotContainsString('modrinth.com/user/', $tileHtml);
+            $this->assertNoNestedAnchors($tileHtml);
 
-        $tabSwitchPage = Livewire::test(ModManagerPage::class)->call('loadTable');
-        self::assertStringContainsString('fi-ta-content-grid', $tabSwitchPage->html());
-
-        $tabSwitchPage->set('activeTab', 'installed')->call('loadTable');
-        $installedInstance = $tabSwitchPage->instance();
-        assert($installedInstance instanceof ModManagerPage);
-        self::assertFalse($installedInstance->getTable()->hasColumnsLayout());
-        self::assertSame(['icon_url', 'title', 'source', 'author', 'downloads', 'date_modified'], array_keys($installedInstance->getTable()->getVisibleColumns()));
-        self::assertNotSame([], session()->get($installedInstance->getTableColumnsSessionKey()));
-
-        $installedHtml = $tabSwitchPage->html();
-        self::assertStringContainsString('fi-ta-table', $installedHtml);
-        self::assertStringNotContainsString('fi-ta-content-grid', $installedHtml);
-        self::assertStringContainsString('data-mmr-swr-cell="source"', $installedHtml);
-        self::assertStringContainsString('data-mmr-swr-cell="author"', $installedHtml);
-        self::assertStringContainsString('data-mmr-swr-cell="downloads"', $installedHtml);
-        self::assertStringContainsString('data-mmr-swr-cell="date_modified"', $installedHtml);
-
-        // Switch back to Modrinth catalog tab (still tile view) then toggle to list view.
-        $tabSwitchPage->set('activeTab', 'modrinth')->call('loadTable');
-        self::assertStringContainsString('fi-ta-content-grid', $tabSwitchPage->html());
-        $tabSwitchPage->call('toggleCatalogView');
-        $afterReturnInstance = $tabSwitchPage->instance();
-        assert($afterReturnInstance instanceof ModManagerPage);
-        self::assertSame(['icon_url', 'title', 'author', 'downloads', 'date_modified'], array_keys($afterReturnInstance->getTable()->getVisibleColumns()));
-
-        // (c) Bug B2: customize list columns -> switch to panel -> apply/reset in panel -> switch to Installed & back -> toggle list preserves customization!
-        session()->flush();
-        $customPage = Livewire::test(ModManagerPage::class)->call('loadTable');
-        $tableColumns = $customPage->get('tableColumns');
-        self::assertIsArray($tableColumns);
-        $customized = array_map(static function (mixed $col): mixed {
-            if (is_array($col) && ($col['name'] ?? null) === 'downloads') {
-                $col['isToggled'] = false;
-            }
-
-            return $col;
-        }, $tableColumns);
-        $customPage->call('applyTableColumnManager', $customized);
-
-        $customPage->call('toggleCatalogView');
-        self::assertSame(CatalogTileColumns::VIEW_PANEL, $customPage->get('catalogView'));
-        $customPage->call('applyTableColumnManager');
-        $customPage->call('resetTableColumnManager');
-
-        $customPage->set('activeTab', 'installed')->call('loadTable');
-        $customPage->set('activeTab', 'modrinth')->call('loadTable');
-        $customPage->call('toggleCatalogView');
-
-        $finalInstance = $customPage->instance();
-        assert($finalInstance instanceof ModManagerPage);
-        self::assertSame(['icon_url', 'title', 'author', 'date_modified'], array_keys($finalInstance->getTable()->getVisibleColumns()));
-        self::assertStringNotContainsString('data-mmr-swr-cell="downloads"', $customPage->html());
+            $xpath = $this->xpathFor($tileHtml);
+            self::assertSame(
+                $expectedCards,
+                $xpath->query('//a[contains(concat(" ", normalize-space(@class), " "), " fi-ta-record-content ")]')?->length,
+                "{$mode}/{$provider} card anchor count mismatch",
+            );
+        }
     }
 
     public function test_modpack_modal_toggle_syncs_parent_mod_manager_page_both_directions_and_preserves_installed_list(): void
@@ -742,101 +733,6 @@ final class CatalogViewUnificationTest extends TestCase
         self::assertStringContainsString('fi-ta-content-grid', $listPage->html());
     }
 
-    public function test_tile_date_modified_suppresses_calendar_icon_on_unparseable_dates_and_preserves_tooltip_on_valid_dates(): void
-    {
-        $validIso = '2026-10-01T12:00:00Z';
-
-        Http::fake([
-            'api.modrinth.com/v2/tag/game_version' => Http::response([
-                ['version' => '1.21.1', 'version_type' => 'release'],
-            ]),
-            'api.modrinth.com/v2/tag/category' => Http::response([]),
-            'api.modrinth.com/v2/tag/loader' => Http::response([]),
-            'api.modrinth.com/v2/search*' => static function ($request) use ($validIso) {
-                $url = $request->url();
-                $isBadDate = str_contains($url, 'bad-date');
-
-                return Http::response([
-                    'hits' => [[
-                        'project_id' => $isBadDate ? 'badDate1' : 'goodDate1',
-                        'slug' => $isBadDate ? 'bad-date-project' : 'good-date-project',
-                        'title' => $isBadDate ? 'Bad Date Project' : 'Good Date Project',
-                        'description' => 'Date formatting regression check.',
-                        'icon_url' => null,
-                        'author' => 'robotkoer',
-                        'downloads' => $isBadDate ? 0 : 1234567,
-                        'date_modified' => $isBadDate ? 'not-a-real-date' : $validIso,
-                        'versions' => ['1.21.1'],
-                        'categories' => ['fabric'],
-                    ]],
-                    'total_hits' => 1,
-                ]);
-            },
-        ]);
-
-        // 1. ModpackCatalogTable in panel view: unparseable date_modified emits 0 calendar <svg> icons and 0 tooltips.
-        Filament::setCurrentPanel(Filament::getPanel('admin'));
-        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
-
-        $badDateModpack = Livewire::test(ModpackCatalogTable::class, [
-            'provider' => ModpackProvider::Modrinth->value,
-            'query' => 'bad-date',
-            'targetStatePath' => 'data.mm_project',
-        ]);
-        $this->assertBottomMetadataDomStructure($badDateModpack->html(), 'robotkoer', '0', expectDateIcon: false);
-
-        // 2. ModpackCatalogTable in panel view: valid ISO date_modified emits formatted relative text, 1 calendar <svg>, and exact tooltip.
-        $goodDateModpack = Livewire::test(ModpackCatalogTable::class, [
-            'provider' => ModpackProvider::Modrinth->value,
-            'query' => 'good-date',
-            'targetStatePath' => 'data.mm_project',
-        ]);
-        $goodModpackInstance = $goodDateModpack->instance();
-        assert($goodModpackInstance instanceof ModpackCatalogTable);
-        $expectedModpackTooltip = Carbon::parse($validIso, 'UTC')->format(
-            $goodModpackInstance->getTable()->getDefaultDateTimeDisplayFormat(),
-        );
-        self::assertStringContainsString('2026', $expectedModpackTooltip);
-        self::assertStringContainsString('12:00:00', $expectedModpackTooltip);
-        $this->assertBottomMetadataDomStructure(
-            $goodDateModpack->html(),
-            'robotkoer',
-            '1,234,567',
-            expectDateIcon: true,
-            expectedDateTooltip: $expectedModpackTooltip,
-        );
-
-        // 3. ModManagerPage in panel view: unparseable date_modified emits 0 calendar <svg> icons; valid ISO preserves exact tooltip.
-        $this->bindStubDaemonFileRepository();
-        $this->configureServerPanelFor(ProjectType::Mod);
-        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
-
-        $badDatePage = Livewire::test(ModManagerPage::class)
-            ->set('activeTab', 'modrinth')
-            ->set('tableSearch', 'bad-date')
-            ->call('loadTable');
-        $this->assertBottomMetadataDomStructure($badDatePage->html(), 'robotkoer', '0', expectDateIcon: false);
-
-        $goodDatePage = Livewire::test(ModManagerPage::class)
-            ->set('activeTab', 'modrinth')
-            ->set('tableSearch', 'good-date')
-            ->call('loadTable');
-        $goodPageInstance = $goodDatePage->instance();
-        assert($goodPageInstance instanceof ModManagerPage);
-        $expectedPageTooltip = Carbon::parse($validIso, 'UTC')->format(
-            $goodPageInstance->getTable()->getDefaultDateTimeDisplayFormat(),
-        );
-        self::assertStringContainsString('2026', $expectedPageTooltip);
-        self::assertStringContainsString('12:00:00', $expectedPageTooltip);
-        $this->assertBottomMetadataDomStructure(
-            $goodDatePage->html(),
-            'robotkoer',
-            '1,234,567',
-            expectDateIcon: true,
-            expectedDateTooltip: $expectedPageTooltip,
-        );
-    }
-
     private function createTestSchema(): void
     {
         Schema::create('eggs', static function ($table): void {
@@ -907,13 +803,7 @@ final class CatalogViewUnificationTest extends TestCase
             $table->timestamps();
         });
 
-        Schema::create('mod_manager_modpacks', static function ($table): void {
-            $table->unsignedInteger('server_id')->primary();
-            $table->string('revision', 32)->nullable();
-            $table->longText('inventory')->nullable();
-            $table->string('mutation', 32)->nullable();
-            $table->longText('recovery')->nullable();
-        });
+        (require dirname(__DIR__, 3).'/database/migrations/2026_11_19_000006_create_mod_manager_modpacks_table.php')->up();
 
         DB::table('eggs')->insert([
             [
@@ -1047,6 +937,58 @@ final class CatalogViewUnificationTest extends TestCase
         );
 
         $this->app->instance(DaemonFileRepository::class, $repo);
+    }
+
+    private function fakeCatalogSources(): void
+    {
+        Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([
+                ['version' => '1.21.1', 'version_type' => 'release'],
+            ]),
+            'api.modrinth.com/v2/tag/category' => Http::response([]),
+            'api.modrinth.com/v2/tag/loader' => Http::response([]),
+            'api.modrinth.com/v2/search*' => Http::response([
+                'hits' => [[
+                    'project_id' => 'AANobbMI',
+                    'slug' => 'sodium',
+                    'title' => 'Sodium',
+                    'description' => 'Modern rendering engine for Minecraft.',
+                    'icon_url' => null,
+                    'author' => 'jellysquid3',
+                    'downloads' => 50000000,
+                    'date_modified' => '2026-10-01T12:00:00Z',
+                    'versions' => ['1.21.1'],
+                    'categories' => ['fabric'],
+                ]],
+                'total_hits' => 1,
+            ]),
+            'api.modrinth.com/v2/projects*' => Http::response([[
+                'id' => 'AANobbMI',
+                'slug' => 'sodium',
+                'title' => 'Sodium',
+                'description' => 'Modern rendering engine for Minecraft.',
+                'downloads' => 50000000,
+                'updated' => '2026-10-01T12:00:00Z',
+            ]]),
+            'api.curseforge.com/v1/mods/search*' => Http::response([
+                'data' => [[
+                    'id' => 925200,
+                    'slug' => 'all-the-mods-10',
+                    'name' => 'All the Mods 10',
+                    'summary' => 'Kitchen sink pack.',
+                    'authors' => [['name' => 'ATMTeam']],
+                    'downloadCount' => 500000,
+                    'dateModified' => '2026-10-01T12:00:00Z',
+                    'latestFilesIndexes' => [['gameVersion' => '1.21.1', 'modLoader' => 6]],
+                ]],
+                'pagination' => ['totalCount' => 1],
+            ]),
+            'api.curseforge.com/v1/mods' => Http::response(['data' => []]),
+            'api.curseforge.com/v1/categories*' => Http::response(['data' => []]),
+            'api.curseforge.com/v1/minecraft/version*' => Http::response(['data' => []]),
+            'hangar.papermc.io/*' => Http::response(['result' => [], 'pagination' => ['count' => 0]]),
+            'api.spiget.org/*' => Http::response([]),
+        ]);
     }
 
     private function fakeModrinthAndModpackCatalogs(): void
@@ -1256,6 +1198,8 @@ final class CatalogViewUnificationTest extends TestCase
         $splitRow = $directDivChildren->item(1);
         self::assertInstanceOf(DOMElement::class, $authorRow);
         self::assertInstanceOf(DOMElement::class, $splitRow);
+        self::assertStringContainsString('fi-growable', $authorRow->getAttribute('class'));
+        self::assertStringContainsString('fi-growable', $splitRow->getAttribute('class'));
 
         if ($expectedAuthor !== null) {
             self::assertStringContainsString($expectedAuthor, $authorRow->textContent);
@@ -1277,9 +1221,9 @@ final class CatalogViewUnificationTest extends TestCase
         self::assertInstanceOf(DOMElement::class, $downloadsCol);
         self::assertInstanceOf(DOMElement::class, $dateCol);
 
-        self::assertStringNotContainsString('fi-growable', $downloadsCol->getAttribute('class'));
-        self::assertStringContainsString('fi-align-end', $dateCol->getAttribute('class'));
-        self::assertStringNotContainsString('fi-growable', $dateCol->getAttribute('class'));
+        self::assertStringContainsString('fi-growable', $downloadsCol->getAttribute('class'));
+        self::assertStringContainsString('fi-growable', $dateCol->getAttribute('class'));
+        self::assertStringNotContainsString('fi-align-end', $dateCol->getAttribute('class'));
 
         if ($expectedDownloads !== null) {
             self::assertStringContainsString($expectedDownloads, $downloadsCol->textContent);

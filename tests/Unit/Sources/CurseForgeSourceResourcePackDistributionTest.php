@@ -98,6 +98,59 @@ class CurseForgeSourceResourcePackDistributionTest extends TestCase
         ];
     }
 
+    public function test_install_file_identifies_a_restricted_mod_using_the_exact_release(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.curseforge.com/v1/mods/264231/files/2693547' => Http::response(['data' => [
+                'id' => 2693547,
+                'modId' => 264231,
+                'fileName' => 'iceandfire.jar',
+                'fileLength' => 54,
+                'downloadUrl' => null,
+                'hashes' => [['algo' => 1, 'value' => str_repeat('a', 40)]],
+            ]]),
+            'api.curseforge.com/v1/mods' => Http::response(['data' => [[
+                'id' => 264231,
+                'allowModDistribution' => false,
+                'name' => 'Ice and Fire: Dragons',
+                'links' => ['websiteUrl' => 'https://www.curseforge.com/minecraft/mc-mods/ice-and-fire-dragons'],
+            ]]]),
+            'api.curseforge.com/v1/mods/264231/files/2693548' => Http::response(['data' => [
+                'id' => 2693547, 'modId' => 264231,
+            ]]),
+        ]);
+
+        $source = $this->source();
+        $manual = $source->getInstallFile(264231, 2693547);
+        self::assertTrue($manual->canUpload());
+        self::assertSame(['sha1' => str_repeat('a', 40)], $manual->hashes);
+        self::assertSame(54, $manual->size);
+        self::assertNull($manual->url);
+        self::assertSame('https://www.curseforge.com/minecraft/mc-mods/ice-and-fire-dragons/files/2693547', $manual->page);
+        self::assertSame('metadata_mismatch', $source->getInstallFile(264231, 2693548)->reason);
+        Http::assertSentCount(3);
+    }
+
+    #[DataProvider('dependencyApiErrors')]
+    public function test_install_file_api_errors_are_distinct_from_distribution_policy(int $status, string $reason): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(['https://api.curseforge.com/v1/mods/264231/files/2693547' => $status === 0
+            ? Http::failedConnection('timed out') : Http::response([], $status)]);
+
+        $file = $this->source()->getInstallFile(264231, 2693547);
+
+        self::assertSame($reason, $file->reason);
+        self::assertFalse($file->canUpload());
+    }
+
+    public static function dependencyApiErrors(): array
+    {
+        return [[401, 'api_authentication'], [403, 'api_forbidden'], [404, 'api_not_found'],
+            [429, 'api_rate_limited'], [500, 'api_error'], [0, 'api_timeout']];
+    }
+
     public function test_exact_dependency_metadata_preserves_downloadable_and_restricted_file_ids(): void
     {
         Http::preventStrayRequests();
@@ -142,12 +195,6 @@ class CurseForgeSourceResourcePackDistributionTest extends TestCase
 
         self::assertSame($reason, $file->reason);
         self::assertFalse($file->canUpload());
-    }
-
-    public static function dependencyApiErrors(): array
-    {
-        return [[401, 'api_authentication'], [403, 'api_forbidden'], [404, 'api_not_found'],
-            [429, 'api_rate_limited'], [500, 'api_error'], [0, 'api_timeout']];
     }
 
     private function source(): CurseForgeSource

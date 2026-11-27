@@ -23,7 +23,8 @@ interface BackgroundJobQueue
      */
     public function claim(): ?array;
 
-    public function ack(int|string $id, ?int $expectedAttempts = null): void;
+    /** Delete this claim and report whether a job was actually removed. */
+    public function ack(int|string $id, ?int $expectedAttempts = null): bool;
 
     public function retry(int|string $id, int $delaySeconds = 30, ?int $expectedAttempts = null): void;
 

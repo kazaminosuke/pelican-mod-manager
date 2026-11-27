@@ -86,6 +86,7 @@ use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
 use Kazaminosuke\ModManager\Support\InstalledMetadataReadStatus;
@@ -93,7 +94,6 @@ use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Kazaminosuke\ModManager\Support\InstalledScanResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
-use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 use Kazaminosuke\ModManager\Support\ProjectOperationAuthorizer;
 use Kazaminosuke\ModManager\Support\ProjectPrimaryFile;
@@ -629,18 +629,23 @@ class ModManagerPage extends Page implements HasTable
 
     public function toggleCatalogView(): void
     {
-        $this->catalogView = CatalogTileColumns::storeView(
+        $this->changeCatalogView(
             $this->catalogView === CatalogTileColumns::VIEW_PANEL
                 ? CatalogTileColumns::VIEW_LIST
                 : CatalogTileColumns::VIEW_PANEL,
         );
+    }
 
-        if (isset($this->table)) {
-            $this->table = $this->table($this->makeTable());
-            $this->syncTableColumnManagerAfterViewChange();
+    public function restoreLegacyCatalogView(): void
+    {
+        if (CatalogTileColumns::storedView() === null) {
+            $this->changeCatalogView(CatalogTileColumns::VIEW_PANEL);
         }
+    }
 
-        $this->flushCachedTableRecords();
+    private function changeCatalogView(string $view): void
+    {
+        $this->syncCatalogView(CatalogTileColumns::storeView($view));
     }
 
     #[On(CatalogTileColumns::VIEW_CHANGED_EVENT)]
@@ -653,7 +658,6 @@ class ModManagerPage extends Page implements HasTable
 
         $wasTileView = $this->isCatalogTileView();
         $this->catalogView = $normalized;
-
         if ($wasTileView === $this->isCatalogTileView()) {
             return;
         }
@@ -704,9 +708,8 @@ class ModManagerPage extends Page implements HasTable
     /**
      * Warm likely-next catalog pages in the background. Hangar's
      * /projects call is ~1s, so its jobs are started first instead of
-     * waiting behind Modrinth. Other sources still run in short-lived
-     * Other sources still run as persisted scheduler jobs so this request never blocks on their APIs. The
-     * active source's current page is fetched by records()/loadTable itself.
+     * waiting behind Modrinth. All sources warm through persisted jobs.
+     * The active source's current page is fetched by records()/loadTable.
      */
     protected function dispatchCatalogWarm(bool $includeOtherSources = true): void
     {
@@ -1100,7 +1103,7 @@ class ModManagerPage extends Page implements HasTable
         $this->catalogCategoryOptionsKey = null;
         $this->projectIconRowIndexMap = null;
 
-        // Let Filament defer uncached records on the new tab.
+        // Let Filament defer uncached catalog records on the new tab.
         $this->isTableLoaded = false;
 
         // HasTabs::updatedActiveTab() (aliased above) already resets the table's
@@ -2076,12 +2079,8 @@ class ModManagerPage extends Page implements HasTable
             throw new Exception('No compatible versions found');
         }
 
-        if ($source instanceof CurseForgeSource && $type === ProjectType::Mod) {
-            // The latest Mod can require a manual upload. Keep that exact file.
-            return reset($versions);
-        }
-
         $blocked = [];
+        $manualVersion = null;
 
         foreach ($versions as $version) {
             if (is_array($version) && ProjectPrimaryFile::fromVersion($version) !== null) {
@@ -2092,6 +2091,14 @@ class ModManagerPage extends Page implements HasTable
             if (DownloadUnavailableException::isSupportedReason($reason)) {
                 $blocked[(string) $reason] = true;
             }
+
+            if ($source instanceof CurseForgeSource && $type === ProjectType::Mod && is_array($version)) {
+                $manualVersion ??= $version;
+            }
+        }
+
+        if ($manualVersion !== null) {
+            return $manualVersion;
         }
 
         if (count($blocked) === 1) {
@@ -2154,11 +2161,13 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /**
+     * @param  array<string, mixed>  $version
+     *
      * @throws Exception
      */
-    protected function curseForgeModFile(ProjectSourceInterface $source, ProjectType $type, string $projectId, array $version): ?CurseForgeFile
+    private function curseForgeModFile(ProjectSourceInterface $source, ProjectType $type, string $projectId, array $version): ?CurseForgeFile
     {
-        if (!$source instanceof CurseForgeSource || $type !== ProjectType::Mod) {
+        if (!$source instanceof CurseForgeSource || $type !== ProjectType::Mod || ProjectPrimaryFile::fromVersion($version) !== null) {
             return null;
         }
 
@@ -2166,7 +2175,7 @@ class ModManagerPage extends Page implements HasTable
         if (preg_match('/^[1-9][0-9]{0,9}$/D', $projectId) !== 1 || preg_match('/^[1-9][0-9]{0,9}$/D', $fileId) !== 1) {
             throw new Exception('Invalid CurseForge project or file ID.');
         }
-        $dependency = $source->dependencyFiles([['project_id' => (int) $projectId, 'file_id' => (int) $fileId]])["$projectId/$fileId"];
+        $dependency = $source->getInstallFile((int) $projectId, (int) $fileId);
         if ($dependency->url === null && !$dependency->canUpload()) {
             throw new CurseForgeManualFileException($dependency, $dependency->reason === 'distribution' ? 'unverifiable' : ($dependency->reason ?? 'metadata_missing'));
         }
@@ -2462,8 +2471,8 @@ class ModManagerPage extends Page implements HasTable
      * Livewire round trip (wire:init="loadTable") a deferred table always
      * costs.
      *
-     * The Installed tab uses a separate scan-result cache. Its pending
-     * scan has a dedicated empty state and is handled by deferLoading().
+     * The Installed tab uses a separate scan-result cache and renders its
+     * records or scan state immediately.
      */
     protected function hasWarmRecordsCache(): bool
     {
@@ -2997,7 +3006,9 @@ class ModManagerPage extends Page implements HasTable
                 return new LengthAwarePaginator($hits, $response['total_hits'], self::TABLE_PAGE_SIZE, $page);
             })
             // An empty pending scan has its own status inside the table.
-            ->deferLoading(fn (): bool => !$this->showInstalledScanInEmptyState() && !$this->hasWarmRecordsCache())
+            // Installed records and operation state already load from the
+            // scan cache. Let the same response render rows or the empty state.
+            ->deferLoading(fn (): bool => $this->activeTab !== 'installed' && !$this->hasWarmRecordsCache())
             ->paginated([self::TABLE_PAGE_SIZE])
             // Filament's Select uses a fixed Floating UI strategy inside this
             // positioning context, so its option panel can escape the

@@ -12,7 +12,7 @@ use Kazaminosuke\ModManager\Services\ModpackDeployment;
 use Kazaminosuke\ModManager\Services\ModpackInstaller;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
-use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;

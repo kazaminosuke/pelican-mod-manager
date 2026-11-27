@@ -68,6 +68,11 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
                     [ModpackCatalogTable::class],
                 );
                 $panel->renderHook(
+                    TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+                    fn () => view('pelican-mod-manager::components.catalog-view-toggle', ['searchFallback' => true]),
+                    [ModpackCatalogTable::class],
+                );
+                $panel->renderHook(
                     TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
                     fn () => view('pelican-mod-manager::components.catalog-view-toggle'),
                     [ModpackCatalogTable::class],
@@ -122,11 +127,17 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // concrete page class it needs to appear on.
         $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
         $tableClasses = [...$pageClasses, ModpackCatalogTable::class];
-
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
             fn () => view('pelican-mod-manager::components.catalog-sort-select'),
             $pageClasses,
+        );
+        // Filament skips the column-manager hook when neither the filters nor
+        // the column manager has a trigger. The search toolbar still renders.
+        $panel->renderHook(
+            TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+            fn () => view('pelican-mod-manager::components.catalog-view-toggle', ['searchFallback' => true]),
+            $tableClasses,
         );
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,

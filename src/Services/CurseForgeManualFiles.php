@@ -6,8 +6,8 @@ use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use GuzzleHttp\Psr7\Utils;
 use Kazaminosuke\ModManager\Exceptions\CurseForgeManualFileException;
-use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
-use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
+use Kazaminosuke\ModManager\Support\ProjectArchive;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Psr\Http\Message\StreamInterface;
 use ZipArchive;
@@ -24,7 +24,7 @@ final class CurseForgeManualFiles
     public function uploads(Server $server, DaemonFileRepository $repository): array
     {
         $indexed = [];
-        foreach ($this->wings->listDirectory($repository, $server, '.mod-manager-curseforge') as $entry) {
+        foreach ($this->wings->listDirectory($repository, $server, CurseForgeFile::STAGING_DIRECTORY) as $entry) {
             $name = $entry['name'] ?? null;
             if (is_string($name) && ($entry['file'] ?? false) === true && ($entry['symlink'] ?? true) === false) {
                 $indexed[$name] = $entry;
@@ -34,7 +34,11 @@ final class CurseForgeManualFiles
         return $indexed;
     }
 
-    /** Return a private snapshot of the verified file. The caller closes it. */
+    /**
+     * Return a private snapshot of the verified file. The caller closes it.
+     *
+     * @param  array<string, array<string, mixed>>|null  $uploads
+     */
     public function verifiedSnapshot(Server $server, DaemonFileRepository $repository, CurseForgeFile $file, int $remainingBytes = self::MAX_FILE_BYTES, ?array $uploads = null): StreamInterface
     {
         if (!$file->canUpload()) {
@@ -57,10 +61,11 @@ final class CurseForgeManualFiles
         if ($local === false) {
             throw new CurseForgeManualFileException($file, 'storage_error');
         }
+        $copy = Utils::streamFor($local);
+
         try {
             $remote = $this->wings->readStream($repository, $server, $file->stagingPath());
             try {
-                $copy = Utils::streamFor($local);
                 Utils::copyToStream($remote, $copy, $size + 1);
             } finally {
                 $remote->close();
@@ -84,7 +89,7 @@ final class CurseForgeManualFiles
 
             return $copy;
         } catch (\Throwable $exception) {
-            fclose($local);
+            $copy->close();
 
             throw $exception;
         }
@@ -105,7 +110,7 @@ final class CurseForgeManualFiles
             for ($i = 0; $i < $jar->numFiles; $i++) {
                 $name = $jar->getNameIndex($i);
                 if ($name === false || preg_match('/[\x00-\x1f\x7f:]/', $name) === 1
-                    || ModpackPaths::safeRelative(rtrim($name, '/')) !== rtrim($name, '/')) {
+                    || ProjectArchive::safeRelative(rtrim($name, '/')) !== rtrim($name, '/')) {
                     return false;
                 }
                 if ($jar->getExternalAttributesIndex($i, $system, $attributes)

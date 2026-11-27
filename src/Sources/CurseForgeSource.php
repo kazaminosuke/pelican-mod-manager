@@ -25,13 +25,13 @@ use Kazaminosuke\ModManager\Support\CachedProjectMetadata;
 use Kazaminosuke\ModManager\Support\CachedSearchOperations;
 use Kazaminosuke\ModManager\Support\CacheProfile;
 use Kazaminosuke\ModManager\Support\CatalogFields;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupRequest;
 use Kazaminosuke\ModManager\Support\LatestVersionLookupResult;
 use Kazaminosuke\ModManager\Support\MinecraftVersionResolver;
-use Kazaminosuke\ModManager\Support\Modpacks\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackFileSelector;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
-use Kazaminosuke\ModManager\Support\Modpacks\ModpackPaths;
+use Kazaminosuke\ModManager\Support\ProjectArchive;
 use Kazaminosuke\ModManager\Support\ProjectIconUrl;
 use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchSpec;
@@ -222,7 +222,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
 
         foreach ($files as $file) {
             if (($file['isServerPack'] ?? false) === true && (int) ($file['parentProjectFileId'] ?? 0) === 0) {
-                $download = $this->modpackReleaseDownload($projectId, $file, $file, true, null);
+                $download = $this->modpackReleaseDownload($projectId, $file, $file, true);
                 if ($download !== null) {
                     return $download;
                 }
@@ -479,7 +479,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
                         $bulk[(int) ($file['id'] ?? 0)] = $file;
                     }
                 } catch (Throwable $exception) {
-                    $stopReason = $this->dependencyFailureReason($exception);
+                    $stopReason = $this->installFileFailureReason($exception);
                 }
             }
 
@@ -493,7 +493,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
                     try {
                         $file = $this->getJson("/mods/{$projectId}/files/{$fileId}", timeoutSeconds: $this->remainingTimeout($deadline))['data'] ?? null;
                     } catch (Throwable $exception) {
-                        $reason = $this->dependencyFailureReason($exception);
+                        $reason = $this->installFileFailureReason($exception);
                         if ($reason !== 'api_not_found') {
                             $stopReason = $reason;
                         }
@@ -510,7 +510,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
                     continue;
                 }
                 $files[$key] = $file;
-                if (!ModpackPaths::isSafeHttpsDownloadUrl($file['downloadUrl'] ?? null)) {
+                if (!ProjectArchive::isSafeHttpsDownloadUrl($file['downloadUrl'] ?? null)) {
                     $needProjects[$projectId] = (string) $projectId;
                 }
             }
@@ -529,14 +529,76 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             }
 
             foreach ($files as $key => $file) {
-                $resolved[$key] = $this->dependencyFile($file, $projects[(int) $file['modId']] ?? []);
+                $resolved[$key] = $this->normalizeInstallFile($file, $projects[(int) $file['modId']] ?? []);
             }
         }
 
         return $resolved;
     }
 
-    private function dependencyFailureReason(Throwable $exception): string
+    public function getInstallFile(int $projectId, int $fileId): CurseForgeFile
+    {
+        if (!$this->isConfigured()) {
+            return new CurseForgeFile($projectId, $fileId, reason: 'api_unconfigured');
+        }
+
+        try {
+            $file = $this->getJson("/mods/{$projectId}/files/{$fileId}")['data'] ?? null;
+        } catch (Throwable $exception) {
+            return new CurseForgeFile($projectId, $fileId, reason: $this->installFileFailureReason($exception));
+        }
+
+        if ($file === null) {
+            return new CurseForgeFile($projectId, $fileId, reason: 'metadata_missing');
+        }
+
+        if (!is_array($file) || (int) ($file['id'] ?? 0) !== $fileId || (int) ($file['modId'] ?? 0) !== $projectId) {
+            return new CurseForgeFile($projectId, $fileId, reason: 'metadata_mismatch');
+        }
+
+        $project = [];
+        if (!ProjectArchive::isSafeHttpsDownloadUrl($file['downloadUrl'] ?? null)) {
+            try {
+                $projects = $this->getBulkMods([(string) $projectId], 5.0)['data'] ?? [];
+                foreach ($projects as $candidate) {
+                    if (is_array($candidate) && (int) ($candidate['id'] ?? 0) === $projectId) {
+                        $project = $candidate;
+                        break;
+                    }
+                }
+            } catch (Throwable) {
+                // Display metadata is optional when the file identity is confirmed.
+            }
+
+            if ((!array_key_exists('downloadUrl', $file) || ($project['allowModDistribution'] ?? null) === true)
+                && ($project['allowModDistribution'] ?? null) !== false) {
+                try {
+                    $file['downloadUrl'] = $this->officialFileDownloadUrl($projectId, $fileId) ?? ($file['downloadUrl'] ?? '');
+                } catch (Throwable $exception) {
+                    return new CurseForgeFile($projectId, $fileId, reason: $this->installFileFailureReason($exception));
+                }
+            }
+        }
+
+        return $this->normalizeInstallFile($file, $project);
+    }
+
+    private function officialFileDownloadUrl(int $projectId, int $fileId): ?string
+    {
+        try {
+            $url = $this->getJson("/mods/{$projectId}/files/{$fileId}/download-url", timeoutSeconds: 5.0)['data'] ?? null;
+        } catch (RequestException $exception) {
+            if (!in_array($exception->response->status(), [403, 404, 410], true)) {
+                throw $exception;
+            }
+
+            return null;
+        }
+
+        return ProjectArchive::isSafeHttpsDownloadUrl($url) ? $url : null;
+    }
+
+    private function installFileFailureReason(Throwable $exception): string
     {
         if ($exception instanceof RequestException) {
             return match ($exception->response->status()) {
@@ -553,14 +615,16 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
     }
 
     /** @param array<string, mixed> $file @param array<string, mixed> $project */
-    private function dependencyFile(array $file, array $project): CurseForgeFile
+    private function normalizeInstallFile(array $file, array $project): CurseForgeFile
     {
-        $filename = ModpackPaths::safeRelative((string) ($file['fileName'] ?? ''));
-        if ($filename !== null && ($filename !== ($file['fileName'] ?? null) || preg_match('~[/\x00-\x1f\x7f:]~', $filename) === 1)) {
+        $name = $file['fileName'] ?? null;
+        $filename = is_string($name) ? ProjectArchive::safeRelative($name) : null;
+        if ($filename !== null && ($filename !== $name || str_contains($filename, '..')
+            || strpbrk($filename, '/\\') !== false || preg_match('~[\x00-\x1f\x7f:]~', $filename) === 1)) {
             $filename = null;
         }
         $url = $file['downloadUrl'] ?? null;
-        $canDownload = $filename !== null && ModpackPaths::isSafeHttpsDownloadUrl($url);
+        $canDownload = $filename !== null && ProjectArchive::isSafeHttpsDownloadUrl($url);
         $reason = match (true) {
             $filename === null => 'invalid_filename',
             $canDownload => null,
@@ -573,7 +637,11 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $page = preg_match('~^https://(?:www\.)?curseforge\.com/minecraft/mc-mods/[a-z0-9_-]+$~iD', $website) === 1
             ? $website.'/files/'.$id : null;
         $hashes = [];
-        foreach ($file['hashes'] ?? [] as $hash) {
+        foreach (is_array($file['hashes'] ?? null) ? $file['hashes'] : [] as $hash) {
+            if (!is_array($hash)) {
+                continue;
+            }
+
             $algo = match ($hash['algo'] ?? null) {
                 1 => 'sha1',
                 2 => 'md5',
@@ -592,7 +660,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             url: $canDownload ? $url : null,
             size: is_numeric($file['fileLength'] ?? null) && (int) $file['fileLength'] > 0 ? (int) $file['fileLength'] : null,
             hashes: $hashes,
-            name: $project['name'] ?? $file['displayName'] ?? $filename,
+            name: is_string($project['name'] ?? null) ? $project['name'] : (is_string($file['displayName'] ?? null) ? $file['displayName'] : $filename),
             page: $page,
             reason: $reason,
         );
@@ -751,7 +819,8 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         $response = $this->getJson("/mods/{$projectId}/files/{$fileId}");
         $file = $response['data'] ?? null;
 
-        return is_array($file) ? $file : null;
+        return is_array($file) && (int) ($file['id'] ?? 0) === $fileId
+            && (int) ($file['modId'] ?? $projectId) === $projectId ? $file : null;
     }
 
     /**
@@ -768,20 +837,10 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
         }
 
         if (($url === null || $url === '') && $projectId !== null) {
-            // Use the official endpoint when the file object omits the URL.
-            // A denied URL stays denied; the provider controls distribution.
-            try {
-                $url = $this->getJson("/mods/{$projectId}/files/{$id}/download-url", timeoutSeconds: 5.0)['data'] ?? null;
-            } catch (RequestException $exception) {
-                if (!in_array($exception->response->status(), [403, 404, 410], true)) {
-                    throw $exception;
-                }
-
-                return null;
-            }
+            $url = $this->officialFileDownloadUrl((int) $projectId, (int) $id);
         }
 
-        if (!is_string($url) || !ModpackPaths::isSafeHttpsDownloadUrl($url)) {
+        if (!ProjectArchive::isSafeHttpsDownloadUrl($url)) {
             return null;
         }
 
