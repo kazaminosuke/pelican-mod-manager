@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Filament;
 
+use App\Enums\ServerState;
 use App\Models\Egg;
 use App\Models\Server;
 use App\Models\User;
@@ -15,6 +16,7 @@ use Filament\Support\Facades\FilamentView;
 use Filament\Tables\Table;
 use Filament\Tables\View\TablesRenderHook;
 use Illuminate\Foundation\Testing\TestCase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
@@ -29,9 +31,14 @@ use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
+use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
+use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use Kazaminosuke\ModManager\Tests\Unit\Services\DeploymentWings;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -733,6 +740,54 @@ final class CatalogViewUnificationTest extends TestCase
         self::assertStringContainsString('fi-ta-content-grid', $listPage->html());
     }
 
+    public function test_managed_curseforge_upload_is_verified_while_the_server_is_installing(): void
+    {
+        require_once __DIR__.'/../Services/ModpackDeploymentTest.php';
+
+        $this->fakeCatalogSources();
+        $this->bindStubDaemonFileRepository();
+        (require dirname(__DIR__, 3).'/database/migrations/2026_11_25_000007_create_mod_manager_provisioning_table.php')->up();
+        DB::table('servers')->where('id', 10)->update(['status' => ServerState::Installing->value, 'skip_scripts' => true]);
+        DB::table('mod_manager_provisioning')->insert([
+            'server_id' => 10, 'state' => ModpackProvisioning::READY, 'installer' => '', 'deadline' => now()->addHour(),
+        ]);
+        $this->configureServerPanelFor(ProjectType::Mod);
+
+        $path = tempnam(sys_get_temp_dir(), 'cur-forge');
+        $jar = new \ZipArchive();
+        self::assertTrue($jar->open($path, \ZipArchive::OVERWRITE));
+        $jar->addFromString('mod/Main.class', 'fixture');
+        $jar->close();
+        $bytes = file_get_contents($path);
+        unlink($path);
+        $file = new CurseForgeFile(123, 456, filename: 'mod.jar', size: strlen($bytes), hashes: ['sha1' => sha1($bytes)], reason: 'distribution');
+        $queue = app(PluginBackgroundRunner::class);
+        $operations = app(InstalledOperationManager::class);
+        self::assertTrue($operations->dispatchModpackInstall(10, ProjectType::Mod, 'curseforge', '789', '112', ['managed_initial' => true])['dispatched']);
+        $operations->pauseCurseForgeModpack(10, $queue->spawned[0]['payload']['lease_token'], '789', '112',
+            ['managed_initial' => true], [$file->details(true, 'missing_upload')]);
+        $token = $operations->waitingCurseForgeModpack(10)['token'];
+        $args = ['token' => $token, 'path' => $file->stagingPath()];
+        $wings = new DeploymentWings();
+        $this->app->instance(WingsRemoteFilesystem::class, $wings);
+
+        $page = Livewire::test(ModManagerPage::class)
+            ->assertSee('Upload JAR')
+            ->assertDontSee('Open server Files');
+        $page->callAction('uploadCurseForgeDependency', data: [
+            'jar' => UploadedFile::fake()->createWithContent('mod.jar', str_repeat('x', strlen($bytes))),
+        ], arguments: $args);
+        self::assertArrayNotHasKey($file->stagingPath(), $wings->files);
+        $page->callAction('uploadCurseForgeDependency', data: [
+            'jar' => UploadedFile::fake()->createWithContent('mod.jar', $bytes),
+        ], arguments: $args);
+        self::assertSame($bytes, $wings->files[$file->stagingPath()] ?? null);
+        self::assertSame(ServerState::Installing, Server::query()->findOrFail(10)->status);
+        $page->call('resumeCurseForgeModpack', $token);
+        $resumed = end($queue->spawned);
+        self::assertSame($token, $resumed['payload']['selection']['manual_token']);
+    }
+
     private function createTestSchema(): void
     {
         Schema::create('eggs', static function ($table): void {
@@ -763,6 +818,8 @@ final class CatalogViewUnificationTest extends TestCase
             $table->unsignedBigInteger('egg_id')->nullable();
             $table->string('image')->nullable();
             $table->string('startup')->nullable();
+            $table->string('status')->nullable();
+            $table->boolean('skip_scripts')->default(false);
             $table->timestamps();
         });
 

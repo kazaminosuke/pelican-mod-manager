@@ -54,6 +54,12 @@ final class ModpackProvisioning
             && in_array($this->get($server)?->state, [self::WAITING, self::RUNNING], true);
     }
 
+    public function acceptsManualFiles(Server $server): bool
+    {
+        return $server->status === ServerState::Installing && $server->skip_scripts
+            && $this->get($server)?->state === self::READY;
+    }
+
     /** @return array<string, string> */
     public function requestInstaller(Server $server): array
     {

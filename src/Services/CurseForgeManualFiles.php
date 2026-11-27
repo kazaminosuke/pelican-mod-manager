@@ -49,14 +49,43 @@ final class CurseForgeManualFiles
         if ($listed === null) {
             throw new CurseForgeManualFileException($file, 'missing_upload');
         }
-        $size = $this->wings->listedFileSize($listed);
-        if ($size === null || $size < 1 || $size > min(self::MAX_FILE_BYTES, $remainingBytes)) {
+        $size = $this->checkedSize($file, $this->wings->listedFileSize($listed), $remainingBytes);
+
+        $remote = $this->wings->readStream($repository, $server, $file->stagingPath());
+        try {
+            return $this->verifiedCopy($file, $remote, $size);
+        } finally {
+            $remote->close();
+        }
+    }
+
+    public function stageUpload(Server $server, DaemonFileRepository $repository, CurseForgeFile $file, StreamInterface $source, int $size): void
+    {
+        if (!$file->canUpload()) {
+            throw new CurseForgeManualFileException($file, 'unverifiable');
+        }
+        $copy = $this->verifiedCopy($file, $source, $this->checkedSize($file, $size, self::MAX_FILE_BYTES));
+        try {
+            $this->wings->putStream($repository, $server, $file->stagingPath(), $copy);
+        } finally {
+            $copy->close();
+        }
+    }
+
+    private function checkedSize(CurseForgeFile $file, ?int $size, int $limit): int
+    {
+        if ($size === null || $size < 1 || $size > min(self::MAX_FILE_BYTES, $limit)) {
             throw new CurseForgeManualFileException($file, 'upload_size_limit');
         }
         if ($file->size !== null && $size !== $file->size) {
             throw new CurseForgeManualFileException($file, 'size_mismatch');
         }
 
+        return $size;
+    }
+
+    private function verifiedCopy(CurseForgeFile $file, StreamInterface $source, int $size): StreamInterface
+    {
         $local = tmpfile();
         if ($local === false) {
             throw new CurseForgeManualFileException($file, 'storage_error');
@@ -64,14 +93,7 @@ final class CurseForgeManualFiles
         $copy = Utils::streamFor($local);
 
         try {
-            $remote = $this->wings->readStream($repository, $server, $file->stagingPath());
-            try {
-                Utils::copyToStream($remote, $copy, $size + 1);
-            } finally {
-                $remote->close();
-            }
-
-            if (ftell($local) !== $size) {
+            if (Utils::copyToStream($source, $copy, $size + 1) !== $size) {
                 throw new CurseForgeManualFileException($file, 'size_mismatch');
             }
             $path = stream_get_meta_data($local)['uri'];

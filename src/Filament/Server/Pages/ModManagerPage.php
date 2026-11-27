@@ -13,6 +13,7 @@ use Exception;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -42,6 +43,7 @@ use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\Indicator;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -69,12 +71,14 @@ use Kazaminosuke\ModManager\Filament\Filters\CatalogSelectFilter;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
+use Kazaminosuke\ModManager\Services\CurseForgeManualFiles;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackDeployment;
 use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
 use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
 use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
@@ -103,6 +107,7 @@ use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Livewire\WithoutUrlPagination;
 use Throwable;
 
@@ -4847,12 +4852,96 @@ class ModManagerPage extends Page implements HasTable
         $operations = app(InstalledOperationManager::class);
         $plan = $operations->waitingCurseForgeModpack($server);
         $state = $plan === null ? null : $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        $managed = ($plan['selection']['managed_initial'] ?? false) === true;
 
         return [
             'plan' => $state?->isActive() ? null : $plan,
             'failed' => $state?->status === InstalledOperationState::STATUS_FAILED,
-            'filesUrl' => $plan === null ? '' : ListFiles::getUrl(),
+            'managed' => $managed,
+            'canUpload' => $managed && user()->can(SubuserPermission::FileCreate, $server),
+            'filesUrl' => $plan === null || $managed ? '' : ListFiles::getUrl(),
         ];
+    }
+
+    public function uploadCurseForgeDependencyAction(): Action
+    {
+        $prefix = 'pelican-mod-manager::strings.curseforge_manual.';
+
+        return Action::make('uploadCurseForgeDependency')
+            ->label(trans($prefix.'upload_jar'))
+            ->authorize(function (): bool {
+                $server = Filament::getTenant();
+
+                return $server instanceof Server
+                    && static::detectProjectType($server) === ProjectType::Mod
+                    && app(ModpackProvisioning::class)->acceptsManualFiles($server)
+                    && $this->canManageModpackChange($server)
+                    && user()->can(SubuserPermission::FileCreate, $server);
+            })
+            ->schema([
+                FileUpload::make('jar')->label(trans($prefix.'upload_jar'))
+                    ->storeFiles(false)->maxSize(CurseForgeManualFiles::MAX_FILE_BYTES / 1024)->required(),
+            ])
+            ->action(function (array $data, array $arguments) use ($prefix): void {
+                /** @var Server $server */
+                $server = Filament::getTenant();
+                $file = $data['jar'] ?? null;
+                if (!$file instanceof TemporaryUploadedFile) {
+                    return;
+                }
+
+                try {
+                    $this->stageCurseForgeDependency($server, $file, $arguments);
+                    Notification::make()->title(trans($prefix.'upload_received'))->success()->send();
+                } catch (CurseForgeManualFileException $exception) {
+                    Notification::make()->title(trans($prefix.'reasons.'.$exception->reason))->warning()->send();
+                } catch (ModpackException) {
+                    $this->notifyStaleCurseForgePlan();
+                } catch (Exception $exception) {
+                    $this->notifyProjectOperationFailure($exception, 'install_failed');
+                }
+            });
+    }
+
+    /** @param array<string, mixed> $arguments */
+    private function stageCurseForgeDependency(Server $server, TemporaryUploadedFile $upload, array $arguments): void
+    {
+        $leases = app(InstalledOperationLease::class);
+        $id = $server->getKey();
+        $lease = $leases->tryAcquire($id, ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK)
+            ?? throw new InstalledOperationBusyException();
+        try {
+            $plan = app(InstalledOperationManager::class)->waitingCurseForgeModpack($server);
+            $token = $arguments['token'] ?? null;
+            $path = $arguments['path'] ?? null;
+            $fresh = $server->fresh();
+            if ($fresh === null || !app(ModpackProvisioning::class)->acceptsManualFiles($fresh)
+                || ($plan['selection']['managed_initial'] ?? false) !== true
+                || !is_string($token) || !hash_equals($plan['token'], $token) || !is_string($path)) {
+                throw new ModpackException('The pending modpack is unavailable.');
+            }
+
+            $details = collect($plan['files'])->firstWhere('staging_path', $path);
+            if ($details === null) {
+                throw new ModpackException('The requested file is not pending.');
+            }
+            $file = new CurseForgeFile(
+                projectId: $details['project_id'], fileId: $details['file_id'], filename: $details['filename'],
+                size: $details['size'], hashes: $details['hashes'], reason: 'distribution',
+            );
+            $source = $upload->readStream();
+            if (!is_resource($source)) {
+                throw new CurseForgeManualFileException($file, 'storage_error');
+            }
+            $stream = Utils::streamFor($source);
+            try {
+                app(CurseForgeManualFiles::class)->stageUpload($fresh, app(DaemonFileRepository::class), $file, $stream, $upload->getSize());
+            } finally {
+                $stream->close();
+            }
+        } finally {
+            $leases->release($id, ProjectType::Mod, $lease);
+        }
     }
 
     public function resumeCurseForgeModpack(string $token): void

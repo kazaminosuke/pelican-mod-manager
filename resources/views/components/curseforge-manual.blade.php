@@ -7,12 +7,14 @@
                 <p role="alert">{{ __('pelican-mod-manager::strings.curseforge_manual.retry_failed') }}</p>
             @endif
             @if (array_filter(array_column($plan['files'], 'staging_path')) !== [])
-                <p>{{ __('pelican-mod-manager::strings.curseforge_manual.upload_instructions') }}</p>
-                <div>
-                    <x-filament::button tag="a" :href="$filesUrl" target="_blank" rel="noopener noreferrer" color="gray">
-                        {{ __('pelican-mod-manager::strings.curseforge_manual.open_files') }}
-                    </x-filament::button>
-                </div>
+                <p>{{ __('pelican-mod-manager::strings.curseforge_manual.' . ($managed ? 'managed_upload_instructions' : 'upload_instructions')) }}</p>
+                @unless ($managed)
+                    <div>
+                        <x-filament::button tag="a" :href="$filesUrl" target="_blank" rel="noopener noreferrer" color="gray">
+                            {{ __('pelican-mod-manager::strings.curseforge_manual.open_files') }}
+                        </x-filament::button>
+                    </div>
+                @endunless
             @endif
             <ul class="flex flex-col gap-3">
                 @foreach ($plan['files'] as $file)
@@ -28,7 +30,13 @@
                         @endforeach
                         <div>{{ __('pelican-mod-manager::strings.curseforge_manual.reasons.' . $file['reason']) }}</div>
                         @if ($file['staging_path'] !== null)
-                            <div><code>{{ $file['staging_path'] }}</code></div>
+                            @if ($canUpload)
+                                <x-filament::button color="gray" wire:click="mountAction('uploadCurseForgeDependency', @js(['token' => $plan['token'], 'path' => $file['staging_path']]))">
+                                    {{ __('pelican-mod-manager::strings.curseforge_manual.upload_jar') }}
+                                </x-filament::button>
+                            @elseif (!$managed)
+                                <div><code>{{ $file['staging_path'] }}</code></div>
+                            @endif
                         @endif
                         @if ($file['page'] !== null || $file['staging_path'] !== null)
                             <a class="fi-link" href="{{ $file['page'] ?? ('https://www.curseforge.com/minecraft/search?class=mc-mods&search=' . rawurlencode($file['name'] ?? (string) $file['project_id'])) }}" target="_blank" rel="noopener noreferrer">
