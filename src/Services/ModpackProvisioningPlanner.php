@@ -4,11 +4,9 @@ namespace Kazaminosuke\ModManager\Services;
 
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Support\Compatibility\ClassifiedEgg;
-use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
 use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\Compatibility\EggCompatibilityEngine;
 use Kazaminosuke\ModManager\Support\Compatibility\PackRequirement;
-use Kazaminosuke\ModManager\Support\Compatibility\ProvisioningMode;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 
@@ -117,38 +115,5 @@ final class ModpackProvisioningPlanner
             $explicitEggId,
             $automatic,
         );
-    }
-
-    public function summary(ModpackDescriptor $pack, CompatibilityResult $result): string
-    {
-        $lines = [
-            $pack->title,
-            $pack->provider,
-        ];
-        if ($pack->versionName !== null && $pack->versionName !== '') {
-            $lines[] = $pack->versionName;
-        }
-        if ($pack->minecraftVersion !== null) {
-            $lines[] = 'Minecraft '.$pack->minecraftVersion;
-        }
-        if ($pack->loader !== null) {
-            $lines[] = $pack->loader;
-        }
-
-        $lines[] = $result->reasonDetail;
-        if ($result->selected !== null) {
-            $lines[] = $result->selected->name.' ('.$result->selected->confidence.')';
-        }
-        if ($result->disposition === CompatibilityDisposition::Ambiguous) {
-            $names = array_map(static fn ($egg): string => $egg->name, $result->alternatives);
-            $lines[] = implode(', ', $names);
-        }
-        if ($result->mode === ProvisioningMode::EggInstall) {
-            $lines[] = 'The egg install script installs this modpack when the server is installed.';
-        } elseif ($result->mode === ProvisioningMode::Archive) {
-            $lines[] = 'Mod Manager installs the pack files. Worlds and protected files are kept.';
-        }
-
-        return implode("\n", $lines);
     }
 }

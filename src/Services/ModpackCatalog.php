@@ -286,21 +286,6 @@ final class ModpackCatalog
         return array_intersect_key($this->providers(), array_fill_keys([ModpackProvider::Modrinth->value, ModpackProvider::CurseForge->value, ModpackProvider::Ftb->value], true));
     }
 
-    /** @return array<string, string> */
-    public function searchOptions(Server $server, ModpackProvider $provider, string $query): array
-    {
-        if (mb_strlen(trim($query)) < 2 || !array_key_exists($provider->value, $this->archiveProviders())) {
-            return [];
-        }
-
-        $options = [];
-        foreach ($this->searchPage($server, $provider, $query, 1)['hits'] as $hit) {
-            $options[$hit['key']] = $this->label($hit, $provider->getLabel());
-        }
-
-        return $options;
-    }
-
     /**
      * @return array{source: string, project_id: string, version_id: string, version_number: string, filename: string, url: string, minecraft?: ?string, loader?: ?string, server_pack?: bool}|null
      */
@@ -380,19 +365,6 @@ final class ModpackCatalog
         }
 
         return $normalized;
-    }
-
-    /**
-     * @return array<string, string>
-     */
-    public function versionOptions(string $selection): array
-    {
-        $options = [];
-        foreach ($this->versionList($selection) as $version) {
-            $options[$version['id']] = $version['label'];
-        }
-
-        return $options;
     }
 
     public function describe(Server $server, string $source, string $projectId, ?string $versionId): ?ModpackDescriptor
@@ -623,13 +595,5 @@ final class ModpackCatalog
         }
 
         return [$selected[0], $selected[1]];
-    }
-
-    /** @param array<string, mixed> $hit */
-    private function label(array $hit, string $source): string
-    {
-        $title = trim((string) ($hit['title'] ?? ''));
-
-        return ($title !== '' ? $title : (string) ($hit['project_id'] ?? $source)).' ('.$source.')';
     }
 }
