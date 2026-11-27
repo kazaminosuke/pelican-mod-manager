@@ -159,17 +159,20 @@ class CurseForgeSourceResourcePackDistributionTest extends TestCase
                 ['id' => 2693547, 'modId' => 264231, 'fileName' => 'iceandfire.jar', 'fileLength' => 54,
                     'downloadUrl' => null, 'hashes' => [['algo' => 1, 'value' => str_repeat('A', 40)]]],
                 ['id' => 3043174, 'modId' => 238222, 'fileName' => 'jei.jar', 'downloadUrl' => 'https://edge.forgecdn.net/jei.jar'],
+                ['id' => 12345, 'modId' => 345678, 'fileName' => 'missing-url.jar'],
             ]]),
             'https://api.curseforge.com/v1/mods' => Http::response(['data' => [
                 ['id' => 264231, 'name' => 'Ice and Fire: Dragons', 'allowModDistribution' => false,
                     'links' => ['websiteUrl' => 'https://www.curseforge.com/minecraft/mc-mods/ice-and-fire-dragons']],
             ]]),
+            'https://api.curseforge.com/v1/mods/345678/files/12345/download-url' => Http::response(['data' => 'https://edge.forgecdn.net/missing-url.jar']),
         ]);
 
         $files = $this->source()->dependencyFiles([
             ['project_id' => 264231, 'file_id' => 2693547],
             ['project_id' => 238222, 'file_id' => 3043174],
             ['project_id' => 9999, 'file_id' => 2693547],
+            ['project_id' => 345678, 'file_id' => 12345],
         ]);
 
         $manual = $files['264231/2693547'];
@@ -181,7 +184,8 @@ class CurseForgeSourceResourcePackDistributionTest extends TestCase
         self::assertSame('https://www.curseforge.com/minecraft/mc-mods/ice-and-fire-dragons/files/2693547', $manual->page);
         self::assertSame('https://edge.forgecdn.net/jei.jar', $files['238222/3043174']->url);
         self::assertSame('metadata_mismatch', $files['9999/2693547']->reason);
-        Http::assertSentCount(2);
+        self::assertSame('https://edge.forgecdn.net/missing-url.jar', $files['345678/12345']->url);
+        Http::assertSentCount(3);
     }
 
     #[DataProvider('dependencyApiErrors')]

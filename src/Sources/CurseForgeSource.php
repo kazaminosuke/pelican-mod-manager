@@ -529,7 +529,7 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             }
 
             foreach ($files as $key => $file) {
-                $resolved[$key] = $this->normalizeInstallFile($file, $projects[(int) $file['modId']] ?? []);
+                $resolved[$key] = $this->resolveInstallFile($file, $projects[(int) $file['modId']] ?? [], $deadline);
             }
         }
 
@@ -569,24 +569,34 @@ class CurseForgeSource implements AuthoritativeBatchProjectSourceInterface, Batc
             } catch (Throwable) {
                 // Display metadata is optional when the file identity is confirmed.
             }
+        }
 
-            if ((!array_key_exists('downloadUrl', $file) || ($project['allowModDistribution'] ?? null) === true)
-                && ($project['allowModDistribution'] ?? null) !== false) {
-                try {
-                    $file['downloadUrl'] = $this->officialFileDownloadUrl($projectId, $fileId) ?? ($file['downloadUrl'] ?? '');
-                } catch (Throwable $exception) {
-                    return new CurseForgeFile($projectId, $fileId, reason: $this->installFileFailureReason($exception));
-                }
+        return $this->resolveInstallFile($file, $project);
+    }
+
+    /** @param array<string, mixed> $file @param array<string, mixed> $project */
+    private function resolveInstallFile(array $file, array $project, ?float $deadline = null): CurseForgeFile
+    {
+        $distribution = $project['allowModDistribution'] ?? null;
+        if (!ProjectArchive::isSafeHttpsDownloadUrl($file['downloadUrl'] ?? null) && $distribution !== false
+            && (!array_key_exists('downloadUrl', $file) || $distribution === true)) {
+            $projectId = (int) $file['modId'];
+            $fileId = (int) $file['id'];
+            try {
+                $timeout = $deadline === null ? 5.0 : min(5.0, $this->remainingTimeout($deadline));
+                $file['downloadUrl'] = $this->officialFileDownloadUrl($projectId, $fileId, $timeout) ?? ($file['downloadUrl'] ?? '');
+            } catch (Throwable $exception) {
+                return new CurseForgeFile($projectId, $fileId, reason: $this->installFileFailureReason($exception));
             }
         }
 
         return $this->normalizeInstallFile($file, $project);
     }
 
-    private function officialFileDownloadUrl(int $projectId, int $fileId): ?string
+    private function officialFileDownloadUrl(int $projectId, int $fileId, float $timeout = 5.0): ?string
     {
         try {
-            $url = $this->getJson("/mods/{$projectId}/files/{$fileId}/download-url", timeoutSeconds: 5.0)['data'] ?? null;
+            $url = $this->getJson("/mods/{$projectId}/files/{$fileId}/download-url", timeoutSeconds: $timeout)['data'] ?? null;
         } catch (RequestException $exception) {
             if (!in_array($exception->response->status(), [403, 404, 410], true)) {
                 throw $exception;
