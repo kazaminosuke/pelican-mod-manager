@@ -167,15 +167,16 @@ final class InstalledEmptyStateTest extends TestCase
         self::assertFalse($page->exposesPendingScan());
 
         $page->installedOperation = [
-            'operation' => InstalledOperationManager::OPERATION_BULK_UPDATE,
+            'operation' => InstalledOperationManager::OPERATION_MODPACK,
             'status' => InstalledOperationState::STATUS_QUEUED,
+            'result' => ['phase' => 'resuming'],
         ];
         $page->installedScanCompletion = [
             'operation' => InstalledOperationManager::OPERATION_SCAN,
             'status' => InstalledOperationState::STATUS_COMPLETED,
             'finished_at' => now()->toIso8601String(),
         ];
-        self::assertSame('Bulk update is queued.', $page->exposeStatus()['message']);
+        self::assertSame('Modpack install is queued.', $page->exposeStatus()['message']);
         self::assertFalse($page->exposeStatus()['loading']);
 
         // 2. Metadata read or scan error shows error state.

@@ -2,6 +2,7 @@
 
 namespace Kazaminosuke\ModManager\Tests\Unit\Filament;
 
+use App\Enums\ServerState;
 use App\Models\Egg;
 use App\Models\Server;
 use App\Models\User;
@@ -15,21 +16,31 @@ use Filament\Support\Facades\FilamentView;
 use Filament\Tables\Table;
 use Filament\Tables\View\TablesRenderHook;
 use Illuminate\Foundation\Testing\TestCase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\View;
+use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectType;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
 use Kazaminosuke\ModManager\Providers\ModManagerServiceProvider;
+use Kazaminosuke\ModManager\Services\InstalledOperationManager;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
+use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
+use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use Kazaminosuke\ModManager\Tests\Unit\Services\DeploymentWings;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -79,7 +90,7 @@ final class CatalogViewUnificationTest extends TestCase
         FilamentView::registerRenderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
             static fn () => View::file($root.'/resources/views/components/catalog-view-toggle.blade.php', ['searchFallback' => true]),
-            [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class],
+            [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class, ModpackCatalogTable::class],
         );
         FilamentView::registerRenderHook(
             TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
@@ -88,6 +99,7 @@ final class CatalogViewUnificationTest extends TestCase
                 ModManagerPage::class,
                 MinecraftDatapackPage::class,
                 MinecraftResourcePackPage::class,
+                ModpackCatalogTable::class,
             ],
         );
 
@@ -457,6 +469,336 @@ final class CatalogViewUnificationTest extends TestCase
         );
     }
 
+    public function test_modpack_catalog_table_mounted_in_panel_view_preserves_toggleable_columns_and_custom_toggles(): void
+    {
+        $this->fakeModrinthAndModpackCatalogs();
+        Filament::setCurrentPanel(Filament::getPanel('admin'));
+
+        foreach ([ModpackCatalogTable::MODE_CREATE, ModpackCatalogTable::MODE_SERVER] as $mode) {
+            session()->flush();
+            session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+
+            $component = Livewire::test(ModpackCatalogTable::class, [
+                'mode' => $mode,
+                'provider' => ModpackProvider::Modrinth->value,
+                'query' => 'optimized',
+                'serverId' => $mode === ModpackCatalogTable::MODE_SERVER ? 10 : null,
+                'targetStatePath' => 'data.mm_project',
+            ]);
+
+            self::assertSame(CatalogTileColumns::VIEW_PANEL, $component->get('catalogView'));
+            self::assertSame([], $component->get('tableColumns'));
+            self::assertStringContainsString('fi-ta-content-grid', $component->html());
+
+            // Toggling from panel -> list re-initializes HasColumnManager so default-visible toggleable columns appear.
+            $component->call('toggleCatalogView');
+            self::assertSame(CatalogTileColumns::VIEW_LIST, $component->get('catalogView'));
+
+            $instance = $component->instance();
+            assert($instance instanceof ModpackCatalogTable);
+            $visibleNames = array_keys($instance->getTable()->getVisibleColumns());
+            self::assertSame(['icon_url', 'title', 'minecraft_versions', 'loaders', 'downloads'], $visibleNames);
+
+            $listHtml = $component->html();
+            self::assertStringContainsString('1.21.1, 1.20.4 (+1)', $listHtml);
+            self::assertStringContainsString('Fabric', $listHtml);
+            self::assertStringContainsString('1,234,567', $listHtml);
+
+            // Default-hidden toggleable columns (author, date_modified) exist in tableColumns state and can be toggled on.
+            $tableColumns = $component->get('tableColumns');
+            self::assertIsArray($tableColumns);
+            $byName = [];
+            foreach ($tableColumns as $col) {
+                if (is_array($col) && is_string($col['name'] ?? null)) {
+                    $byName[$col['name']] = $col;
+                }
+            }
+            self::assertArrayHasKey('author', $byName);
+            self::assertArrayHasKey('date_modified', $byName);
+            self::assertTrue((bool) ($byName['author']['isToggleable'] ?? false));
+            self::assertFalse((bool) ($byName['author']['isToggled'] ?? true));
+            self::assertTrue((bool) ($byName['author']['isToggledHiddenByDefault'] ?? false));
+
+            // Customize column toggles: enable 'author', disable 'downloads'.
+            $customized = array_map(static function (mixed $col): mixed {
+                if (!is_array($col)) {
+                    return $col;
+                }
+                if (($col['name'] ?? null) === 'author') {
+                    $col['isToggled'] = true;
+                }
+                if (($col['name'] ?? null) === 'downloads') {
+                    $col['isToggled'] = false;
+                }
+
+                return $col;
+            }, $tableColumns);
+
+            $component->call('applyTableColumnManager', $customized);
+            $customListHtml = $component->html();
+            self::assertStringContainsString('robotkoer', $customListHtml);
+            self::assertStringNotContainsString('1,234,567', $customListHtml);
+
+            // Bug B2 guard: toggling to panel and invoking apply/reset column manager in tile view MUST NOT wipe custom toggles or poison session.
+            $component->call('toggleCatalogView');
+            self::assertSame(CatalogTileColumns::VIEW_PANEL, $component->get('catalogView'));
+            $component->call('applyTableColumnManager');
+            $component->call('resetTableColumnManager');
+            self::assertNotEmpty($component->get('tableColumns'));
+            $sessionKey = $instance->getTableColumnsSessionKey();
+            self::assertNotSame([], session()->get($sessionKey));
+
+            // Returning to list preserves the exact customized columns (author visible, downloads hidden).
+            $component->call('toggleCatalogView');
+            self::assertSame(CatalogTileColumns::VIEW_LIST, $component->get('catalogView'));
+            $restoredInstance = $component->instance();
+            assert($restoredInstance instanceof ModpackCatalogTable);
+            self::assertSame(['icon_url', 'title', 'minecraft_versions', 'loaders', 'author'], array_keys($restoredInstance->getTable()->getVisibleColumns()));
+        }
+    }
+
+    public function test_modpack_catalog_tiles_omit_author_links_and_preserve_project_links_and_toolbar_toggle_across_modes_and_providers(): void
+    {
+        $this->fakeModrinthAndModpackCatalogs();
+        Filament::setCurrentPanel(Filament::getPanel('admin'));
+        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+
+        $cases = [
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Modrinth->value, 'optimized', 'https://modrinth.com/modpack/fabulously-optimized', 2],
+            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::Modrinth->value, 'optimized', 'https://modrinth.com/modpack/fabulously-optimized', 2],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::CurseForge->value, 'All the Mods', 'https://www.curseforge.com/minecraft/modpacks/all-the-mods-10', 1],
+            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::CurseForge->value, 'All the Mods', 'https://www.curseforge.com/minecraft/modpacks/all-the-mods-10', 1],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Ftb->value, 'Direwolf', 'https://www.feed-the-beast.com/modpacks/126-ftb-direwolf20', 1],
+            [ModpackCatalogTable::MODE_SERVER, ModpackProvider::Ftb->value, 'Direwolf', 'https://www.feed-the-beast.com/modpacks/126-ftb-direwolf20', 1],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Technic->value, 'Tekkit', 'https://www.technicpack.net/modpack/tekkit-2', 1],
+            [ModpackCatalogTable::MODE_CREATE, ModpackProvider::Atlauncher->value, 'SevTech', 'https://atlauncher.com/pack/SevTechAges', 1],
+        ];
+
+        foreach ($cases as [$mode, $provider, $query, $expectedUrl, $expectedCards]) {
+            $component = Livewire::test(ModpackCatalogTable::class, [
+                'mode' => $mode,
+                'provider' => $provider,
+                'query' => $query,
+                'serverId' => $mode === ModpackCatalogTable::MODE_SERVER ? 10 : null,
+                'targetStatePath' => 'data.mm_project',
+            ]);
+
+            $tileHtml = $component->html();
+            self::assertStringContainsString('fi-ta-content-grid', $tileHtml, "{$mode}/{$provider} should render tile grid");
+            self::assertStringContainsString('data-mmr-view-toggle', $tileHtml, "{$mode}/{$provider} must keep toolbar view-toggle visible even without filters");
+            self::assertStringContainsString('href="'.$expectedUrl.'"', $tileHtml, "{$mode}/{$provider} missing external recordUrl");
+            self::assertStringNotContainsString('modrinth.com/user/', $tileHtml);
+            $this->assertNoNestedAnchors($tileHtml);
+
+            $xpath = $this->xpathFor($tileHtml);
+            self::assertSame(
+                $expectedCards,
+                $xpath->query('//a[contains(concat(" ", normalize-space(@class), " "), " fi-ta-record-content ")]')?->length,
+                "{$mode}/{$provider} card anchor count mismatch",
+            );
+        }
+    }
+
+    public function test_modpack_modal_toggle_syncs_parent_mod_manager_page_both_directions_and_preserves_installed_list(): void
+    {
+        $this->fakeModrinthAndModpackCatalogs();
+        $this->bindStubDaemonFileRepository(includeInstalledMetadata: true);
+        $this->configureServerPanelFor(ProjectType::Mod);
+
+        // Direction 1: parent in 'list' -> modal ModpackCatalogTable toggles to 'panel' -> event syncs parent to 'panel'.
+        session()->flush();
+        $parent = Livewire::test(ModManagerPage::class)->call('loadTable');
+        self::assertSame(CatalogTileColumns::VIEW_LIST, $parent->get('catalogView'));
+        self::assertStringContainsString('fi-ta-table', $parent->html());
+
+        $modal = Livewire::test(ModpackCatalogTable::class, [
+            'mode' => ModpackCatalogTable::MODE_SERVER,
+            'provider' => ModpackProvider::Modrinth->value,
+            'query' => 'optimized',
+            'serverId' => 10,
+            'targetStatePath' => 'mountedActions.0.data.project',
+        ]);
+        $modal->call('toggleCatalogView')
+            ->assertDispatched(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_PANEL);
+        self::assertSame(CatalogTileColumns::VIEW_PANEL, session()->get(CatalogTileColumns::SESSION_KEY));
+
+        $parent->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_PANEL);
+        self::assertSame(CatalogTileColumns::VIEW_PANEL, $parent->get('catalogView'));
+        self::assertStringContainsString('fi-ta-content-grid', $parent->html());
+
+        // Direction 2: parent mounted in 'panel' ($tableColumns === []) -> modal toggles to 'list' -> parent syncs AND recovers toggleable columns.
+        session()->flush();
+        session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+        $panelParent = Livewire::test(ModManagerPage::class)->call('loadTable');
+        self::assertSame(CatalogTileColumns::VIEW_PANEL, $panelParent->get('catalogView'));
+        self::assertSame([], $panelParent->get('tableColumns'));
+
+        $panelModal = Livewire::test(ModpackCatalogTable::class, [
+            'mode' => ModpackCatalogTable::MODE_SERVER,
+            'provider' => ModpackProvider::Modrinth->value,
+            'query' => 'optimized',
+            'serverId' => 10,
+            'targetStatePath' => 'mountedActions.0.data.project',
+        ]);
+        $panelModal->call('toggleCatalogView')
+            ->assertDispatched(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_LIST);
+
+        $panelParent->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_LIST);
+        self::assertSame(CatalogTileColumns::VIEW_LIST, $panelParent->get('catalogView'));
+        $panelParentInstance = $panelParent->instance();
+        assert($panelParentInstance instanceof ModManagerPage);
+        self::assertSame(['icon_url', 'title', 'author', 'downloads', 'date_modified'], array_keys($panelParentInstance->getTable()->getVisibleColumns()));
+        $syncedListHtml = $panelParent->html();
+        self::assertStringContainsString('fi-ta-table', $syncedListHtml);
+        self::assertStringNotContainsString('fi-ta-content-grid', $syncedListHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="author"', $syncedListHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="downloads"', $syncedListHtml);
+        self::assertStringContainsString('data-mmr-swr-cell="date_modified"', $syncedListHtml);
+
+        // Installed tab protection: parent on 'installed' tab stays forced list view on 'panel' sync, then uses 'panel' when switching to catalog tab.
+        session()->flush();
+        $installedParent = Livewire::test(ModManagerPage::class)
+            ->set('activeTab', 'installed')
+            ->call('loadTable');
+        self::assertSame(CatalogTileColumns::VIEW_LIST, $installedParent->get('catalogView'));
+
+        $installedParent->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_PANEL);
+        self::assertSame(CatalogTileColumns::VIEW_PANEL, $installedParent->get('catalogView'));
+        $installedParentInstance = $installedParent->instance();
+        assert($installedParentInstance instanceof ModManagerPage);
+        self::assertFalse($installedParentInstance->getTable()->hasColumnsLayout());
+        self::assertStringContainsString('fi-ta-table', $installedParent->html());
+        self::assertStringNotContainsString('fi-ta-content-grid', $installedParent->html());
+
+        $installedParent->set('activeTab', 'modrinth')->call('loadTable');
+        self::assertStringContainsString('fi-ta-content-grid', $installedParent->html());
+    }
+
+    public function test_sync_catalog_view_event_safely_normalizes_malformed_and_omitted_payloads(): void
+    {
+        $this->fakeModrinthAndModpackCatalogs();
+        $this->bindStubDaemonFileRepository();
+        $this->configureServerPanelFor(ProjectType::Mod);
+
+        // From 'panel' view: null, omitted, and array payloads never throw, normalize to 'list', and recover toggleable columns.
+        foreach (['null', 'omitted', 'array'] as $payloadKind) {
+            session()->flush();
+            session()->put(CatalogTileColumns::SESSION_KEY, CatalogTileColumns::VIEW_PANEL);
+
+            $panelPage = Livewire::test(ModManagerPage::class)->call('loadTable');
+            self::assertSame(CatalogTileColumns::VIEW_PANEL, $panelPage->get('catalogView'));
+            self::assertSame([], $panelPage->get('tableColumns'));
+
+            match ($payloadKind) {
+                'null' => $panelPage->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: null),
+                'omitted' => $panelPage->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT),
+                'array' => $panelPage->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: ['panel']),
+            };
+
+            self::assertSame(CatalogTileColumns::VIEW_LIST, $panelPage->get('catalogView'), "Payload '{$payloadKind}' should normalize to list");
+            $instance = $panelPage->instance();
+            assert($instance instanceof ModManagerPage);
+            self::assertFalse($instance->getTable()->hasColumnsLayout());
+            self::assertSame(
+                ['icon_url', 'title', 'author', 'downloads', 'date_modified'],
+                array_keys($instance->getTable()->getVisibleColumns()),
+                "Payload '{$payloadKind}' should recover all toggleable columns on panel -> list transition",
+            );
+
+            $listHtml = $panelPage->html();
+            self::assertStringContainsString('fi-ta-table', $listHtml);
+            self::assertStringNotContainsString('fi-ta-content-grid', $listHtml);
+            self::assertStringContainsString('data-mmr-swr-cell="author"', $listHtml);
+            self::assertStringContainsString('data-mmr-swr-cell="downloads"', $listHtml);
+            self::assertStringContainsString('data-mmr-swr-cell="date_modified"', $listHtml);
+        }
+
+        // From 'list' view: null, omitted, and array payloads never throw and keep list view and columns intact.
+        session()->flush();
+        $listPage = Livewire::test(ModManagerPage::class)->call('loadTable');
+        $listPage->assertSet('catalogView', CatalogTileColumns::VIEW_LIST);
+
+        $listPage->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: null)
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_LIST);
+        $listPage->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT)
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_LIST);
+        $listPage->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: ['panel'])
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_LIST);
+
+        $listInstance = $listPage->instance();
+        assert($listInstance instanceof ModManagerPage);
+        self::assertSame(CatalogTileColumns::VIEW_LIST, $listInstance->catalogView);
+        self::assertFalse($listInstance->getTable()->hasColumnsLayout());
+        self::assertSame(
+            ['icon_url', 'title', 'author', 'downloads', 'date_modified'],
+            array_keys($listInstance->getTable()->getVisibleColumns()),
+        );
+        self::assertStringContainsString('fi-ta-table', $listPage->html());
+        self::assertStringNotContainsString('fi-ta-content-grid', $listPage->html());
+
+        // Subsequent valid 'panel' event still works normally.
+        $listPage->dispatch(CatalogTileColumns::VIEW_CHANGED_EVENT, view: CatalogTileColumns::VIEW_PANEL)
+            ->assertSet('catalogView', CatalogTileColumns::VIEW_PANEL);
+        self::assertStringContainsString('fi-ta-content-grid', $listPage->html());
+    }
+
+    public function test_managed_curseforge_upload_is_verified_while_the_server_is_installing(): void
+    {
+        require_once __DIR__.'/../Services/ModpackDeploymentTest.php';
+
+        $this->fakeCatalogSources();
+        $this->bindStubDaemonFileRepository();
+        (require dirname(__DIR__, 3).'/database/migrations/2026_11_25_000007_create_mod_manager_provisioning_table.php')->up();
+        DB::table('servers')->where('id', 10)->update(['status' => ServerState::Installing->value, 'skip_scripts' => true]);
+        DB::table('mod_manager_provisioning')->insert([
+            'server_id' => 10, 'state' => ModpackProvisioning::READY, 'installer' => '', 'deadline' => now()->subMinute(),
+        ]);
+        $this->configureServerPanelFor(ProjectType::Mod);
+
+        $path = tempnam(sys_get_temp_dir(), 'cur-forge');
+        $jar = new \ZipArchive();
+        self::assertTrue($jar->open($path, \ZipArchive::OVERWRITE));
+        $jar->addFromString('mod/Main.class', 'fixture');
+        $jar->close();
+        $bytes = file_get_contents($path);
+        unlink($path);
+        $file = new CurseForgeFile(123, 456, filename: 'mod.jar', size: strlen($bytes), hashes: ['sha1' => sha1($bytes)], reason: 'distribution');
+        $queue = app(PluginBackgroundRunner::class);
+        $operations = app(InstalledOperationManager::class);
+        self::assertTrue($operations->dispatchModpackInstall(10, ProjectType::Mod, 'curseforge', '789', '112', ['managed_initial' => true])['dispatched']);
+        $operations->pauseCurseForgeModpack(10, $queue->spawned[0]['payload']['lease_token'], '789', '112',
+            ['managed_initial' => true], [$file->details(true, 'missing_upload')]);
+        $provisioning = app(ModpackProvisioning::class);
+        $leases = app(InstalledOperationLease::class);
+        $provisioning->expireStale($operations, $leases);
+        self::assertSame(ServerState::Installing, Server::query()->findOrFail(10)->status);
+        $token = $operations->waitingCurseForgeModpack(10)['token'];
+        $args = ['token' => $token, 'path' => $file->stagingPath()];
+        $wings = new DeploymentWings();
+        $this->app->instance(WingsRemoteFilesystem::class, $wings);
+
+        $page = Livewire::test(ModManagerPage::class)
+            ->assertSee('Upload JAR')
+            ->assertDontSee('Open server Files');
+        $page->callAction('uploadCurseForgeDependency', data: [
+            'jar' => UploadedFile::fake()->createWithContent('mod.jar', str_repeat('x', strlen($bytes))),
+        ], arguments: $args);
+        self::assertArrayNotHasKey($file->stagingPath(), $wings->files);
+        $page->callAction('uploadCurseForgeDependency', data: [
+            'jar' => UploadedFile::fake()->createWithContent('mod.jar', $bytes),
+        ], arguments: $args);
+        self::assertSame($bytes, $wings->files[$file->stagingPath()] ?? null);
+        self::assertSame(ServerState::Installing, Server::query()->findOrFail(10)->status);
+        $page->call('resumeCurseForgeModpack', $token);
+        $resumed = end($queue->spawned);
+        self::assertSame($token, $resumed['payload']['selection']['manual_token']);
+
+        Event::fake();
+        $this->travel(8)->days();
+        $provisioning->expireStale($operations, $leases);
+        self::assertSame(ServerState::InstallFailed, Server::query()->findOrFail(10)->status);
+    }
+
     private function createTestSchema(): void
     {
         Schema::create('eggs', static function ($table): void {
@@ -487,6 +829,8 @@ final class CatalogViewUnificationTest extends TestCase
             $table->unsignedBigInteger('egg_id')->nullable();
             $table->string('image')->nullable();
             $table->string('startup')->nullable();
+            $table->string('status')->nullable();
+            $table->boolean('skip_scripts')->default(false);
             $table->timestamps();
         });
 
@@ -526,6 +870,8 @@ final class CatalogViewUnificationTest extends TestCase
             $table->boolean('allow_user_project_delete')->nullable();
             $table->timestamps();
         });
+
+        (require dirname(__DIR__, 3).'/database/migrations/2026_11_19_000006_create_mod_manager_modpacks_table.php')->up();
 
         DB::table('eggs')->insert([
             [
@@ -708,6 +1054,116 @@ final class CatalogViewUnificationTest extends TestCase
             'api.curseforge.com/v1/mods' => Http::response(['data' => []]),
             'api.curseforge.com/v1/categories*' => Http::response(['data' => []]),
             'api.curseforge.com/v1/minecraft/version*' => Http::response(['data' => []]),
+            'hangar.papermc.io/*' => Http::response(['result' => [], 'pagination' => ['count' => 0]]),
+            'api.spiget.org/*' => Http::response([]),
+        ]);
+    }
+
+    private function fakeModrinthAndModpackCatalogs(): void
+    {
+        Http::fake([
+            'api.modrinth.com/v2/tag/game_version' => Http::response([
+                ['version' => '1.21.1', 'version_type' => 'release'],
+            ]),
+            'api.modrinth.com/v2/tag/category' => Http::response([]),
+            'api.modrinth.com/v2/tag/loader' => Http::response([]),
+            'api.modrinth.com/v2/search*' => static function ($request) {
+                $url = $request->url();
+                if (str_contains($url, 'modpack')) {
+                    return Http::response([
+                        'hits' => [
+                            [
+                                'project_id' => '1KVo5zza',
+                                'slug' => 'fabulously-optimized',
+                                'title' => 'Fabulously Optimized',
+                                'description' => 'Performance and graphics modpack.',
+                                'icon_url' => null,
+                                'author' => 'robotkoer',
+                                'downloads' => 1234567,
+                                'date_modified' => '2026-10-01T12:00:00Z',
+                                'versions' => ['1.21.1', '1.20.4', '1.20.1'],
+                                'categories' => ['fabric', 'optimization'],
+                            ],
+                            [
+                                'project_id' => '2AbCdEfG',
+                                'slug' => 'simply-optimized',
+                                'title' => 'Simply Optimized',
+                                'description' => 'Minimal performance pack.',
+                                'icon_url' => null,
+                                'author' => 'hypervisor',
+                                'downloads' => 98765,
+                                'date_modified' => '2026-09-15T08:00:00Z',
+                                'versions' => [],
+                                'categories' => [],
+                            ],
+                        ],
+                        'total_hits' => 2,
+                    ]);
+                }
+
+                return Http::response([
+                    'hits' => [[
+                        'project_id' => 'AANobbMI',
+                        'slug' => 'sodium',
+                        'title' => 'Sodium',
+                        'description' => 'Modern rendering engine for Minecraft.',
+                        'icon_url' => null,
+                        'author' => 'jellysquid3',
+                        'downloads' => 50000000,
+                        'date_modified' => '2026-10-01T12:00:00Z',
+                        'versions' => ['1.21.1'],
+                        'categories' => ['fabric'],
+                    ]],
+                    'total_hits' => 1,
+                ]);
+            },
+            'api.modrinth.com/v2/projects*' => Http::response([[
+                'id' => 'AANobbMI',
+                'slug' => 'sodium',
+                'title' => 'Sodium',
+                'description' => 'Modern rendering engine for Minecraft.',
+                'downloads' => 50000000,
+                'updated' => '2026-10-01T12:00:00Z',
+            ]]),
+            'api.curseforge.com/v1/mods/search*' => Http::response([
+                'data' => [[
+                    'id' => 925200,
+                    'slug' => 'all-the-mods-10',
+                    'name' => 'All the Mods 10',
+                    'summary' => 'Kitchen sink pack.',
+                    'authors' => [['name' => 'ATMTeam']],
+                    'downloadCount' => 500000,
+                    'dateModified' => '2026-10-01T12:00:00Z',
+                    'latestFilesIndexes' => [['gameVersion' => '1.21.1', 'modLoader' => 6]],
+                ]],
+                'pagination' => ['totalCount' => 1],
+            ]),
+            'api.curseforge.com/v1/mods' => Http::response(['data' => []]),
+            'api.curseforge.com/v1/categories*' => Http::response(['data' => []]),
+            'api.curseforge.com/v1/minecraft/version*' => Http::response(['data' => []]),
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/search/*' => Http::response(['packs' => [126]]),
+            'api.feed-the-beast.com/v1/modpacks/public/modpack/126' => Http::response([
+                'id' => 126,
+                'name' => 'FTB Direwolf20',
+                'synopsis' => 'Official Direwolf20 pack.',
+                'plays' => 42000,
+                'updated' => 1700000000,
+                'versions' => [[
+                    'id' => 1001,
+                    'name' => '1.0.0',
+                    'updated' => 1700000000,
+                    'targets' => [
+                        ['type' => 'game', 'name' => 'minecraft', 'version' => '1.21.1'],
+                        ['type' => 'modloader', 'name' => 'neoforge', 'version' => '21.1.1'],
+                    ],
+                ]],
+            ]),
+            'api.technicpack.net/search?*' => Http::response([
+                'modpacks' => [['slug' => 'tekkit-2', 'name' => 'Tekkit 2']],
+            ]),
+            'api.atlauncher.com/v1/packs/simple' => Http::response([
+                'data' => [['type' => 'public', 'name' => 'SevTech: Ages', 'safeName' => 'SevTechAges']],
+            ]),
             'hangar.papermc.io/*' => Http::response(['result' => [], 'pagination' => ['count' => 0]]),
             'api.spiget.org/*' => Http::response([]),
         ]);

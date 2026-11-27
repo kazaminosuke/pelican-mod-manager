@@ -55,7 +55,7 @@ final class BackgroundJob
         }
 
         if ($type === self::MODPACK) {
-            return self::executeModpack($payload);
+            return self::executeModpack($payload, $claimEpoch, $heartbeat);
         }
 
         match ($type) {
@@ -130,8 +130,9 @@ final class BackgroundJob
 
     /**
      * @param  array<string, mixed>  $payload
+     * @param  (Closure(): bool)|null  $heartbeat
      */
-    private static function executeModpack(array $payload): ?int
+    private static function executeModpack(array $payload, ?int $claimEpoch = null, ?Closure $heartbeat = null): ?int
     {
         $job = new InstallModpack(
             serverId: self::int($payload, 'server_id'),
@@ -140,7 +141,10 @@ final class BackgroundJob
             projectId: self::string($payload, 'project_id'),
             leaseToken: self::string($payload, 'lease_token'),
             versionId: self::optionalString($payload, 'version_id') ?? '',
-            deferUntil: is_numeric($payload['defer_until'] ?? null) ? (int) $payload['defer_until'] : 0,
+            legacyCreation: (int) ($payload['defer_until'] ?? 0) > 0 && !isset($payload['selection']['manual_token']),
+            selection: is_array($payload['selection'] ?? null) ? $payload['selection'] : null,
+            claimEpoch: $claimEpoch,
+            heartbeat: $heartbeat,
         );
 
         try {

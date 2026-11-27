@@ -317,6 +317,9 @@ class InstalledArchiveTransaction
             'installed_at' => gmdate('c'),
         ];
 
+        if ($type === ProjectType::Mod) {
+            $entry['managed_by'] = 'catalog';
+        }
         if ($author !== null) {
             $entry['author'] = $author;
         }

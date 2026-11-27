@@ -8,11 +8,11 @@ namespace Kazaminosuke\ModManager\Support;
  */
 final class JavaRuntimeImage
 {
-    public static function preferredLabel(?string $minecraftVersion): ?string
+    public static function preferredLabel(?string $minecraftVersion, ?int $minimumJava = null): ?string
     {
-        $required = self::minecraftJava($minecraftVersion);
+        $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
 
-        return $required === null ? null : 'Java '.$required;
+        return $required === 0 ? null : 'Java '.$required;
     }
 
     private static function minecraftJava(?string $minecraftVersion): ?int
@@ -49,7 +49,7 @@ final class JavaRuntimeImage
         return 8;
     }
 
-    private static function maximumJava(?string $minecraftVersion, ?string $loader = null): ?int
+    public static function maximumJava(?string $minecraftVersion, ?string $loader = null): ?int
     {
         $version = strtolower(trim((string) $minecraftVersion));
         if ($version === '' || preg_match('/^(\d+)\.(\d+)(?:\.(\d+))?/', $version, $matches) !== 1) {
@@ -73,6 +73,29 @@ final class JavaRuntimeImage
         return null;
     }
 
+    public static function maximumLabel(?string $minecraftVersion, ?string $loader = null): ?string
+    {
+        $max = self::maximumJava($minecraftVersion, $loader);
+
+        return $max === null ? null : 'Java '.$max;
+    }
+
+    public static function isTooOld(?string $image, ?string $minecraftVersion, ?int $minimumJava = null): bool
+    {
+        $actual = self::imageJava($image);
+        $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
+
+        return $actual === null ? $minimumJava !== null : $actual < $required;
+    }
+
+    public static function isTooNew(?string $image, ?string $minecraftVersion, ?string $loader = null): bool
+    {
+        $actual = self::imageJava($image);
+        $maximum = self::maximumJava($minecraftVersion, $loader);
+
+        return $actual !== null && $maximum !== null && $actual > $maximum;
+    }
+
     private static function imageJava(?string $image): ?int
     {
         return preg_match('~(?:^|[/:])java[_-](\d+)(?:$|[.:_@-])~i', (string) $image, $match) === 1 ? (int) $match[1] : null;
@@ -81,11 +104,11 @@ final class JavaRuntimeImage
     /**
      * @param  array<string, string>  $dockerImages
      */
-    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion, ?string $loader = null): ?string
+    public static function fromEggImages(array $dockerImages, ?string $minecraftVersion, ?int $minimumJava = null, ?string $loader = null): ?string
     {
-        $required = self::minecraftJava($minecraftVersion);
+        $required = max(self::minecraftJava($minecraftVersion) ?? 0, $minimumJava ?? 0);
         $maximum = self::maximumJava($minecraftVersion, $loader);
-        if ($required === null || ($maximum !== null && $required > $maximum)) {
+        if ($required === 0 || ($maximum !== null && $required > $maximum)) {
             return null;
         }
 

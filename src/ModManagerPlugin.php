@@ -30,6 +30,7 @@ use Kazaminosuke\ModManager\Enums\MinecraftLoader;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Filament\Admin\ModpackCreationStep;
 use Kazaminosuke\ModManager\Filament\Admin\ServerModManagerTab;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftDatapackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\MinecraftResourcePackPage;
 use Kazaminosuke\ModManager\Filament\Server\Pages\ModManagerPage;
@@ -55,11 +56,46 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
     public function register(Panel $panel): void
     {
         $id = str($panel->getId())->title();
+        $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
 
         if ($panel->getId() === 'admin') {
             EditServer::registerCustomTabs(TabPosition::After, ServerModManagerTab::make());
             if (class_exists(CreateServer::class) && class_exists(StepPosition::class)) {
                 CreateServer::registerCustomSteps(StepPosition::Before, ModpackCreationStep::step());
+                ModpackCreationStep::configureStartupFields();
+                $panel->renderHook(
+                    TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+                    fn () => view('pelican-mod-manager::components.modpack-provider-select'),
+                    [ModpackCatalogTable::class],
+                );
+                $panel->renderHook(
+                    TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+                    fn () => view('pelican-mod-manager::components.catalog-view-toggle', ['searchFallback' => true]),
+                    [ModpackCatalogTable::class],
+                );
+                $panel->renderHook(
+                    TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
+                    fn () => view('pelican-mod-manager::components.catalog-view-toggle'),
+                    [ModpackCatalogTable::class],
+                );
+                $panel->renderHook(
+                    PanelsRenderHook::HEAD_END,
+                    fn () => new HtmlString(
+                        '<link rel="preconnect" href="https://cdn.modrinth.com" crossorigin>'
+                        .'<link rel="preconnect" href="https://media.forgecdn.net" crossorigin>'
+                        .'<link rel="stylesheet" href="'.e(ModManagerAssets::url('mod-manager.css')).'" data-navigate-track>',
+                    ),
+                    [CreateServer::class],
+                );
+                $panel->renderHook(
+                    PanelsRenderHook::BODY_END,
+                    fn () => new HtmlString(
+                        '<script src="'.e(ModManagerAssets::url('mod-manager-runtime.js')).'"'
+                            .' data-mmr-project-icon-placeholder="'.$projectIconPlaceholder.'" defer data-navigate-once></script>'
+                        .'<script src="'.e(ModManagerAssets::url('table-layout.js')).'" defer data-navigate-once></script>',
+                    ),
+                    [CreateServer::class],
+                );
             }
 
             return;
@@ -91,7 +127,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         // that targets this page's own table chrome must list every
         // concrete page class it needs to appear on.
         $pageClasses = [ModManagerPage::class, MinecraftDatapackPage::class, MinecraftResourcePackPage::class];
-        $projectIconPlaceholder = e(ProjectIconUrl::placeholderDataUri());
+        $tableClasses = [...$pageClasses, ModpackCatalogTable::class];
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
             fn () => view('pelican-mod-manager::components.catalog-sort-select'),
@@ -102,7 +138,12 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_SEARCH_AFTER,
             fn () => view('pelican-mod-manager::components.catalog-view-toggle', ['searchFallback' => true]),
-            $pageClasses,
+            $tableClasses,
+        );
+        $panel->renderHook(
+            TablesRenderHook::TOOLBAR_SEARCH_AFTER,
+            fn () => view('pelican-mod-manager::components.modpack-provider-select'),
+            [ModpackCatalogTable::class],
         );
         // Filament renders this hook inside the same toolbar group, directly
         // before its column-manager trigger. This gives us the required DOM
@@ -110,7 +151,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
         $panel->renderHook(
             TablesRenderHook::TOOLBAR_COLUMN_MANAGER_TRIGGER_BEFORE,
             fn () => view('pelican-mod-manager::components.catalog-view-toggle'),
-            $pageClasses,
+            $tableClasses,
         );
         $panel->renderHook(
             PanelsRenderHook::HEAD_END,

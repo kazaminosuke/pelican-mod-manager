@@ -92,7 +92,13 @@ final class PluginIdentityTest extends TestCase
         $migrations = glob($this->path('database/migrations/*.php'));
 
         self::assertIsArray($migrations);
-        self::assertCount(5, $migrations);
+        self::assertCount(7, $migrations);
+        $inventory = $this->contents('database/migrations/2026_11_19_000006_create_mod_manager_modpacks_table.php');
+        self::assertStringContainsString("'mod_manager_modpacks'", $inventory);
+        self::assertStringContainsString("unsignedInteger('server_id')", $inventory);
+        $provisioning = $this->contents('database/migrations/2026_11_25_000007_create_mod_manager_provisioning_table.php');
+        self::assertStringContainsString("'mod_manager_provisioning'", $provisioning);
+        self::assertStringContainsString("unsignedInteger('server_id')", $provisioning);
 
         $restart = $this->contents(
             'database/migrations/2026_09_21_000003_signal_queue_restart_after_leaving_laravel_queue.php',

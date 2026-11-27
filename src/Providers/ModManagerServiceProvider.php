@@ -2,7 +2,11 @@
 
 namespace Kazaminosuke\ModManager\Providers;
 
+use App\Http\Controllers\Api\Remote\Servers\ServerDetailsController;
+use App\Http\Controllers\Api\Remote\Servers\ServerInstallController;
 use App\Models\Role;
+use App\Services\Servers\ServerCreationService;
+use Filament\Resources\Events\RecordCreated;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\ServiceProvider;
@@ -11,7 +15,12 @@ use Kazaminosuke\ModManager\Console\Commands\ProcessBackgroundJobsCommand;
 use Kazaminosuke\ModManager\Console\Commands\WarmCatalogCacheCommand;
 use Kazaminosuke\ModManager\Contracts\BackgroundJobQueue;
 use Kazaminosuke\ModManager\Contracts\SourceFetchExecutorInterface;
+use Kazaminosuke\ModManager\Filament\Admin\QueueCreatedServerModpack;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
+use Kazaminosuke\ModManager\Http\Controllers\ModpackDaemonInstallController;
+use Kazaminosuke\ModManager\Http\Controllers\ModpackDaemonServerController;
 use Kazaminosuke\ModManager\Repositories\ServerModManagerSettingRepository;
+use Kazaminosuke\ModManager\Services\CreateModpackServer;
 use Kazaminosuke\ModManager\Services\InstalledArchiveTransaction;
 use Kazaminosuke\ModManager\Services\InstalledEggCatalog;
 use Kazaminosuke\ModManager\Services\InstalledMetadataResetService;
@@ -21,6 +30,7 @@ use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\ModManagerDiagnostics;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Services\ModpackProvisioningPlanner;
 use Kazaminosuke\ModManager\Services\ServerEggMigration;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
@@ -44,11 +54,17 @@ use Kazaminosuke\ModManager\Support\SourceCache;
 use Kazaminosuke\ModManager\Support\SourceFetchExecutor;
 use Kazaminosuke\ModManager\Support\WarmRequestThrottle;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
+use Livewire\Livewire;
 
 class ModManagerServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        if (CreateModpackServer::canStageBeforeWings()) {
+            $this->app->bind(ServerCreationService::class, CreateModpackServer::class);
+            $this->app->bind(ServerInstallController::class, ModpackDaemonInstallController::class);
+            $this->app->bind(ServerDetailsController::class, ModpackDaemonServerController::class);
+        }
         $this->app->singleton(SourceFetchExecutorInterface::class, SourceFetchExecutor::class);
         $this->app->singleton(BackgroundJobQueue::class, DatabaseBackgroundJobQueue::class);
 
@@ -122,6 +138,12 @@ class ModManagerServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if ($this->app->bound('livewire')) {
+            Livewire::component('pelican-mod-manager.modpack-catalog-table', ModpackCatalogTable::class);
+        }
+
+        $this->app['events']->listen(RecordCreated::class, QueueCreatedServerModpack::class);
+
         // Pelican's Admin > Roles screen discovers third-party permissions
         // from Role::getPermissionList(). These three are deliberately
         // separate so a role can be allowed to install, update, or delete
@@ -158,6 +180,10 @@ class ModManagerServiceProvider extends ServiceProvider
                 ->everyTenMinutes()
                 ->withoutOverlapping()
                 ->name('mod-manager:warm-catalog');
+            $schedule->call(static fn (ModpackProvisioning $provisioning, InstalledOperationManager $operations, InstalledOperationLease $leases) => $provisioning->expireStale($operations, $leases))
+                ->everyTenMinutes()
+                ->name('mod-manager:expire-provisioning')
+                ->withoutOverlapping();
         });
     }
 }

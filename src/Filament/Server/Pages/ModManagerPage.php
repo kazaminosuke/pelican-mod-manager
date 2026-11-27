@@ -2,18 +2,22 @@
 
 namespace Kazaminosuke\ModManager\Filament\Server\Pages;
 
+use App\Enums\SubuserPermission;
 use App\Filament\Admin\Resources\Plugins\PluginResource;
 use App\Filament\Server\Resources\Files\Pages\ListFiles;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use App\Services\Backups\InitiateBackupService;
 use App\Traits\Filament\BlockAccessInConflict;
 use Exception;
 use Filament\Actions\Action;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\ViewField;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -39,6 +43,7 @@ use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\Indicator;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -51,22 +56,30 @@ use Illuminate\Support\Str;
 use Kazaminosuke\ModManager\Contracts\ProjectSourceInterface;
 use Kazaminosuke\ModManager\Contracts\SourceFetchAuthoritativeInterface;
 use Kazaminosuke\ModManager\Enums\MinecraftLoader;
+use Kazaminosuke\ModManager\Enums\ModpackProvider;
 use Kazaminosuke\ModManager\Enums\ProjectOperation;
 use Kazaminosuke\ModManager\Enums\ProjectSourceKey;
 use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\CurseForgeManualFileException;
 use Kazaminosuke\ModManager\Exceptions\DownloadUnavailableException;
 use Kazaminosuke\ModManager\Exceptions\InstalledOperationBusyException;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Facades\ModManager;
 use Kazaminosuke\ModManager\Filament\Actions\CatalogRowAction;
+use Kazaminosuke\ModManager\Filament\Components\ModpackCatalogTable;
 use Kazaminosuke\ModManager\Filament\Filters\CatalogSelectFilter;
 use Kazaminosuke\ModManager\Jobs\BackgroundJob;
 use Kazaminosuke\ModManager\Jobs\WarmCatalogSearch;
 use Kazaminosuke\ModManager\ModManagerPlugin;
+use Kazaminosuke\ModManager\Services\CurseForgeManualFiles;
 use Kazaminosuke\ModManager\Services\InstalledOperationManager;
 use Kazaminosuke\ModManager\Services\InstalledProjectMutationService;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
+use Kazaminosuke\ModManager\Services\ModpackDeployment;
 use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
+use Kazaminosuke\ModManager\Services\ModpackInventory;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
+use Kazaminosuke\ModManager\Services\ModpackUpdateWorkflow;
 use Kazaminosuke\ModManager\Services\ResourcePackService;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
 use Kazaminosuke\ModManager\Sources\CurseForgeSource;
@@ -77,8 +90,6 @@ use Kazaminosuke\ModManager\Support\CacheVersion;
 use Kazaminosuke\ModManager\Support\CatalogCompatibilityOverride;
 use Kazaminosuke\ModManager\Support\CatalogFields;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
-use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityDisposition;
-use Kazaminosuke\ModManager\Support\Compatibility\CompatibilityResult;
 use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\EggProfileResolver;
 use Kazaminosuke\ModManager\Support\InstalledMetadataIndex;
@@ -94,7 +105,9 @@ use Kazaminosuke\ModManager\Support\ProjectSourceRegistry;
 use Kazaminosuke\ModManager\Support\RequestPerformanceProfiler;
 use Kazaminosuke\ModManager\Support\ServerModManagerSettings;
 use Livewire\Attributes\Locked;
+use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Livewire\WithoutUrlPagination;
 use Throwable;
 
@@ -637,7 +650,22 @@ class ModManagerPage extends Page implements HasTable
 
     private function changeCatalogView(string $view): void
     {
-        $this->catalogView = CatalogTileColumns::storeView($view);
+        $this->syncCatalogView(CatalogTileColumns::storeView($view));
+    }
+
+    #[On(CatalogTileColumns::VIEW_CHANGED_EVENT)]
+    public function syncCatalogView(mixed $view = null): void
+    {
+        $normalized = CatalogTileColumns::normalizeView($view);
+        if ($this->catalogView === $normalized) {
+            return;
+        }
+
+        $wasTileView = $this->isCatalogTileView();
+        $this->catalogView = $normalized;
+        if ($wasTileView === $this->isCatalogTileView()) {
+            return;
+        }
 
         if (isset($this->table)) {
             $this->table = $this->table($this->makeTable());
@@ -4358,92 +4386,60 @@ class ModManagerPage extends Page implements HasTable
 
         return [
             Action::make('install_modpack')
-                ->label(trans('pelican-mod-manager::strings.actions.install_modpack'))
+                ->label(trans('pelican-mod-manager::strings.modpack_updates.choose'))
                 ->icon('tabler-packages')
-                ->modalHeading(trans('pelican-mod-manager::strings.modals.install_modpack_heading'))
-                ->modalDescription(trans('pelican-mod-manager::strings.modals.install_modpack_description'))
-                ->modalSubmitActionLabel(trans('pelican-mod-manager::strings.actions.install'))
+                ->modalWidth(Width::FiveExtraLarge)
+                ->modalHeading(trans('pelican-mod-manager::strings.modpack_updates.choose'))
+                ->modalDescription(trans('pelican-mod-manager::strings.modpack_updates.setup_warning'))
+                ->modalSubmitAction(false)
                 ->schema([
-                    Select::make('project')
-                        ->label(trans('pelican-mod-manager::strings.actions.install_modpack_project'))
-                        ->searchable()
-                        ->required()
-                        ->live()
-                        ->getSearchResultsUsing(function (string $search) use ($server): array {
-                            return app(ModpackCatalog::class)->searchOptions($server, $search);
+                    Hidden::make('provider')
+                        ->default(function () use ($server): string {
+                            $provider = explode(':', $this->currentModpackSelection($server) ?? '', 2)[0];
+
+                            return array_key_exists($provider, app(ModpackCatalog::class)->archiveProviders()) ? $provider : 'modrinth';
                         })
-                        ->getOptionLabelUsing(function ($value) use ($server): ?string {
-                            $options = app(ModpackCatalog::class)->searchOptions($server, (string) $value);
-
-                            return $options[$value] ?? (is_string($value) ? $value : null);
-                        })
-                        ->afterStateUpdated(fn (callable $set) => $set('version', null)),
-                    Select::make('version')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.version'))
-                        ->required()
-                        ->live()
-                        ->visible(fn (Get $get): bool => filled($get('project')))
-                        ->options(fn (Get $get): array => app(ModpackCatalog::class)->versionOptions((string) $get('project'))),
-                    Select::make('target_egg')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.choose_egg'))
-                        ->helperText(trans('pelican-mod-manager::strings.modpacks.choose_egg_helper'))
-                        ->live()
-                        ->visible(function (Get $get) use ($server): bool {
-                            return $this->modpackPreview($server, $get)?->disposition === CompatibilityDisposition::Ambiguous;
-                        })
-                        ->options(function (Get $get) use ($server): array {
-                            $result = $this->modpackPreview($server, $get);
-                            $options = [];
-                            foreach ($result->alternatives ?? [] as $egg) {
-                                $options[(string) $egg->id] = $egg->name.' · '.($egg->profileId ?? $egg->loader ?? 'custom');
-                            }
-
-                            return $options;
-                        }),
-                    TextEntry::make('modpack_plan')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.plan'))
-                        ->visible(fn (Get $get): bool => filled($get('project')) && filled($get('version')))
-                        ->state(function (Get $get) use ($server): string {
-                            $result = $this->modpackPreview($server, $get, $get('target_egg'));
-
-                            return $result === null
-                                ? trans('pelican-mod-manager::strings.modpacks.plan_unavailable')
-                                : $result->reasonDetail;
-                        }),
-                    Checkbox::make('confirm_egg_change')
-                        ->label(trans('pelican-mod-manager::strings.modpacks.confirm_egg_change'))
-                        ->visible(function (Get $get) use ($server): bool {
-                            $result = $this->modpackPreview($server, $get, $get('target_egg'));
-
-                            return $result !== null && $result->requiresConfirmation;
-                        }),
+                        ->dehydrated(false),
+                    Hidden::make('project_title')
+                        ->default(fn () => $this->currentModpackTitle($server))
+                        ->dehydrated(false),
+                    ViewField::make('project')
+                        ->hiddenLabel()
+                        ->view('pelican-mod-manager::components.modpack-catalog-field')
+                        ->viewData(fn (Get $get, ViewField $component): array => $this->modpackCatalogViewData($server, $get, $component))
+                        ->default(fn () => $this->currentModpackSelection($server))
+                        ->required(),
+                    Hidden::make('version')
+                        ->required(),
+                    Hidden::make('confirm_server_compatibility')
+                        ->default(false),
                 ])
                 ->action(function (array $data) use ($server): void {
                     try {
-                        $this->authorizeProjectOperation($server, ProjectOperation::Install);
-                        $outcome = app(ModpackInstallCoordinator::class)->install(
+                        $this->authorizeModpackChange($server);
+                        app(ModpackInstallCoordinator::class)->queuePreview(
                             $server,
                             (string) ($data['project'] ?? ''),
-                            isset($data['version']) ? (string) $data['version'] : null,
-                            isset($data['target_egg']) && $data['target_egg'] !== '' ? $data['target_egg'] : null,
-                            (bool) ($data['confirm_egg_change'] ?? false),
-                            $this->canEditEggProfile($server),
+                            (string) ($data['version'] ?? ''),
+                            (bool) ($data['confirm_server_compatibility'] ?? false),
                         );
-                        if ($outcome['dispatched']) {
-                            $this->notifyInstalledOperationDispatched(['dispatched' => true, 'reason' => null, 'state' => null]);
-                        } else {
-                            Notification::make()
-                                ->title(trans('pelican-mod-manager::strings.modpacks.provision_queued'))
-                                ->body($outcome['message'])
-                                ->success()
-                                ->send();
-                        }
+                        $this->notifyInstalledOperationDispatched([
+                            'dispatched' => true,
+                            'reason' => null,
+                            'state' => $this->refreshInstalledOperationState(),
+                        ]);
+                    } catch (ModpackException $exception) {
+                        Notification::make()
+                            ->title(trans('pelican-mod-manager::strings.notifications.install_failed'))
+                            ->body($exception->getMessage())
+                            ->warning()
+                            ->send();
                     } catch (Exception $exception) {
                         $this->notifyProjectOperationFailure($exception, 'install_failed');
                     }
                 })
                 ->visible(fn () => $type === ProjectType::Mod
-                    && $this->canManageProjectOperation($server, ProjectOperation::Install)),
+                    && $this->canManageModpackChange($server)),
             Action::make('open_folder')
                 ->label(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
                 ->tooltip(fn () => trans('pelican-mod-manager::strings.page.open_folder', ['folder' => $folder]))
@@ -4565,6 +4561,73 @@ class ModManagerPage extends Page implements HasTable
         ];
     }
 
+    private ?array $modpackInventoryForRequest = null;
+
+    public bool $confirmModpackSwitch = false;
+
+    public bool $startAfterModpackUpdate = false;
+
+    private function currentModpack(Server $server): array
+    {
+        return $this->modpackInventoryForRequest ??= (function () use ($server) {
+            $inventory = app(ModpackInventory::class);
+            $state = $inventory->read($server);
+            try {
+                $state['inventory'] ??= $inventory->legacy($server, app(DaemonFileRepository::class));
+            } catch (Throwable) {
+                // Keep the normal Mod/Plugin catalog available while Wings is unreachable.
+                $state['legacy_unavailable'] = true;
+            }
+
+            return $state;
+        })();
+    }
+
+    private function currentModpackSelection(Server $server): ?string
+    {
+        $current = $this->currentModpack($server)['inventory'];
+
+        return $current === null ? null : $current['provider'].':'.$current['pack_id'];
+    }
+
+    private function currentModpackTitle(Server $server): ?string
+    {
+        $current = $this->currentModpack($server)['inventory'];
+        if ($current === null) {
+            return null;
+        }
+
+        $name = trim((string) ($current['name'] ?? ''));
+
+        return $name !== '' ? $name : $current['pack_id'];
+    }
+
+    public function selectModpackRelease(
+        string $projectKey,
+        string $title,
+        string $versionId,
+        bool $confirmCompatibility = false,
+    ): void {
+        $mountedIndex = null;
+        foreach ($this->mountedActions as $index => $action) {
+            if (($action['name'] ?? null) === 'install_modpack') {
+                $mountedIndex = $index;
+                break;
+            }
+        }
+
+        if ($mountedIndex === null) {
+            return;
+        }
+
+        $this->mountedActions[$mountedIndex]['data']['project'] = $projectKey;
+        $this->mountedActions[$mountedIndex]['data']['project_title'] = $title;
+        $this->mountedActions[$mountedIndex]['data']['version'] = $versionId;
+        $this->mountedActions[$mountedIndex]['data']['confirm_server_compatibility'] = $confirmCompatibility;
+
+        $this->callMountedAction();
+    }
+
     protected function isInstalledScanInProgress(): bool
     {
         if (is_array($this->installedOperation)
@@ -4663,24 +4726,255 @@ class ModManagerPage extends Page implements HasTable
     }
 
     /** @return array<string, mixed> */
-    private function modpackPreview(Server $server, Get $get, mixed $explicitEggId = null): ?CompatibilityResult
+    private function modpackCatalogViewData(Server $server, Get $get, ViewField $component): array
     {
-        $project = (string) $get('project');
-        $version = $get('version');
-        if ($project === '' || $version === null || $version === '') {
-            return null;
+        $provider = ModpackProvider::tryFrom((string) $get('provider')) ?? ModpackProvider::Modrinth;
+        $serverKey = $server->getKey();
+        $selectedVersion = $get('version');
+
+        return [
+            'mode' => ModpackCatalogTable::MODE_SERVER,
+            'provider' => $provider->value,
+            'query' => '',
+            'minecraft' => null,
+            'loader' => null,
+            'serverId' => is_numeric($serverKey) ? (int) $serverKey : null,
+            'selectedVersion' => is_scalar($selectedVersion) && (string) $selectedVersion !== '' ? (string) $selectedVersion : null,
+            'titleStatePath' => $component->resolveRelativeStatePath('project_title'),
+            'versionStatePath' => $component->resolveRelativeStatePath('version'),
+            'tableKey' => 'server-modpack-'.hash('sha256', serialize([$serverKey, $provider->value])),
+        ];
+    }
+
+    private function modpackPermission(Server $server): ProjectOperation
+    {
+        $current = $this->currentModpack($server);
+
+        return $current['inventory'] === null && !($current['legacy_unavailable'] ?? false) ? ProjectOperation::Install : ProjectOperation::Update;
+    }
+
+    private function canManageModpackChange(Server $server): bool
+    {
+        return $this->canManageProjectOperation($server, $this->modpackPermission($server));
+    }
+
+    private function authorizeModpackChange(Server $server): void
+    {
+        abort_unless(static::detectProjectType($server) === ProjectType::Mod, 403);
+        $this->authorizeProjectOperation($server, $this->modpackPermission($server));
+    }
+
+    protected function modpackUpdatePanel(Server $server): array
+    {
+        $current = $this->currentModpack($server);
+        $workflow = app(ModpackUpdateWorkflow::class);
+        $review = $this->canManageModpackChange($server) ? $workflow->review($server) : null;
+        $state = $review === null ? null : app(InstalledOperationManager::class)
+            ->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        if ($state?->isActive() || app(InstalledOperationManager::class)->waitingCurseForgeModpack($server) !== null) {
+            $review = null;
         }
 
-        try {
-            return app(ModpackInstallCoordinator::class)->preview(
-                $server,
-                $project,
-                (string) $version,
-                is_scalar($explicitEggId) && (string) $explicitEggId !== '' ? $explicitEggId : null,
-            )['result'];
-        } catch (Exception) {
-            return null;
+        return [
+            'current' => $current,
+            'review' => $review,
+            'backup' => $review === null ? null : $workflow->backup($server, $review),
+            'canBackup' => user()->can(SubuserPermission::BackupCreate, $server),
+            'canViewBackups' => user()->can(SubuserPermission::BackupRead, $server),
+            'canStart' => user()->can(SubuserPermission::ControlStart, $server),
+            'canRecover' => $this->canManageModpackChange($server) && (
+                ($current['recovery']['backup'] ?? null) === null || user()->can(SubuserPermission::BackupRestore, $server)
+            ),
+        ];
+    }
+
+    public function createModpackUpdateBackup(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $this->authorizeModpackChange($server);
+        abort_unless(user()->can(SubuserPermission::BackupCreate, $server), 403);
+        $this->runModpackUpdateAction(fn () => app(ModpackUpdateWorkflow::class)->createBackup($server, $token, app(InitiateBackupService::class)));
+    }
+
+    public function applyModpackUpdate(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $this->authorizeModpackChange($server);
+        $actor = null;
+        if ($this->startAfterModpackUpdate) {
+            abort_unless(user()->can(SubuserPermission::ControlStart, $server), 403);
+            $actor = (int) user()->getKey();
         }
+        $this->runModpackUpdateAction(fn () => app(ModpackUpdateWorkflow::class)->approve($server, $token, $this->confirmModpackSwitch, $actor));
+        $this->confirmModpackSwitch = $this->startAfterModpackUpdate = false;
+    }
+
+    public function confirmModpackBackupRestored(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $this->authorizeModpackChange($server);
+        if (($this->currentModpack($server)['recovery']['backup'] ?? null) !== null) {
+            abort_unless(user()->can(SubuserPermission::BackupRestore, $server), 403);
+        }
+        $this->runModpackUpdateAction(fn () => app(ModpackUpdateWorkflow::class)->confirmRestored(
+            $server, $token, app(ModpackDeployment::class), app(DaemonFileRepository::class),
+        ));
+        $this->modpackInventoryForRequest = null;
+    }
+
+    public function cancelModpackUpdate(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        $this->authorizeModpackChange($server);
+        $this->runModpackUpdateAction(fn () => app(ModpackUpdateWorkflow::class)->cancel($server, $token));
+        $this->confirmModpackSwitch = $this->startAfterModpackUpdate = false;
+    }
+
+    private function runModpackUpdateAction(callable $action): void
+    {
+        try {
+            $action();
+        } catch (ModpackException $exception) {
+            Notification::make()->title($exception->getMessage())->warning()->send();
+        } catch (Exception $exception) {
+            $this->notifyProjectOperationFailure($exception, 'install_failed');
+        }
+        $this->refreshInstalledOperationState();
+    }
+
+    /** @return array<string, mixed> */
+    protected function curseForgeManualPanel(Server $server): array
+    {
+        $operations = app(InstalledOperationManager::class);
+        $plan = $operations->waitingCurseForgeModpack($server);
+        $state = $plan === null ? null : $operations->state($server, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
+        $managed = ($plan['selection']['managed_initial'] ?? false) === true;
+
+        return [
+            'plan' => $state?->isActive() ? null : $plan,
+            'failed' => $state?->status === InstalledOperationState::STATUS_FAILED,
+            'managed' => $managed,
+            'canUpload' => $managed && user()->can(SubuserPermission::FileCreate, $server),
+            'filesUrl' => $plan === null || $managed ? '' : ListFiles::getUrl(),
+        ];
+    }
+
+    public function uploadCurseForgeDependencyAction(): Action
+    {
+        $prefix = 'pelican-mod-manager::strings.curseforge_manual.';
+
+        return Action::make('uploadCurseForgeDependency')
+            ->label(trans($prefix.'upload_jar'))
+            ->authorize(function (): bool {
+                $server = Filament::getTenant();
+
+                return $server instanceof Server
+                    && static::detectProjectType($server) === ProjectType::Mod
+                    && app(ModpackProvisioning::class)->acceptsManualFiles($server)
+                    && $this->canManageModpackChange($server)
+                    && user()->can(SubuserPermission::FileCreate, $server);
+            })
+            ->schema([
+                FileUpload::make('jar')->label(trans($prefix.'upload_jar'))
+                    ->storeFiles(false)->maxSize(CurseForgeManualFiles::MAX_FILE_BYTES / 1024)->required(),
+            ])
+            ->action(function (array $data, array $arguments) use ($prefix): void {
+                /** @var Server $server */
+                $server = Filament::getTenant();
+                $file = $data['jar'] ?? null;
+                if (!$file instanceof TemporaryUploadedFile) {
+                    return;
+                }
+
+                try {
+                    $this->stageCurseForgeDependency($server, $file, $arguments);
+                    Notification::make()->title(trans($prefix.'upload_received'))->success()->send();
+                } catch (CurseForgeManualFileException $exception) {
+                    Notification::make()->title(trans($prefix.'reasons.'.$exception->reason))->warning()->send();
+                } catch (ModpackException) {
+                    $this->notifyStaleCurseForgePlan();
+                } catch (Exception $exception) {
+                    $this->notifyProjectOperationFailure($exception, 'install_failed');
+                }
+            });
+    }
+
+    /** @param array<string, mixed> $arguments */
+    private function stageCurseForgeDependency(Server $server, TemporaryUploadedFile $upload, array $arguments): void
+    {
+        $leases = app(InstalledOperationLease::class);
+        $id = $server->getKey();
+        $lease = $leases->tryAcquire($id, ProjectType::Mod, InstalledOperationLease::OPERATION_MODPACK)
+            ?? throw new InstalledOperationBusyException();
+        try {
+            $plan = app(InstalledOperationManager::class)->waitingCurseForgeModpack($server);
+            $token = $arguments['token'] ?? null;
+            $path = $arguments['path'] ?? null;
+            $fresh = $server->fresh();
+            if ($fresh === null || !app(ModpackProvisioning::class)->acceptsManualFiles($fresh)
+                || ($plan['selection']['managed_initial'] ?? false) !== true
+                || !is_string($token) || !hash_equals($plan['token'], $token) || !is_string($path)) {
+                throw new ModpackException('The pending modpack is unavailable.');
+            }
+
+            $details = collect($plan['files'])->firstWhere('staging_path', $path);
+            if ($details === null) {
+                throw new ModpackException('The requested file is not pending.');
+            }
+            $file = new CurseForgeFile(
+                projectId: $details['project_id'], fileId: $details['file_id'], filename: $details['filename'],
+                size: $details['size'], hashes: $details['hashes'], reason: 'distribution',
+            );
+            $source = $upload->readStream();
+            if (!is_resource($source)) {
+                throw new CurseForgeManualFileException($file, 'storage_error');
+            }
+            $stream = Utils::streamFor($source);
+            try {
+                app(CurseForgeManualFiles::class)->stageUpload($fresh, app(DaemonFileRepository::class), $file, $stream, $upload->getSize());
+            } finally {
+                $stream->close();
+            }
+        } finally {
+            $leases->release($id, ProjectType::Mod, $lease);
+        }
+    }
+
+    public function resumeCurseForgeModpack(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        abort_unless(static::detectProjectType($server) === ProjectType::Mod, 403);
+        $this->authorizeModpackChange($server);
+        $dispatched = app(InstalledOperationManager::class)->resumeCurseForgeModpack($server, $token);
+        $this->refreshInstalledOperationState();
+        if (!$dispatched) {
+            $this->notifyStaleCurseForgePlan();
+        }
+    }
+
+    public function cancelCurseForgeModpack(string $token): void
+    {
+        /** @var Server $server */
+        $server = Filament::getTenant();
+        abort_unless(static::detectProjectType($server) === ProjectType::Mod, 403);
+        $this->authorizeModpackChange($server);
+        if (!app(InstalledOperationManager::class)->cancelCurseForgeModpack($server, $token)) {
+            $this->notifyStaleCurseForgePlan();
+        }
+        $this->refreshInstalledOperationState();
+    }
+
+    private function notifyStaleCurseForgePlan(): void
+    {
+        Notification::make()
+            ->title(trans('pelican-mod-manager::strings.curseforge_manual.retry_unavailable'))
+            ->warning()
+            ->send();
     }
 
     public function content(Schema $schema): Schema
@@ -4755,6 +5049,12 @@ class ModManagerPage extends Page implements HasTable
                             ->size(TextSize::Large),
                     ]),
                 $this->getTabsContentComponent(),
+                View::make('pelican-mod-manager::components.modpack-update')
+                    ->visible(fn (): bool => $type === ProjectType::Mod)
+                    ->viewData(fn (): array => $this->modpackUpdatePanel($server)),
+                View::make('pelican-mod-manager::components.curseforge-manual')
+                    ->visible(fn (): bool => $type === ProjectType::Mod && $this->canManageModpackChange($server))
+                    ->viewData(fn (): array => $this->curseForgeManualPanel($server)),
                 Section::make()
                     ->extraAttributes(fn () => $this->installedOperationStatusExtraAttributes())
                     ->schema([
@@ -4958,7 +5258,13 @@ class ModManagerPage extends Page implements HasTable
 
         /** @var Server $server */
         $server = Filament::getTenant();
-        app(InstalledOperationManager::class)->forget(
+        $operations = app(InstalledOperationManager::class);
+        if ($state->operation === InstalledOperationManager::OPERATION_MODPACK
+            && $state->status === InstalledOperationState::STATUS_FAILED
+            && $operations->waitingCurseForgeModpack($server) !== null) {
+            return;
+        }
+        $operations->forget(
             $server,
             $state->projectType,
             $state->operation,
@@ -5024,6 +5330,12 @@ class ModManagerPage extends Page implements HasTable
                 $this->flushCachedTableRecords();
             }
 
+            $this->pollInstalledOperations = false;
+
+            return;
+        }
+
+        if (in_array($state->status, [InstalledOperationState::STATUS_WAITING_FILES, InstalledOperationState::STATUS_WAITING_REVIEW], true)) {
             $this->pollInstalledOperations = false;
 
             return;
@@ -5165,14 +5477,20 @@ class ModManagerPage extends Page implements HasTable
             $modpackState = $fetched[InstalledOperationManager::OPERATION_MODPACK];
         }
 
-        if ($modpackState?->isActive()) {
+        // A catalog-triggered scan must not hide a user-requested modpack
+        // result or the transition back to waiting after file validation.
+        if ($modpackState !== null && ($modpackState->isActive()
+            || ($modpackState->isFinished() && $this->shouldPollInstalledOperation($modpackState)))) {
             $this->setInstalledOperationState($modpackState);
 
             return $modpackState;
         }
 
-        // Scan and bulk update are mutually exclusive. The common active
-        // scan path therefore needs only the already-fetched scan state.
+        // Waiting Modpack actions have their own panels and do not drive polling.
+        if ($modpackState !== null && !$modpackState->isActive() && !$modpackState->isFinished()) {
+            $modpackState = null;
+        }
+        // Scan and bulk update are mutually exclusive.
         if ($scanState?->isActive()) {
             $this->setInstalledOperationState($scanState);
 
@@ -5344,6 +5662,9 @@ class ModManagerPage extends Page implements HasTable
         if ($state->isActive()) {
             return true;
         }
+        if (in_array($state->status, [InstalledOperationState::STATUS_WAITING_FILES, InstalledOperationState::STATUS_WAITING_REVIEW], true)) {
+            return false;
+        }
 
         return $this->handledInstalledOperation !== $state->operation.':'.($state->finishedAt ?? '');
     }
@@ -5371,6 +5692,12 @@ class ModManagerPage extends Page implements HasTable
 
         $operation = $this->installedOperationLabel((string) ($installedOperation['operation'] ?? ''));
         $status = $installedOperation['status'] ?? null;
+        $phase = $installedOperation['result']['phase'] ?? null;
+        if ($status === InstalledOperationState::STATUS_RUNNING
+            && ($installedOperation['operation'] ?? null) === InstalledOperationManager::OPERATION_MODPACK
+            && in_array($phase, ['resuming', 'loader', 'downloading', 'verifying', 'installing'], true)) {
+            return trans('pelican-mod-manager::strings.modpacks.phases.'.$phase);
+        }
         $progress = (int) ($installedOperation['progress'] ?? 0);
         $total = $installedOperation['total'] ?? null;
 
@@ -5398,6 +5725,9 @@ class ModManagerPage extends Page implements HasTable
                 ->title(trans('pelican-mod-manager::strings.operations.failed', [
                     'operation' => $this->installedOperationLabel($state->operation),
                 ]))
+                ->body($state->operation === InstalledOperationManager::OPERATION_MODPACK
+                    && in_array($state->error, ['modpack_rejected', 'server_install_unfinished'], true)
+                    ? ($state->result['message'] ?? null) : null)
                 ->danger()
                 ->send();
 
@@ -5407,16 +5737,37 @@ class ModManagerPage extends Page implements HasTable
         if ($state->operation === InstalledOperationManager::OPERATION_MODPACK) {
             $installed = (int) ($state->result['installed'] ?? 0);
             $skipped = (int) ($state->result['skipped'] ?? 0);
-            Notification::make()
-                ->title(trans('pelican-mod-manager::strings.notifications.modpack_install_success'))
-                ->body(trans('pelican-mod-manager::strings.notifications.modpack_install_success_body', [
-                    'name' => (string) ($state->result['name'] ?? ''),
-                    'version' => (string) ($state->result['version'] ?? ''),
-                    'installed' => $installed,
-                    'skipped' => $skipped,
-                ]))
-                ->success()
-                ->send();
+            $optionalUnavailable = [];
+            foreach ($state->result['warnings'] ?? [] as $warning) {
+                if (is_string($warning) && preg_match('~^unavailable:([0-9]+/[0-9]+):[a-z_]+$~D', $warning, $match) === 1) {
+                    $optionalUnavailable[] = $match[1];
+                }
+            }
+            $body = trans('pelican-mod-manager::strings.notifications.modpack_install_success_body', [
+                'name' => (string) ($state->result['name'] ?? ''),
+                'version' => (string) ($state->result['version'] ?? ''),
+                'installed' => $installed,
+                'skipped' => $skipped,
+            ]);
+            $notification = Notification::make()->title(trans('pelican-mod-manager::strings.notifications.modpack_install_success'));
+            if ($optionalUnavailable !== []) {
+                $body .= ' '.trans('pelican-mod-manager::strings.curseforge_manual.optional_skipped', [
+                    'files' => implode(', ', array_unique($optionalUnavailable)),
+                ]);
+                $notification->warning();
+            } else {
+                $notification->success();
+            }
+            if (isset($state->result['mods']) && is_array($state->result['mods'])) {
+                $body .= ' '.trans('pelican-mod-manager::strings.modpack_updates.result', [
+                    'removed' => $state->result['mods']['delete'] ?? 0, 'conflicts' => $state->result['mods']['conflict'] ?? 0,
+                ]);
+            }
+            if (in_array('power-start-failed', $state->result['warnings'] ?? [], true)) {
+                $body .= ' '.trans('pelican-mod-manager::strings.modpack_updates.start_failed');
+                $notification->warning();
+            }
+            $notification->body($body)->send();
 
             return;
         }

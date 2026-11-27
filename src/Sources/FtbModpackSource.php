@@ -7,12 +7,14 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Kazaminosuke\ModManager\Enums\ModpackProvider;
+use Kazaminosuke\ModManager\Exceptions\ModpackException;
+use Kazaminosuke\ModManager\Support\Modpacks\FtbReleaseManifest;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDescriptor;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use Kazaminosuke\ModManager\Support\UpstreamHttp;
 
 /**
- * Public FTB catalog for packs installed by the existing FTB Server Egg.
+ * Public FTB catalog and fixed-release manifests used by the managed installer.
  */
 final class FtbModpackSource
 {
@@ -144,7 +146,12 @@ final class FtbModpackSource
             return null;
         }
 
-        return $this->descriptor($pack, $selected);
+        return $this->descriptor($pack, $selected, $versionId !== null && $versionId !== '');
+    }
+
+    public static function releaseUrl(string $packId, string $versionId): ?string
+    {
+        return self::isId($packId) && self::isId($versionId) ? self::PACK.$packId.'/'.$versionId : null;
     }
 
     private static function isId(mixed $value): bool
@@ -212,11 +219,38 @@ final class FtbModpackSource
      * @param  array<string, mixed>  $pack
      * @param  array<string, mixed>  $version
      */
-    private function descriptor(array $pack, array $version): ModpackDescriptor
+    private function descriptor(array $pack, array $version, bool $inspect = false): ModpackDescriptor
     {
         [$loader, $loaderVersion, $minecraft] = $this->targets($version);
-        $id = (string) (int) $pack['id'];
-        $versionId = (string) (int) $version['id'];
+        $id = (string) $pack['id'];
+        $versionId = (string) $version['id'];
+        $url = self::releaseUrl($id, $versionId);
+        $manifest = null;
+        $unsupported = null;
+        if ($inspect && $url !== null) {
+            try {
+                $response = UpstreamHttp::json()->timeout(12)->connectTimeout(3)
+                    ->withOptions(['allow_redirects' => ['protocols' => ['https']]])
+                    ->get($url)->throw();
+                $manifest = FtbReleaseManifest::read($response->body(), $id, $versionId);
+            } catch (ModpackException $exception) {
+                $unsupported = $exception->getMessage();
+            } catch (Throwable $exception) {
+                report($exception);
+                $unsupported = trans('pelican-mod-manager::strings.modpacks.ftb_manifest_unavailable');
+            }
+        }
+
+        $synopsis = trim((string) ($pack['synopsis'] ?? ''));
+        $downloads = isset($pack['plays']) && is_numeric($pack['plays'])
+            ? (int) $pack['plays']
+            : (isset($pack['installs']) && is_numeric($pack['installs']) ? (int) $pack['installs'] : null);
+        $updated = isset($pack['updated']) && is_numeric($pack['updated']) && (int) $pack['updated'] > 0
+            ? gmdate('c', (int) $pack['updated'])
+            : null;
+        $author = is_string($pack['authors'][0]['name'] ?? null) && trim($pack['authors'][0]['name']) !== ''
+            ? trim($pack['authors'][0]['name'])
+            : null;
 
         return new ModpackDescriptor(
             provider: ModpackProvider::Ftb->value,
@@ -224,19 +258,22 @@ final class FtbModpackSource
             title: (string) ($pack['name'] ?? $id),
             versionId: $versionId,
             versionName: (string) ($version['name'] ?? $versionId),
-            minecraftVersion: $minecraft,
-            loader: $loader,
-            loaderVersion: $loaderVersion,
+            minecraftVersion: $manifest?->minecraftVersion ?? $minecraft,
+            loader: $manifest?->loader ?? $loader,
+            loaderVersion: $manifest?->loaderVersion ?? $loaderVersion,
             iconUrl: $this->icon($pack),
-            provisioningProfileId: 'ftb-server',
-            variables: [
-                'FTB_MODPACK_ID' => $id,
-                'FTB_MODPACK_VERSION_ID' => $versionId,
-                'FTB_SEARCH_TERM' => '',
-                'FTB_VERSION_STRING' => '',
-            ],
-            archiveAllowed: false,
-            unsupportedReason: null,
+            provisioningProfileId: null,
+            variables: [],
+            archiveAllowed: $manifest !== null,
+            unsupportedReason: $unsupported,
+            downloadUrl: $manifest === null ? null : $url,
+            artifactId: $manifest === null ? null : $versionId,
+            minimumJava: $manifest?->minimumJava,
+            manifestFingerprint: $manifest === null ? null : FtbReleaseManifest::fingerprint($manifest),
+            description: $synopsis !== '' ? $synopsis : null,
+            downloads: $downloads,
+            dateModified: $updated,
+            author: $author,
         );
     }
 

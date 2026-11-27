@@ -58,58 +58,40 @@ final class ModpackFileSelector
         return null;
     }
 
-    /**
-     * @param  list<mixed>  $files  CurseForge file payloads
-     * @return array<string, mixed>|null the zip to download, or a lookup stub when the server pack is not on this page
-     */
-    public static function curseForgeServerPack(array $files): ?array
+    /** @param  array<string, mixed>  $file */
+    public static function isCurseForgeAdditionalFile(array $file): bool
     {
-        $zips = [];
-        foreach ($files as $file) {
-            if (!is_array($file)) {
-                continue;
-            }
-
-            $name = strtolower((string) ($file['fileName'] ?? ''));
-            if ($name !== '' && str_ends_with($name, '.zip')) {
-                $zips[] = $file;
-            }
-        }
-
-        if ($zips === []) {
-            return null;
-        }
-
-        usort($zips, static function (array $left, array $right): int {
-            return strcmp((string) ($right['fileDate'] ?? ''), (string) ($left['fileDate'] ?? ''));
-        });
-
-        foreach ($zips as $file) {
-            if (($file['isServerPack'] ?? false) === true && self::httpsUrl($file['downloadUrl'] ?? null) !== null) {
-                return $file;
-            }
-        }
-
-        $newest = $zips[0];
-        $serverPackId = is_numeric($newest['serverPackFileId'] ?? null) ? (int) $newest['serverPackFileId'] : 0;
-        if ($serverPackId > 0) {
-            foreach ($zips as $file) {
-                if ((int) ($file['id'] ?? 0) === $serverPackId && self::httpsUrl($file['downloadUrl'] ?? null) !== null) {
-                    return $file;
-                }
-            }
-
-            return [
-                'id' => $serverPackId,
-                'lookup' => true,
-            ];
-        }
-
-        return self::httpsUrl($newest['downloadUrl'] ?? null) !== null ? $newest : null;
+        return ($file['isServerPack'] ?? false) === true || (int) ($file['parentProjectFileId'] ?? 0) > 0;
     }
 
-    private static function httpsUrl(mixed $url): ?string
+    /**
+     * @param  list<mixed>  $files
+     * @return list<array<string, mixed>>
+     */
+    public static function curseForgeZips(array $files): array
     {
-        return ModpackPaths::isSafeHttpsDownloadUrl($url) ? $url : null;
+        $zips = array_values(array_filter($files, static fn (mixed $file): bool => is_array($file)
+            && (int) ($file['id'] ?? 0) > 0
+            && str_ends_with(strtolower((string) ($file['fileName'] ?? '')), '.zip')));
+        usort($zips, static fn (array $left, array $right): int => strcmp((string) ($right['fileDate'] ?? ''), (string) ($left['fileDate'] ?? '')));
+
+        return $zips;
+    }
+
+    /**
+     * @param  array<string, mixed>  $release
+     * @param  array<string, mixed>  $candidate
+     */
+    public static function isCurseForgeServerPackFor(array $release, array $candidate): bool
+    {
+        $id = (int) ($candidate['id'] ?? 0);
+        $releaseId = (int) ($release['id'] ?? 0);
+        $parent = (int) ($candidate['parentProjectFileId'] ?? 0);
+        if ($id <= 0 || $releaseId <= 0 || $id === $releaseId || ($parent > 0 && $parent !== $releaseId)) {
+            return false;
+        }
+
+        return (int) ($release['serverPackFileId'] ?? 0) === $id
+            || ($parent === $releaseId && ($candidate['isServerPack'] ?? false) === true);
     }
 }

@@ -22,6 +22,7 @@ final class ClassifiedEgg
         public readonly string $matchSource,
         public readonly string $confidence,
         public readonly bool $contradicts,
+        public readonly ?array $variableNames = null,
     ) {}
 
     public function isSelectable(): bool

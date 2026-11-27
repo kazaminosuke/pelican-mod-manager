@@ -132,7 +132,7 @@ final class TechnicModpackSource
         [$matched, $version] = $binding;
         // The public endpoint exposes only the currently recommended server
         // archive. If it changed since selection, ask the operator to reselect.
-        if ($versionId !== null && $versionId !== '' && $versionId !== 'recommended' && $versionId !== $version) {
+        if ($versionId !== null && $versionId !== '' && $versionId !== $version) {
             return null;
         }
 

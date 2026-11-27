@@ -31,4 +31,22 @@ final readonly class CurseForgeFile
     {
         return self::STAGING_DIRECTORY."/{$this->projectId}-{$this->fileId}.jar";
     }
+
+    /** @return array<string, mixed> */
+    public function details(bool $required, ?string $reason = null): array
+    {
+        return [
+            'project_id' => $this->projectId,
+            'file_id' => $this->fileId,
+            'filename' => $this->filename,
+            'name' => $this->name,
+            'size' => $this->size,
+            'hashes' => $this->hashes,
+            'page' => $this->page,
+            'required' => $required,
+            'automatic' => $this->url !== null,
+            'reason' => $reason ?? $this->reason,
+            'staging_path' => $this->canUpload() ? $this->stagingPath() : null,
+        ];
+    }
 }

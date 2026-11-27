@@ -3,7 +3,7 @@
     $hasTriggerGroup = $table->isFilterable() || $table->hasColumnManager();
 @endphp
 
-@unless ($this->activeTab === 'installed' || (($searchFallback ?? false) && $hasTriggerGroup))
+@unless (($this->activeTab ?? null) === 'installed' || (($searchFallback ?? false) && $hasTriggerGroup))
     @php
         $isPanelView = $this->catalogView === \Kazaminosuke\ModManager\Support\CatalogTileColumns::VIEW_PANEL;
         $label = trans('pelican-mod-manager::strings.table.view.'.($isPanelView ? 'switch_to_list' : 'switch_to_panel'));

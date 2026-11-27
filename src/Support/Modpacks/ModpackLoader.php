@@ -20,4 +20,98 @@ final class ModpackLoader
             default => null,
         };
     }
+
+    /** Check the existing Egg's pinned startup variable against the selected release. */
+    public static function hasBuild(string $loader, string $build, ?string $minecraft, array $variables): bool
+    {
+        return self::matchesBuild($loader, $build, (string) ($variables[self::buildVariable($loader)] ?? ''), $minecraft);
+    }
+
+    public static function buildVariable(string $loader): string
+    {
+        return $loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($loader).'_VERSION';
+    }
+
+    /** @param array<string, mixed> $variables */
+    public static function fixedMinecraftVersion(array $variables): ?string
+    {
+        $short = $variables['MC_VERSION'] ?? null;
+        $long = $variables['MINECRAFT_VERSION'] ?? null;
+        if ($short !== null && $long !== null && $short !== $long) {
+            return null;
+        }
+
+        $version = $short ?? $long;
+
+        return is_string($version) && preg_match('/^[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]{1,3})?$/D', $version) === 1 ? $version : null;
+    }
+
+    public static function usesArgumentFile(string $loader, string $minecraft): bool
+    {
+        return $loader === 'neoforge' || ($loader === 'forge' && version_compare($minecraft, '1.17', '>='));
+    }
+
+    public static function forgeMavenPath(string $loader, string $minecraft): string
+    {
+        if ($loader === 'forge') {
+            return 'net/minecraftforge/forge';
+        }
+
+        return $minecraft === '1.20.1' ? 'net/neoforged/forge' : 'net/neoforged/neoforge';
+    }
+
+    /**
+     * Format a loader build for the official Pelican Egg variable.
+     */
+    public static function pinBuild(string $loader, string $build, ?string $minecraft): string
+    {
+        if ($minecraft === null) {
+            return $build;
+        }
+
+        if ($loader === 'forge' && !str_contains($build, '-')) {
+            // The official Forge Egg uses a full Maven version when FORGE_VERSION is set.
+            $coordinate = $minecraft.'-'.$build;
+
+            return in_array($minecraft, ['1.7.10', '1.8.9'], true)
+                ? $coordinate.'-'.$minecraft
+                : $coordinate;
+        }
+
+        if ($loader === 'neoforge' && $minecraft === '1.20.1' && !str_starts_with($build, '1.20.1-')) {
+            // Official NeoForge Egg switches to net/neoforged/forge only when 1.20.1- is prefixed.
+            return '1.20.1-'.$build;
+        }
+
+        return $build;
+    }
+
+    public static function matchesBuild(string $loader, string $build, string $actual, ?string $minecraft): bool
+    {
+        if ($actual === $build) {
+            return true;
+        }
+        if ($minecraft === null) {
+            return false;
+        }
+        if ($loader === 'neoforge' && $minecraft === '1.20.1') {
+            $strip = static fn (string $value): string => str_starts_with($value, '1.20.1-')
+                ? substr($value, strlen('1.20.1-'))
+                : $value;
+
+            return $strip($actual) === $strip($build);
+        }
+        if ($loader !== 'forge') {
+            return false;
+        }
+        $normalizeForge = static function (string $value) use ($minecraft): string {
+            if (str_starts_with($value, $minecraft.'-')) {
+                $value = substr($value, strlen($minecraft) + 1);
+            }
+
+            return str_ends_with($value, '-'.$minecraft) ? substr($value, 0, -strlen($minecraft) - 1) : $value;
+        };
+
+        return $normalizeForge($actual) === $normalizeForge($build);
+    }
 }

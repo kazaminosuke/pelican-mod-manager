@@ -151,6 +151,56 @@ class CurseForgeSourceResourcePackDistributionTest extends TestCase
             [429, 'api_rate_limited'], [500, 'api_error'], [0, 'api_timeout']];
     }
 
+    public function test_exact_dependency_metadata_preserves_downloadable_and_restricted_file_ids(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.curseforge.com/v1/mods/files' => Http::response(['data' => [
+                ['id' => 2693547, 'modId' => 264231, 'fileName' => 'iceandfire.jar', 'fileLength' => 54,
+                    'downloadUrl' => null, 'hashes' => [['algo' => 1, 'value' => str_repeat('A', 40)]]],
+                ['id' => 3043174, 'modId' => 238222, 'fileName' => 'jei.jar', 'downloadUrl' => 'https://edge.forgecdn.net/jei.jar'],
+                ['id' => 12345, 'modId' => 345678, 'fileName' => 'missing-url.jar'],
+            ]]),
+            'https://api.curseforge.com/v1/mods' => Http::response(['data' => [
+                ['id' => 264231, 'name' => 'Ice and Fire: Dragons', 'allowModDistribution' => false,
+                    'links' => ['websiteUrl' => 'https://www.curseforge.com/minecraft/mc-mods/ice-and-fire-dragons']],
+            ]]),
+            'https://api.curseforge.com/v1/mods/345678/files/12345/download-url' => Http::response(['data' => 'https://edge.forgecdn.net/missing-url.jar']),
+        ]);
+
+        $files = $this->source()->dependencyFiles([
+            ['project_id' => 264231, 'file_id' => 2693547],
+            ['project_id' => 238222, 'file_id' => 3043174],
+            ['project_id' => 9999, 'file_id' => 2693547],
+            ['project_id' => 345678, 'file_id' => 12345],
+        ]);
+
+        $manual = $files['264231/2693547'];
+        self::assertTrue($manual->canUpload());
+        self::assertSame('Ice and Fire: Dragons', $manual->name);
+        self::assertSame(['sha1' => str_repeat('a', 40)], $manual->hashes);
+        self::assertSame(54, $manual->size);
+        self::assertNull($manual->url);
+        self::assertSame('https://www.curseforge.com/minecraft/mc-mods/ice-and-fire-dragons/files/2693547', $manual->page);
+        self::assertSame('https://edge.forgecdn.net/jei.jar', $files['238222/3043174']->url);
+        self::assertSame('metadata_mismatch', $files['9999/2693547']->reason);
+        self::assertSame('https://edge.forgecdn.net/missing-url.jar', $files['345678/12345']->url);
+        Http::assertSentCount(3);
+    }
+
+    #[DataProvider('dependencyApiErrors')]
+    public function test_dependency_api_errors_are_distinct_from_distribution_policy(int $status, string $reason): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(['https://api.curseforge.com/v1/mods/264231/files/2693547' => $status === 0
+            ? Http::failedConnection('timed out') : Http::response([], $status)]);
+
+        $file = $this->source()->dependencyFiles([['project_id' => 264231, 'file_id' => 2693547]])['264231/2693547'];
+
+        self::assertSame($reason, $file->reason);
+        self::assertFalse($file->canUpload());
+    }
+
     private function source(): CurseForgeSource
     {
         $cache = new LaravelCacheRepository(new ArrayStore());

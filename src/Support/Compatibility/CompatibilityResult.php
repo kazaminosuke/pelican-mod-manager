@@ -24,6 +24,11 @@ final class CompatibilityResult
         public readonly ?string $minecraftVersion,
         public readonly ?string $loader,
         public readonly string $provider,
+        public readonly ?string $compatibilityWarning = null,
+        public readonly ?string $serverFileStatus = null,
+        public readonly ?string $artifactId = null,
+        public readonly ?int $minimumJava = null,
+        public readonly ?string $manifestFingerprint = null,
     ) {}
 
     /**

@@ -171,6 +171,7 @@ final class ModManagerBrowserAssetsTest extends TestCase
     {
         $root = dirname(__DIR__, 3);
         $page = (string) file_get_contents($root.'/src/Filament/Server/Pages/ModManagerPage.php');
+        $tableClass = (string) file_get_contents($root.'/src/Filament/Components/ModpackCatalogTable.php');
         $tileBuilder = (string) file_get_contents($root.'/src/Support/CatalogTileColumns.php');
         $css = $this->asset('mod-manager.css');
 
@@ -207,10 +208,13 @@ final class ModManagerBrowserAssetsTest extends TestCase
         self::assertStringContainsString('.fi-ta-split.mmr-tile-stat-values{gap:.75rem;white-space:nowrap;', $css);
         self::assertSame(3, substr_count($tileBuilder, '->toggleable()'));
 
-        // The page delegates view persistence to CatalogTileColumns and builds its grid lazily.
+        // Both catalogs centralize view persistence in CatalogTileColumns and use closure contentGrid().
         self::assertStringContainsString('CatalogTileColumns::storeView(', $page);
+        self::assertStringContainsString('CatalogTileColumns::storeView(', $tableClass);
         self::assertStringContainsString('->contentGrid(fn (): ?array =>', $page);
+        self::assertStringContainsString('->contentGrid(fn (): ?array =>', $tableClass);
         self::assertStringNotContainsString('Cookie::queue(CatalogTileColumns::COOKIE_KEY', $page);
+        self::assertStringNotContainsString('Cookie::queue(CatalogTileColumns::COOKIE_KEY', $tableClass);
 
         // Tile layout deliberately omits Minecraft version and loader badges.
         self::assertStringNotContainsString('minecraft_versions', $tileBuilder);
@@ -302,6 +306,59 @@ final class ModManagerBrowserAssetsTest extends TestCase
 
         self::assertIsString($registrationPrefix);
         self::assertStringNotContainsString('ModManagerAssets::url(', $registrationPrefix);
+    }
+
+    public function test_modpack_catalog_ui_is_unified_across_create_and_server_screens_without_source_column(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $tableClass = (string) file_get_contents($root.'/src/Filament/Components/ModpackCatalogTable.php');
+        $fieldBlade = (string) file_get_contents($root.'/resources/views/components/modpack-catalog-field.blade.php');
+        $tableBlade = (string) file_get_contents($root.'/resources/views/components/modpack-catalog-table.blade.php');
+        $providerSelectBlade = (string) file_get_contents($root.'/resources/views/components/modpack-provider-select.blade.php');
+        $plugin = (string) file_get_contents($root.'/src/ModManagerPlugin.php');
+        $assets = (string) file_get_contents($root.'/src/Support/ModManagerAssets.php');
+        $createStep = (string) file_get_contents($root.'/src/Filament/Admin/ModpackCreationStep.php');
+        $serverPage = (string) file_get_contents($root.'/src/Filament/Server/Pages/ModManagerPage.php');
+
+        // Discarded custom Modpack HTML/CSS UI must stay removed.
+        self::assertFileDoesNotExist($root.'/resources/assets/modpack-catalog.css');
+        self::assertFileDoesNotExist($root.'/resources/views/components/modpack-catalog.blade.php');
+        self::assertStringNotContainsString('modpack-catalog.css', $plugin);
+        self::assertStringNotContainsString('modpack-catalog.css', $assets);
+
+        // Modpack catalog reuses the exact same scroll container, tile layout, right-aligned actions, and row actions as ModManagerPage.
+        self::assertStringContainsString('implements HasActions, HasSchemas, HasTable', $tableClass);
+        self::assertStringContainsString('use InteractsWithTable', $tableClass);
+        self::assertStringContainsString('CatalogTileColumns::columns(', $tableClass);
+        self::assertStringContainsString('CatalogTileColumns::contentGrid()', $tableClass);
+        self::assertStringContainsString('->recordActionsAlignment(Alignment::End->value)', $tableClass);
+        self::assertStringContainsString("CatalogRowAction::compact('versions', 'info')", $tableClass);
+        self::assertStringContainsString("CatalogRowAction::compact('install_latest', 'success')", $tableClass);
+        self::assertStringContainsString('function reviewModpackPlanAction(): Action', $tableClass);
+        self::assertStringContainsString('->recordUrl(', $tableClass);
+        self::assertStringContainsString('mmr-table-scroll-ctn', $tableBlade);
+        self::assertStringNotContainsString('x-filament::tabs', $tableBlade);
+        self::assertStringContainsString('{{ $this->table }}', $tableBlade);
+        self::assertStringContainsString('pelican-mod-manager.modpack-catalog-table', $fieldBlade);
+
+        // Provider selector is a Filament-native toolbar dropdown next to search, not tabs above the table.
+        self::assertStringContainsString('<x-filament::input.wrapper>', $providerSelectBlade);
+        self::assertStringContainsString('<x-filament::input.select', $providerSelectBlade);
+        self::assertStringContainsString('wire:model.live="provider"', $providerSelectBlade);
+        self::assertStringContainsString('modpack-provider-select', $plugin);
+
+        // Source column, external version selects, and below-catalog plan blocks are removed.
+        self::assertStringNotContainsString("TextColumn::make('source')", $tableClass);
+        self::assertStringNotContainsString("Select::make('mm_version')", $createStep);
+        self::assertStringNotContainsString("TextEntry::make('mm_summary')", $createStep);
+        self::assertStringNotContainsString("Checkbox::make('mm_confirm_compatibility')", $createStep);
+        self::assertStringNotContainsString("Select::make('version')", $serverPage);
+        self::assertStringNotContainsString("TextEntry::make('modpack_plan')", $serverPage);
+        self::assertStringNotContainsString("Checkbox::make('confirm_server_compatibility')", $serverPage);
+
+        // Both new-server creation and existing-server modpack modal share the same Filament field + table component.
+        self::assertStringContainsString("->view('pelican-mod-manager::components.modpack-catalog-field')", $createStep);
+        self::assertStringContainsString("->view('pelican-mod-manager::components.modpack-catalog-field')", $serverPage);
     }
 
     private function asset(string $name): string
