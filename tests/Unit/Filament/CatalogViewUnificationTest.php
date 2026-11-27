@@ -20,6 +20,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
@@ -36,6 +37,7 @@ use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Support\CatalogTileColumns;
 use Kazaminosuke\ModManager\Support\CurseForgeFile;
 use Kazaminosuke\ModManager\Support\InstalledMetadataDocument;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
 use Kazaminosuke\ModManager\Support\WingsRemoteFilesystem;
 use Kazaminosuke\ModManager\Tests\Unit\Services\DeploymentWings;
@@ -749,7 +751,7 @@ final class CatalogViewUnificationTest extends TestCase
         (require dirname(__DIR__, 3).'/database/migrations/2026_11_25_000007_create_mod_manager_provisioning_table.php')->up();
         DB::table('servers')->where('id', 10)->update(['status' => ServerState::Installing->value, 'skip_scripts' => true]);
         DB::table('mod_manager_provisioning')->insert([
-            'server_id' => 10, 'state' => ModpackProvisioning::READY, 'installer' => '', 'deadline' => now()->addHour(),
+            'server_id' => 10, 'state' => ModpackProvisioning::READY, 'installer' => '', 'deadline' => now()->subMinute(),
         ]);
         $this->configureServerPanelFor(ProjectType::Mod);
 
@@ -766,6 +768,10 @@ final class CatalogViewUnificationTest extends TestCase
         self::assertTrue($operations->dispatchModpackInstall(10, ProjectType::Mod, 'curseforge', '789', '112', ['managed_initial' => true])['dispatched']);
         $operations->pauseCurseForgeModpack(10, $queue->spawned[0]['payload']['lease_token'], '789', '112',
             ['managed_initial' => true], [$file->details(true, 'missing_upload')]);
+        $provisioning = app(ModpackProvisioning::class);
+        $leases = app(InstalledOperationLease::class);
+        $provisioning->expireStale($operations, $leases);
+        self::assertSame(ServerState::Installing, Server::query()->findOrFail(10)->status);
         $token = $operations->waitingCurseForgeModpack(10)['token'];
         $args = ['token' => $token, 'path' => $file->stagingPath()];
         $wings = new DeploymentWings();
@@ -786,6 +792,11 @@ final class CatalogViewUnificationTest extends TestCase
         $page->call('resumeCurseForgeModpack', $token);
         $resumed = end($queue->spawned);
         self::assertSame($token, $resumed['payload']['selection']['manual_token']);
+
+        Event::fake();
+        $this->travel(8)->days();
+        $provisioning->expireStale($operations, $leases);
+        self::assertSame(ServerState::InstallFailed, Server::query()->findOrFail(10)->status);
     }
 
     private function createTestSchema(): void

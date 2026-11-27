@@ -56,13 +56,17 @@ final class ModpackDispatchTest extends TestCase
         $manager = new InstalledOperationManager($cache, Mockery::mock(ConfigRepository::class), $leases, $runner);
         $manager->dispatchModpackInstall(42, ProjectType::Mod, 'curseforge', '285109', '4612979');
         $lease = $runner->spawned[0]['payload']['lease_token'];
+        self::assertTrue($leases->refresh(42, ProjectType::Mod, $lease, epoch: 2));
         $manager->start(42, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK);
-        $manager->modpackPhase(42, 'verifying');
+        $manager->modpackPhase(42, 'verifying', $lease, 2);
+        $manager->modpackPhase(42, 'downloading', $lease, 1);
         self::assertSame('verifying', $manager->state(42, ProjectType::Mod, InstalledOperationManager::OPERATION_MODPACK)->result['phase']);
         $files = array_fill(0, 101, ['project_id' => 264231, 'file_id' => 2693547]);
+        $manager->pauseCurseForgeModpack(42, $lease, '285109', '4612979', [], $files, 1);
+        self::assertNull($manager->waitingCurseForgeModpack(42));
         $manager->pauseCurseForgeModpack(42, $lease, '285109', '4612979', [
             'egg_id' => '9', 'artifact_id' => '4612979', 'archive_sha256' => str_repeat('a', 64),
-        ], $files);
+        ], $files, 2);
 
         $plan = $manager->waitingCurseForgeModpack(42);
         self::assertCount(101, $plan['files']);

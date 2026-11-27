@@ -822,10 +822,10 @@ final class InstalledOperationManager
     }
 
     /** @param array<string, mixed> $selection @param list<array<string, mixed>> $files */
-    public function pauseCurseForgeModpack(int $serverId, string $leaseToken, string $projectId, string $versionId, array $selection, array $files): void
+    public function pauseCurseForgeModpack(int $serverId, string $leaseToken, string $projectId, string $versionId, array $selection, array $files, ?int $epoch = null): void
     {
         $type = ProjectType::Mod;
-        if (!$this->leases->owns($serverId, $type, $leaseToken)) {
+        if (!$this->leases->owns($serverId, $type, $leaseToken, $epoch)) {
             return;
         }
 
@@ -841,11 +841,11 @@ final class InstalledOperationManager
         $this->leases->release($serverId, $type, $leaseToken);
     }
 
-    public function awaitModpackReview(Server $server, string $lease): void
+    public function awaitModpackReview(Server $server, string $lease, ?int $epoch = null): void
     {
         $id = $this->serverId($server);
         $type = ProjectType::Mod;
-        if (!$this->leases->owns($id, $type, $lease)) {
+        if (!$this->leases->owns($id, $type, $lease, $epoch)) {
             return;
         }
         $state = $this->state($id, $type, self::OPERATION_MODPACK)
@@ -854,8 +854,12 @@ final class InstalledOperationManager
         $this->leases->release($id, $type, $lease);
     }
 
-    public function modpackPhase(int $serverId, string $phase): void
+    public function modpackPhase(int $serverId, string $phase, string $leaseToken, ?int $epoch): void
     {
+        if (!$this->leases->owns($serverId, ProjectType::Mod, $leaseToken, $epoch)) {
+            return;
+        }
+
         $state = $this->state($serverId, ProjectType::Mod, self::OPERATION_MODPACK);
         if ($state?->isActive()) {
             $this->put($state->withResult([...$state->result, 'phase' => $phase]));
@@ -897,9 +901,9 @@ final class InstalledOperationManager
         }
     }
 
-    public function clearCurseForgeModpack(int $serverId, string $leaseToken): void
+    public function clearCurseForgeModpack(int $serverId, string $leaseToken, ?int $epoch = null): void
     {
-        if ($this->leases->owns($serverId, ProjectType::Mod, $leaseToken)) {
+        if ($this->leases->owns($serverId, ProjectType::Mod, $leaseToken, $epoch)) {
             $this->cache->forget($this->curseForgePlanKey($serverId));
         }
     }

@@ -37,9 +37,9 @@ final class ModpackUpdateWorkflow
         return is_array($review) ? $review : null;
     }
 
-    public function publish(Server $server, string $lease, array $release, array $selection, array $summary, ?array $artifact = null): void
+    public function publish(Server $server, string $lease, array $release, array $selection, array $summary, ?array $artifact = null, ?int $epoch = null): void
     {
-        if (!$this->leases->owns((int) $server->getKey(), ProjectType::Mod, $lease)) {
+        if (!$this->leases->owns((int) $server->getKey(), ProjectType::Mod, $lease, $epoch)) {
             throw new ModpackException('The modpack operation no longer owns the server lease.');
         }
         // The file-wait token authorizes only the preflight that just finished.
@@ -48,7 +48,7 @@ final class ModpackUpdateWorkflow
             'token' => bin2hex(random_bytes(16)), 'release' => $release, 'selection' => $selection,
             'summary' => $summary, 'artifact' => $artifact, 'created_at' => time(), 'backup_id' => null,
         ], self::TTL);
-        $this->operations->awaitModpackReview($server, $lease);
+        $this->operations->awaitModpackReview($server, $lease, $epoch);
     }
 
     public function extendTtl(Server $server, string $token, int $ttl): void

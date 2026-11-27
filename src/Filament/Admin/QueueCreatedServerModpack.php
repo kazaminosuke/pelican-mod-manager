@@ -29,6 +29,7 @@ final class QueueCreatedServerModpack
         }
 
         $queue = function () use ($record, $plan): void {
+            $accepted = false;
             try {
                 $outcome = $this->operations->dispatchModpackInstall(
                     $record,
@@ -38,7 +39,8 @@ final class QueueCreatedServerModpack
                     $plan['version_id'],
                     selection: $plan['selection'],
                 );
-                if ($outcome['dispatched'] || ($outcome['reason'] === 'already_active' && $outcome['state']?->isActive())) {
+                $accepted = $outcome['dispatched'] || ($outcome['reason'] === 'already_active' && $outcome['state']?->isActive());
+                if ($accepted) {
                     Notification::make()
                         ->title(trans($outcome['dispatched']
                             ? 'pelican-mod-manager::strings.modpacks.provision_queued'
@@ -51,11 +53,13 @@ final class QueueCreatedServerModpack
                         ])
                         ->persistent()
                         ->send();
-
-                    return;
                 }
             } catch (Throwable $exception) {
                 report($exception);
+            }
+
+            if ($accepted) {
+                return;
             }
 
             app(ModpackProvisioning::class)->finish($record, false);

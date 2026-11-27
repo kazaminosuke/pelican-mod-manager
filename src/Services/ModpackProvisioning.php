@@ -8,7 +8,9 @@ use App\Models\Server;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Kazaminosuke\ModManager\Enums\ProjectType;
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
+use Kazaminosuke\ModManager\Support\InstalledOperationLease;
 use stdClass;
 use Throwable;
 
@@ -27,6 +29,8 @@ final class ModpackProvisioning
 
     private const TABLE = 'mod_manager_provisioning';
 
+    private const PROVISIONING_TIMEOUT_MINUTES = 20;
+
     /** @param array{container_image: string, entrypoint: string, script: string} $installer */
     public function stage(Server $server, array $installer): void
     {
@@ -34,7 +38,7 @@ final class ModpackProvisioning
             'server_id' => $server->getKey(),
             'state' => self::WAITING,
             'installer' => json_encode($installer, JSON_THROW_ON_ERROR),
-            'deadline' => now()->addMinutes(20),
+            'deadline' => now()->addMinutes(self::PROVISIONING_TIMEOUT_MINUTES),
         ]);
     }
 
@@ -86,13 +90,43 @@ final class ModpackProvisioning
             }
 
             if ($successful && $row->state === self::RUNNING && $fresh->status === ServerState::Installing && $fresh->skip_scripts) {
-                $this->row($fresh)->update(['state' => self::READY]);
+                $this->row($fresh)->update([
+                    'state' => self::READY,
+                    'deadline' => now()->addMinutes(self::PROVISIONING_TIMEOUT_MINUTES),
+                ]);
 
                 return;
             }
 
             $this->finish($fresh, false);
         });
+    }
+
+    public function expireStale(InstalledOperationManager $operations, InstalledOperationLease $leases): void
+    {
+        if (!Schema::hasTable(self::TABLE)) {
+            return;
+        }
+
+        $expired = DB::table(self::TABLE)
+            ->whereIn('state', [self::WAITING, self::RUNNING, self::READY])
+            ->where('deadline', '<=', now());
+        foreach ($expired->clone()->select('server_id')->lazyById(column: 'server_id') as $candidate) {
+            DB::transaction(function () use ($candidate, $expired, $operations, $leases): void {
+                $server = Server::query()->lockForUpdate()->find($candidate->server_id);
+                if ($server === null) {
+                    return;
+                }
+                $row = $expired->clone()->where('server_id', $server->getKey())->lockForUpdate()->first();
+                if ($row === null || ($row->state === self::READY
+                    && ($operations->waitingCurseForgeModpack($server) !== null
+                        || $leases->currentOperation((int) $server->getKey(), ProjectType::Mod) === InstalledOperationLease::OPERATION_MODPACK))) {
+                    return;
+                }
+
+                $this->finish($server, false);
+            });
+        }
     }
 
     public function finish(Server $server, bool $success): void

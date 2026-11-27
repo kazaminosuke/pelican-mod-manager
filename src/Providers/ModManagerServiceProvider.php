@@ -30,6 +30,7 @@ use Kazaminosuke\ModManager\Services\InstalledProjectService;
 use Kazaminosuke\ModManager\Services\ModManagerDiagnostics;
 use Kazaminosuke\ModManager\Services\ModpackCatalog;
 use Kazaminosuke\ModManager\Services\ModpackInstallCoordinator;
+use Kazaminosuke\ModManager\Services\ModpackProvisioning;
 use Kazaminosuke\ModManager\Services\ModpackProvisioningPlanner;
 use Kazaminosuke\ModManager\Services\ServerEggMigration;
 use Kazaminosuke\ModManager\Services\VersionLookupCoordinator;
@@ -179,6 +180,10 @@ class ModManagerServiceProvider extends ServiceProvider
                 ->everyTenMinutes()
                 ->withoutOverlapping()
                 ->name('mod-manager:warm-catalog');
+            $schedule->call(static fn (ModpackProvisioning $provisioning, InstalledOperationManager $operations, InstalledOperationLease $leases) => $provisioning->expireStale($operations, $leases))
+                ->everyTenMinutes()
+                ->name('mod-manager:expire-provisioning')
+                ->withoutOverlapping();
         });
     }
 }

@@ -121,7 +121,7 @@ final class InstallModpack
                 && now()->lt($loaderInstall->deadline)) {
                 if ($loaderInstall->state === ModpackProvisioning::RUNNING) {
                     $operations->start($server, $type, InstalledOperationManager::OPERATION_MODPACK);
-                    $operations->modpackPhase($this->serverId, 'loader');
+                    $operations->modpackPhase($this->serverId, 'loader', $this->leaseToken, $this->claimEpoch);
                 }
 
                 return 15;
@@ -172,7 +172,7 @@ final class InstallModpack
                 throw new ModpackException('This pending modpack has expired or was cancelled.');
             }
             if ($provisioning !== null || $isCurseForge || $isFtb) {
-                $operations->modpackPhase($this->serverId, 'downloading');
+                $operations->modpackPhase($this->serverId, 'downloading', $this->leaseToken, $this->claimEpoch);
             }
             $this->validateSelection($server);
             $phase = $this->selection['managed_phase'] ?? ($this->selection !== null
@@ -252,7 +252,7 @@ final class InstallModpack
                 if (!is_string($archiveHash) || ($resume !== null && $archiveHash !== ($this->selection['archive_sha256'] ?? null))) {
                     throw new ModpackException('The downloaded CurseForge archive no longer matches the selected file.');
                 }
-                $operations->modpackPhase($this->serverId, 'verifying');
+                $operations->modpackPhase($this->serverId, 'verifying', $this->leaseToken, $this->claimEpoch);
             }
 
             $current = app(ModpackInventory::class)->read($server);
@@ -333,7 +333,7 @@ final class InstallModpack
                 }
                 $lastCheck = microtime(true);
             };
-            $operations->modpackPhase($this->serverId, $phase === 'preview' ? 'verifying' : 'installing');
+            $operations->modpackPhase($this->serverId, $phase === 'preview' ? 'verifying' : 'installing', $this->leaseToken, $this->claimEpoch);
             $lockedForApply = $backup !== null && $workflow->lockForApply($server, $backup);
             try {
                 $result = $installer->deploy(
@@ -360,11 +360,11 @@ final class InstallModpack
             if ($phase === 'preview') {
                 $reviewArchive->remember($temp, $archiveHash);
                 if ($resume !== null) {
-                    $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
+                    $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken, $this->claimEpoch);
                 }
                 $workflow->publish($server, $this->leaseToken, $release, $this->selection ?? [
                     'egg_id' => (string) $server->egg_id, 'image' => $server->image,
-                ], $result, $file);
+                ], $result, $file, $this->claimEpoch);
 
                 return null;
             }
@@ -395,7 +395,7 @@ final class InstallModpack
             Cache::forget(app(InstalledProjectService::class)->getHashScanCacheKey($server, $type));
 
             if ($resume !== null) {
-                $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
+                $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken, $this->claimEpoch);
             }
             $this->rememberPack($server, $fileRepository, $release);
             $operations->complete(
@@ -433,12 +433,12 @@ final class InstallModpack
             if (isset($review['token']) && is_string($review['token'])) {
                 $workflow->extendTtl($server, $review['token'], 7 * 86400);
             }
-            $operations->pauseCurseForgeModpack($this->serverId, $this->leaseToken, $this->projectId, $file['version_id'], $selection, $pending->files);
+            $operations->pauseCurseForgeModpack($this->serverId, $this->leaseToken, $this->projectId, $file['version_id'], $selection, $pending->files, $this->claimEpoch);
         } catch (Throwable $exception) {
             report($exception);
             $failProvisioning();
             if ($provisioning !== null && $resume !== null) {
-                $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken);
+                $operations->clearCurseForgeModpack($this->serverId, $this->leaseToken, $this->claimEpoch);
             }
             $operations->fail(
                 $server,
