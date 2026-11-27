@@ -75,6 +75,7 @@ final class ModpackCreationWizardTest extends TestCase
         View::addNamespace('pelican-mod-manager', dirname(__DIR__, 3).'/resources/views');
         $this->app['translator']->addNamespace('pelican-mod-manager', dirname(__DIR__, 3).'/lang');
         Filament::setCurrentPanel(Filament::getPanel('admin'));
+        ModpackCreationStep::configureStartupFields();
         Http::preventStrayRequests();
 
         Schema::create('eggs', function (Blueprint $table): void {
@@ -170,6 +171,8 @@ final class ModpackCreationWizardTest extends TestCase
 
         $wizard = Livewire::test(ModpackCreationWizardHarness::class)
             ->assertDontSee('All the Mods 10')
+            ->assertFormFieldIsVisible('skip_scripts')
+            ->assertFormFieldIsVisible('start_on_completion')
             ->set('data.mm_provider', 'curseforge')
             ->set('data.mm_modpack', true)
             ->set('data.mm_query', 'All the Mods')
@@ -190,8 +193,11 @@ final class ModpackCreationWizardTest extends TestCase
         }
         $wizard->call('nextModpackStep')
             ->assertHasNoErrors()
+            ->assertFormFieldIsHidden('skip_scripts')
+            ->assertFormFieldIsHidden('start_on_completion')
             ->set('data.mm_modpack', false)
             ->assertDontSee('All the Mods 10')
+            ->assertFormFieldIsVisible('skip_scripts')
             ->assertSet('data.egg_id', null)
             ->set('data.mm_modpack', true)
             ->assertSet('data.mm_query', 'All the Mods')

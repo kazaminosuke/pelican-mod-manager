@@ -62,6 +62,7 @@ class ModManagerPlugin implements HasPluginSettings, Plugin
             EditServer::registerCustomTabs(TabPosition::After, ServerModManagerTab::make());
             if (class_exists(CreateServer::class) && class_exists(StepPosition::class)) {
                 CreateServer::registerCustomSteps(StepPosition::Before, ModpackCreationStep::step());
+                ModpackCreationStep::configureStartupFields();
                 $panel->renderHook(
                     TablesRenderHook::TOOLBAR_SEARCH_AFTER,
                     fn () => view('pelican-mod-manager::components.modpack-provider-select'),

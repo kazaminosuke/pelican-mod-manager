@@ -2,8 +2,10 @@
 
 namespace Kazaminosuke\ModManager\Filament\Admin;
 
+use App\Filament\Admin\Resources\Servers\Pages\CreateServer;
 use App\Models\Egg;
 use App\Models\Server;
+use Filament\Forms\Components\Field;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\ViewField;
@@ -39,10 +41,29 @@ final class ModpackCreationStep
         'skip_scripts', 'start_on_completion', 'server_variables', 'environment',
     ];
 
+    public static function configureStartupFields(): void
+    {
+        Field::configureUsing(static function (Field $field): void {
+            $name = $field->getName();
+            if (!in_array($name, ['egg_id', 'skip_scripts', 'start_on_completion', 'select_startup', 'startup'], true)) {
+                return;
+            }
+
+            $field->visible(static function (Get $get, $livewire) use ($name): bool {
+                if (!$livewire instanceof CreateServer || !$get('mm_modpack') || !is_array($get('mm_original_startup'))) {
+                    return true;
+                }
+
+                return !in_array($name, ['egg_id', 'skip_scripts'], true) && !(bool) $get('skip_scripts');
+            })->dehydratedWhenHidden();
+        });
+    }
+
     public static function step(): Step
     {
         return Step::make('modpack')
             ->label(fn (): string => trans('pelican-mod-manager::strings.modpacks.create_step'))
+            ->visible(fn (CreateServer $livewire): bool => ($livewire->restoreSource ?? null) === null)
             ->afterValidation(fn (Set $set, Get $get) => self::apply($set, $get, $get('mm_egg')))
             ->schema([
                 Toggle::make('mm_modpack')
@@ -251,27 +272,31 @@ final class ModpackCreationStep
 
         $image = (string) $get('image');
         $loader = $result->loader ?? $result->selected?->loader;
-        if (JavaRuntimeImage::isTooOld($image, $result->minecraftVersion, $result->minimumJava)) {
+        $environment = (array) $get('environment');
+        $minecraft = $result->minecraftVersion;
+        if ($result->mode === ProvisioningMode::Archive) {
+            $minecraft = $environment['MC_VERSION'] ?? $environment['MINECRAFT_VERSION'] ?? null;
+            if (!is_string($minecraft) || (isset($environment['MC_VERSION'], $environment['MINECRAFT_VERSION'])
+                && $environment['MC_VERSION'] !== $environment['MINECRAFT_VERSION'])) {
+                throw self::startupValidationError($component);
+            }
+        }
+        if (JavaRuntimeImage::isTooOld($image, $minecraft, $result->minimumJava)) {
             throw ValidationException::withMessages([
                 $component->resolveRelativeStatePath('image') => trans('pelican-mod-manager::strings.modpacks.java_too_old', [
-                    'java' => JavaRuntimeImage::preferredLabel($result->minecraftVersion, $result->minimumJava),
+                    'java' => JavaRuntimeImage::preferredLabel($minecraft, $result->minimumJava),
                 ]),
             ]);
         }
-        if (JavaRuntimeImage::isTooNew($image, $result->minecraftVersion, $loader)) {
+        if (JavaRuntimeImage::isTooNew($image, $minecraft, $loader)) {
             throw ValidationException::withMessages([
                 $component->resolveRelativeStatePath('image') => trans('pelican-mod-manager::strings.modpacks.java_too_new', [
                     'loader' => (string) $loader,
-                    'java' => JavaRuntimeImage::maximumLabel($result->minecraftVersion, $loader),
+                    'java' => JavaRuntimeImage::maximumLabel($minecraft, $loader),
                 ]),
             ]);
         }
 
-        $environment = (array) $get('environment');
-        if ($result->mode === ProvisioningMode::Archive && $result->minecraftVersion !== null
-            && !array_key_exists('MC_VERSION', $environment) && !array_key_exists('MINECRAFT_VERSION', $environment)) {
-            throw self::startupValidationError($component);
-        }
         foreach ($result->variables as $name => $value) {
             if ($result->mode === ProvisioningMode::Archive && in_array($name, ['MC_VERSION', 'MINECRAFT_VERSION'], true)
                 && !array_key_exists($name, $environment)) {
@@ -286,10 +311,8 @@ final class ModpackCreationStep
         $descriptor = self::descriptor((string) $get('mm_project'), (string) $get('mm_version'));
         $title = trim((string) ($get('mm_project_title') ?: ($descriptor?->title ?? '')));
         $build = $descriptor?->loaderVersion;
-        $minecraft = $result->minecraftVersion;
         $startup = (string) $get('startup');
         if ($result->mode === ProvisioningMode::Archive) {
-            $minecraft = $environment['MC_VERSION'] ?? $environment['MINECRAFT_VERSION'] ?? null;
             $build ??= $loader === null ? null : ($environment[ModpackLoader::buildVariable($loader)] ?? null);
             $jar = $environment['SERVER_JARFILE'] ?? 'server.jar';
             try {
@@ -409,6 +432,7 @@ final class ModpackCreationStep
         $set('environment', $environment);
         if ($result->mode === ProvisioningMode::Archive && $result->minecraftVersion !== null && $result->loader !== null) {
             $set('startup', ModpackLoaderInstaller::startup($result->loader, $result->minecraftVersion, $environment['SERVER_JARFILE'] ?? 'server.jar'));
+            $set('select_startup', 'custom');
         }
     }
 
