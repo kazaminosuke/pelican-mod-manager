@@ -20,7 +20,7 @@ final class ModpackLoaderInstaller
         }
 
         $build = ModpackLoader::pinBuild($loader, $build, $minecraft);
-        $modern = self::usesArgumentFile($loader, $minecraft);
+        $modern = ModpackLoader::usesArgumentFile($loader, $minecraft);
         $java = (int) substr(JavaRuntimeImage::preferredLabel($minecraft) ?? 'Java 8', 5);
         $steps = match ($loader) {
             'fabric' => [
@@ -72,14 +72,9 @@ SH,
 
     public static function startup(string $loader, string $minecraft, string $jar): string
     {
-        $args = self::usesArgumentFile($loader, $minecraft) ? '@unix_args.txt' : '-jar '.$jar;
+        $args = ModpackLoader::usesArgumentFile($loader, $minecraft) ? '@unix_args.txt' : '-jar '.$jar;
 
         return 'java -Xms128M -XX:MaxRAMPercentage=95.0 '.$args.' nogui';
-    }
-
-    private static function usesArgumentFile(string $loader, string $minecraft): bool
-    {
-        return $loader === 'neoforge' || ($loader === 'forge' && version_compare($minecraft, '1.17', '>='));
     }
 
     /** @return array{int, string, string, string} */
@@ -89,10 +84,9 @@ SH,
             throw new ModpackException('The Forge build does not match the Minecraft version.');
         }
 
-        $artifact = $loader === 'neoforge' && $minecraft !== '1.20.1' ? 'neoforge' : 'forge';
         $repository = $loader === 'forge' ? 'https://maven.minecraftforge.net' : 'https://maven.neoforged.net/releases';
-        $group = $loader === 'forge' ? 'minecraftforge' : 'neoforged';
-        $path = "net/$group/$artifact";
+        $path = ModpackLoader::forgeMavenPath($loader, $minecraft);
+        $artifact = basename($path);
         $setup = $modern
             ? 'cp '.escapeshellarg("libraries/$path/$build/unix_args.txt").' unix_args.txt'
             : <<<'SH'

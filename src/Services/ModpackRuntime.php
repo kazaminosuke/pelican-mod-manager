@@ -29,22 +29,8 @@ final class ModpackRuntime
 
         $jar = $variables['SERVER_JARFILE'] ?? 'server.jar';
         $startup = (string) ($server->startup ?? '');
-        $jpms = $loader === 'neoforge' || ($loader === 'forge' && version_compare($minecraft, '1.17', '>='));
-        if ($jpms) {
-            $argsStream = $this->read($repo, $server, 'unix_args.txt');
-            try {
-                $args = Utils::copyToString($argsStream, 65536);
-            } finally {
-                $argsStream->close();
-            }
-            $group = $loader === 'forge' ? 'minecraftforge/forge' : 'neoforged/(?:neoforge|forge)';
-            if (!preg_match('~libraries/net/'.$group.'/([A-Za-z0-9.+_-]+)/[^\s:;]+\.jar~', $args, $match)
-                || ($build !== null && !ModpackLoader::matchesBuild($loader, $build, $match[1], $minecraft))
-                || (preg_match('/--fml\.mcVersion\s+(\S+)/', $args, $version) && $version[1] !== $minecraft)
-                || ($startup !== '' && !str_contains($startup, '@unix_args.txt'))) {
-                throw new ModpackException('The installed Forge or NeoForge startup arguments do not match this release.');
-            }
-            $this->requireJar($repo, $server, $match[0]);
+        if (ModpackLoader::usesArgumentFile($loader, $minecraft)) {
+            $this->assertForgeArgumentFile($server, $repo, $loader, $minecraft, $build, $startup);
 
             return;
         }
@@ -68,17 +54,10 @@ final class ModpackRuntime
                 throw new ModpackException("The installed JAR does not contain a $loader launcher.");
             }
 
-            if ($build !== null) {
-                if ($loader === 'quilt') {
-                    if (preg_match('~libraries/org/quiltmc/quilt-loader/([A-Za-z0-9.+_-]+)/quilt-loader-\1\.jar~', $manifest, $match)
-                        && $match[1] === $build) {
-                        $this->requireJar($repo, $server, $match[0]);
-                    } elseif (($embedded['quilt_loader']['version'] ?? null) !== $build) {
-                        throw new ModpackException('The installed Quilt launcher does not identify the selected loader build.');
-                    }
-                } elseif (!$this->matchesLegacyForgeBuild($manifest, $embedded, $build, $minecraft)) {
-                    throw new ModpackException('The legacy Forge launcher does not identify the selected loader build.');
-                }
+            if ($loader === 'quilt') {
+                $this->assertQuiltLauncher($server, $repo, $manifest, $embedded, $minecraft, $build);
+            } elseif ($build !== null && !$this->matchesLegacyForgeBuild($manifest, $embedded, $build, $minecraft)) {
+                throw new ModpackException('The legacy Forge launcher does not identify the selected loader build.');
             }
 
             return;
@@ -105,6 +84,67 @@ final class ModpackRuntime
         $this->requireJar($repo, $server, $match[0]);
         $this->requireJar($repo, $server, "libraries/net/fabricmc/intermediary/$minecraft/intermediary-$minecraft.jar");
         $this->requireJar($repo, $server, 'minecraft-server.jar');
+    }
+
+    private function assertForgeArgumentFile(Server $server, DaemonFileRepository $repo, string $loader, string $minecraft, ?string $build, string $startup): void
+    {
+        $mavenPath = 'libraries/'.ModpackLoader::forgeMavenPath($loader, $minecraft);
+        $pathPattern = preg_quote($mavenPath, '~');
+        $argsPath = 'unix_args.txt';
+        if ($startup !== '') {
+            if (!preg_match('~@((?:'.$pathPattern.'/[A-Za-z0-9.+_-]+/)?unix_args\.txt)(?=[\s\x22\x27]|$)~', $startup, $path)) {
+                throw new ModpackException('The server startup command does not use a supported Forge or NeoForge argument file.');
+            }
+            $argsPath = $path[1];
+        }
+        $stream = $this->read($repo, $server, $argsPath);
+        try {
+            $args = Utils::copyToString($stream, 65536);
+        } finally {
+            $stream->close();
+        }
+
+        if (preg_match('/--fml\.mcVersion[ \t]+(\S+)/', $args, $version) && $version[1] !== $minecraft) {
+            throw new ModpackException('The installed Forge or NeoForge startup arguments do not match this release.');
+        }
+
+        // Official Forge and NeoForge args identify the build with FML flags.
+        // The patched server JAR is loaded by FML and is absent from the classpath.
+        $artifact = basename($mavenPath);
+        $versionFlag = $artifact === 'neoforge' ? 'neoForgeVersion' : 'forgeVersion';
+        if (preg_match('/--fml\.'.$versionFlag.'[ \t]+([A-Za-z0-9.+_-]+)/', $args, $match)) {
+            if (($build !== null && !ModpackLoader::matchesBuild($loader, $build, $match[1], $minecraft))
+                || ($artifact === 'neoforge' && !isset($version[1]))) {
+                throw new ModpackException('The installed Forge or NeoForge startup arguments do not match this release.');
+            }
+            $coordinate = ModpackLoader::pinBuild($loader, $match[1], $minecraft);
+            $this->requireJar($repo, $server, "$mavenPath/$coordinate/$artifact-$coordinate-server.jar");
+
+            return;
+        }
+
+        if (!preg_match('~'.$pathPattern.'/([A-Za-z0-9.+_-]+)/[^\s:;]+\.jar~', $args, $match)
+            || ($build !== null && !ModpackLoader::matchesBuild($loader, $build, $match[1], $minecraft))) {
+            throw new ModpackException('The installed Forge or NeoForge startup arguments do not match this release.');
+        }
+        $this->requireJar($repo, $server, $match[0]);
+    }
+
+    private function assertQuiltLauncher(Server $server, DaemonFileRepository $repo, string $manifest, array $embedded, string $minecraft, ?string $build): void
+    {
+        if (preg_match('~libraries/org/quiltmc/quilt-loader/([A-Za-z0-9.+_-]+)/quilt-loader-\1\.jar~', $manifest, $match)) {
+            $mappings = "libraries/net/fabricmc/intermediary/$minecraft/intermediary-$minecraft.jar";
+            if (!str_contains($manifest, $mappings)) {
+                $mappings = "libraries/org/quiltmc/hashed/$minecraft/hashed-$minecraft.jar";
+            }
+            if (($build !== null && $match[1] !== $build) || !str_contains($manifest, $mappings)) {
+                throw new ModpackException('The installed Quilt launcher does not reference this Minecraft and loader build.');
+            }
+            $this->requireJar($repo, $server, $match[0]);
+            $this->requireJar($repo, $server, $mappings);
+        } elseif ($build !== null && ($embedded['quilt_loader']['version'] ?? null) !== $build) {
+            throw new ModpackException('The installed Quilt launcher does not identify the selected loader build.');
+        }
     }
 
     private function matchesLegacyForgeBuild(string $manifest, array $versionJson, string $build, string $minecraft): bool

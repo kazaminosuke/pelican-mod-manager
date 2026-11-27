@@ -32,6 +32,20 @@ final class ModpackLoader
         return $loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($loader).'_VERSION';
     }
 
+    public static function usesArgumentFile(string $loader, string $minecraft): bool
+    {
+        return $loader === 'neoforge' || ($loader === 'forge' && version_compare($minecraft, '1.17', '>='));
+    }
+
+    public static function forgeMavenPath(string $loader, string $minecraft): string
+    {
+        if ($loader === 'forge') {
+            return 'net/minecraftforge/forge';
+        }
+
+        return $minecraft === '1.20.1' ? 'net/neoforged/forge' : 'net/neoforged/neoforge';
+    }
+
     /**
      * Format a loader build for the official Pelican Egg variable.
      */

@@ -23,6 +23,7 @@ use Kazaminosuke\ModManager\Support\InstalledOperationState;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackArchive;
 use Kazaminosuke\ModManager\Support\Modpacks\ModpackDelta;
 use Kazaminosuke\ModManager\Support\PluginBackgroundRunner;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ZipArchive;
 
@@ -217,6 +218,58 @@ final class ModpackRegressionTest extends TestCase
         $this->expectException(ModpackException::class);
         $this->expectExceptionMessage('startup arguments do not match');
         $runtime->assertInstalled($server, $repo, 'neoforge', '1.21.1', '21.1.267', ['NEOFORGE_VERSION' => '21.1.267']);
+    }
+
+    public static function officialForgeArguments(): array
+    {
+        return [
+            'Forge' => ['forge', '1.20.1', '47.3.0', 'forgeVersion', 'minecraftforge/forge/1.20.1-47.3.0/forge-1.20.1-47.3.0-server.jar'],
+            'early NeoForge' => ['neoforge', '1.20.1', '47.1.106', 'forgeVersion', 'neoforged/forge/1.20.1-47.1.106/forge-1.20.1-47.1.106-server.jar'],
+            'NeoForge' => ['neoforge', '1.21.1', '21.1.266', 'neoForgeVersion', 'neoforged/neoforge/21.1.266/neoforge-21.1.266-server.jar'],
+        ];
+    }
+
+    #[DataProvider('officialForgeArguments')]
+    public function test_official_forge_and_neoforge_arguments_use_the_patched_server_jar(
+        string $loader, string $minecraft, string $build, string $flag, string $jar,
+    ): void {
+        $wings = new DeploymentWings();
+        $library = 'libraries/net/'.$jar;
+        $args = dirname($library).'/unix_args.txt';
+        $wings->files = [$args => "--launchTarget forgeserver\n--fml.$flag $build\n--fml.mcVersion $minecraft\n", $library => "PK\x03\x04"];
+        $server = (new Server())->forceFill(['startup' => 'java @'.$args.' nogui']);
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $runtime = new ModpackRuntime($wings);
+
+        $runtime->assertInstalled($server, $repo, $loader, $minecraft, $build, []);
+        $wings->files[$args] = str_replace("--fml.mcVersion $minecraft", '--fml.mcVersion 1.19.4', $wings->files[$args]);
+        $this->expectException(ModpackException::class);
+        $this->expectExceptionMessage('startup arguments do not match');
+        $runtime->assertInstalled($server, $repo, $loader, $minecraft, $build, []);
+    }
+
+    public function test_quilt_launcher_mappings_must_match_minecraft(): void
+    {
+        $wings = new DeploymentWings();
+        $loader = 'libraries/org/quiltmc/quilt-loader/0.26.4/quilt-loader-0.26.4.jar';
+        $mappings = 'libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar';
+        $launcher = $this->zip([
+            'META-INF/MANIFEST.MF' => "Main-Class: org.quiltmc.loader.impl.launch.server.QuiltServerLauncher\r\n"
+                ."Class-Path: $loader $mappings\r\n",
+        ]);
+        try {
+            $wings->files = ['server.jar' => (string) file_get_contents($launcher), $loader => "PK\x03\x04", $mappings => "PK\x03\x04"];
+        } finally {
+            unlink($launcher);
+        }
+
+        $server = (new Server())->forceFill(['startup' => 'java -jar {{SERVER_JARFILE}}']);
+        $repo = $this->createStub(DaemonFileRepository::class);
+        $runtime = new ModpackRuntime($wings);
+        $runtime->assertInstalled($server, $repo, 'quilt', '1.20.1', '0.26.4', []);
+        $this->expectException(ModpackException::class);
+        $this->expectExceptionMessage('does not reference this Minecraft');
+        $runtime->assertInstalled($server, $repo, 'quilt', '1.20.2', '0.26.4', []);
     }
 
     public function test_legacy_forge_jar_manifests_and_1201_neoforge_unix_args_are_verified(): void
