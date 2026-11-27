@@ -32,6 +32,20 @@ final class ModpackLoader
         return $loader === 'fabric' ? 'LOADER_VERSION' : strtoupper($loader).'_VERSION';
     }
 
+    /** @param array<string, mixed> $variables */
+    public static function fixedMinecraftVersion(array $variables): ?string
+    {
+        $short = $variables['MC_VERSION'] ?? null;
+        $long = $variables['MINECRAFT_VERSION'] ?? null;
+        if ($short !== null && $long !== null && $short !== $long) {
+            return null;
+        }
+
+        $version = $short ?? $long;
+
+        return is_string($version) && preg_match('/^[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]{1,3})?$/D', $version) === 1 ? $version : null;
+    }
+
     public static function usesArgumentFile(string $loader, string $minecraft): bool
     {
         return $loader === 'neoforge' || ($loader === 'forge' && version_compare($minecraft, '1.17', '>='));

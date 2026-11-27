@@ -275,9 +275,8 @@ final class ModpackCreationStep
         $environment = (array) $get('environment');
         $minecraft = $result->minecraftVersion;
         if ($result->mode === ProvisioningMode::Archive) {
-            $minecraft = $environment['MC_VERSION'] ?? $environment['MINECRAFT_VERSION'] ?? null;
-            if (!is_string($minecraft) || (isset($environment['MC_VERSION'], $environment['MINECRAFT_VERSION'])
-                && $environment['MC_VERSION'] !== $environment['MINECRAFT_VERSION'])) {
+            $minecraft = ModpackLoader::fixedMinecraftVersion($environment);
+            if ($minecraft === null) {
                 throw self::startupValidationError($component);
             }
         }

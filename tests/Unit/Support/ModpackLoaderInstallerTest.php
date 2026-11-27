@@ -4,11 +4,20 @@ namespace Kazaminosuke\ModManager\Tests\Unit\Support;
 
 use Kazaminosuke\ModManager\Exceptions\ModpackException;
 use Kazaminosuke\ModManager\Services\ModpackLoaderInstaller;
+use Kazaminosuke\ModManager\Support\Modpacks\ModpackLoader;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class ModpackLoaderInstallerTest extends TestCase
 {
+    public function test_minecraft_startup_variables_must_identify_one_fixed_release(): void
+    {
+        self::assertSame('1.21.1', ModpackLoader::fixedMinecraftVersion(['MC_VERSION' => '1.21.1']));
+        self::assertSame('26.1', ModpackLoader::fixedMinecraftVersion(['MINECRAFT_VERSION' => '26.1']));
+        self::assertNull(ModpackLoader::fixedMinecraftVersion(['MC_VERSION' => '1.21.1', 'MINECRAFT_VERSION' => '1.20.1']));
+        self::assertNull(ModpackLoader::fixedMinecraftVersion(['MC_VERSION' => 'latest']));
+    }
+
     #[DataProvider('loaders')]
     public function test_pins_official_installer_and_runtime(string $loader, string $minecraft, string $build, string $url, string $output, string $startup, int $java): void
     {

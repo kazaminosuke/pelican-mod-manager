@@ -279,7 +279,6 @@ final class InstallModpack
                 'loader' => $this->selection['loader'] ?? $file['loader'] ?? null,
                 'loader_version' => $this->selection['loader_version'] ?? null,
                 'egg' => $server->egg?->name, 'image' => $server->image,
-                'java' => JavaRuntimeImage::preferredLabel($this->selection['minecraft'] ?? $file['minecraft'] ?? null, $minimumJava),
                 'archive_sha256' => $archiveHash,
                 'legacy' => $phase !== 'initial' && $current['inventory'] === null,
                 'switch' => $previous !== null && ($previous['provider'] !== $this->source || $previous['pack_id'] !== $this->projectId),
@@ -289,13 +288,16 @@ final class InstallModpack
             }
             $loader = MinecraftLoader::fromServer($server)?->value;
             $runtime = app(InstalledEggCatalog::class)->variableValues($server);
-            $minecraft = $runtime['MC_VERSION'] ?? $runtime['MINECRAFT_VERSION'] ?? null;
-            if (is_string($minecraft) && preg_match('/^\d+\.\d+(?:\.\d+)?$/D', $minecraft) !== 1) {
-                $minecraft = null;
-            }
+            $minecraft = ModpackLoader::fixedMinecraftVersion($runtime);
             if ($loader === null || $minecraft === null || ($release['minecraft_version'] !== null && $minecraft !== $release['minecraft_version'])
-                || JavaRuntimeImage::isTooOld($server->image, $release['minecraft_version'], $minimumJava)) {
+                || ($release['loader'] !== null && $loader !== $release['loader'])) {
                 throw new ModpackException('Set a supported, fixed Minecraft version and loader in the Egg before installing the modpack.');
+            }
+            $release['minecraft_version'] = $minecraft;
+            $release['loader'] = $loader;
+            $release['java'] = JavaRuntimeImage::preferredLabel($minecraft, $minimumJava);
+            if (JavaRuntimeImage::isTooOld($server->image, $minecraft, $minimumJava)) {
+                throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_old', ['java' => $release['java']]));
             }
             $installed = $current['inventory'];
             $verifiedBuild = $provisioning !== null ? $release['loader_version']
@@ -304,10 +306,10 @@ final class InstallModpack
             if (is_string($verifiedBuild)) {
                 $runtime[ModpackLoader::buildVariable($loader)] ??= $verifiedBuild;
             }
-            if (JavaRuntimeImage::isTooNew($server->image, $release['minecraft_version'], $loader)) {
+            if (JavaRuntimeImage::isTooNew($server->image, $minecraft, $loader)) {
                 throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_new', [
                     'loader' => $loader,
-                    'java' => JavaRuntimeImage::maximumLabel($release['minecraft_version'], $loader),
+                    'java' => JavaRuntimeImage::maximumLabel($minecraft, $loader),
                 ]));
             }
             $lastCheck = 0.0;

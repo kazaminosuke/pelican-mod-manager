@@ -62,15 +62,21 @@ final class ModpackInstallCoordinator
             || $result->mode !== ProvisioningMode::Archive) {
             throw new ModpackException('This release cannot use the current Egg, runtime or archive installer. Review the compatibility details. An in-place reinstall cannot be rolled back.');
         }
-        if (JavaRuntimeImage::isTooOld($server->image, $descriptor->minecraftVersion, $descriptor->minimumJava)) {
+        $variables = $this->eggs->variableValues($server);
+        $minecraft = ModpackLoader::fixedMinecraftVersion($variables);
+        $loader = $descriptor->loader ?? $result->selected?->loader;
+        if ($minecraft === null || ($descriptor->minecraftVersion !== null && $descriptor->minecraftVersion !== $minecraft)) {
+            throw new ModpackException('The server must use the same fixed Minecraft version as the selected modpack release.');
+        }
+        if (JavaRuntimeImage::isTooOld($server->image, $minecraft, $descriptor->minimumJava)) {
             throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_old', [
-                'java' => JavaRuntimeImage::preferredLabel($descriptor->minecraftVersion, $descriptor->minimumJava),
+                'java' => JavaRuntimeImage::preferredLabel($minecraft, $descriptor->minimumJava),
             ]));
         }
-        if (JavaRuntimeImage::isTooNew($server->image, $descriptor->minecraftVersion, $descriptor->loader)) {
+        if (JavaRuntimeImage::isTooNew($server->image, $minecraft, $loader)) {
             throw new ModpackException(trans('pelican-mod-manager::strings.modpacks.java_too_new', [
-                'loader' => $descriptor->loader ?? 'Minecraft',
-                'java' => JavaRuntimeImage::maximumLabel($descriptor->minecraftVersion, $descriptor->loader),
+                'loader' => $loader ?? 'Minecraft',
+                'java' => JavaRuntimeImage::maximumLabel($minecraft, $loader),
             ]));
         }
         if ($result->compatibilityWarning !== null && !$confirmedCompatibility) {
@@ -82,7 +88,6 @@ final class ModpackInstallCoordinator
         if (app(ModpackUpdateWorkflow::class)->review($server) !== null) {
             throw new ModpackException('Apply or cancel the existing modpack preview before selecting another release.');
         }
-        $variables = $this->eggs->variableValues($server);
         $runtime = $variables;
         $installed = app(ModpackInventory::class)->read($server)['inventory'];
         if ($descriptor->loader !== null && ($installed['loader'] ?? null) === $descriptor->loader
@@ -95,8 +100,8 @@ final class ModpackInstallCoordinator
         }
         $selection = [
             'managed_phase' => 'preview', 'egg_id' => (string) $server->egg_id, 'image' => $server->image,
-            'variables' => $variables, 'startup' => (string) $server->startup, 'minecraft' => $descriptor->minecraftVersion,
-            'loader' => $descriptor->loader, 'loader_version' => $descriptor->loaderVersion,
+            'variables' => $variables, 'startup' => (string) $server->startup, 'minecraft' => $minecraft,
+            'loader' => $loader, 'loader_version' => $descriptor->loaderVersion,
             'server_pack' => $descriptor->usesServerPack, 'artifact_id' => $descriptor->artifactId,
             'title' => $descriptor->title,
             ...($descriptor->minimumJava === null ? [] : ['minimum_java' => $descriptor->minimumJava]),
